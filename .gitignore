@@ -1,0 +1,50 @@
+# ===== SOURCE CODE (PRIVÉ) =====
+# Frontend source & build config
+frontend/src/
+frontend/rollup.config.js
+frontend/tsconfig.json
+frontend/package.json
+frontend/package-lock.json
+frontend/.gitignore
+
+# Panel source & build config
+panel/src/
+panel/rollup.config.js
+panel/tsconfig.json
+panel/package.json
+panel/package-lock.json
+
+# TypeScript declaration files (niet nodig voor eindgebruikers)
+frontend/dist/*.d.ts
+frontend/dist/*.d.ts.map
+frontend/dist/**/*.d.ts
+frontend/dist/**/*.d.ts.map
+panel/dist/*.d.ts
+panel/dist/**/*.d.ts
+
+# ===== NODE MODULES =====
+node_modules/
+frontend/node_modules/
+panel/node_modules/
+
+# ===== PYTHON CACHE =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# ===== OS FILES =====
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ===== LOGS =====
+*.log
+npm-debug.log*

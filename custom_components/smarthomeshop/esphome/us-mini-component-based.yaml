@@ -1,0 +1,619 @@
+# =============================================================================
+# ULTIMATESENSOR MINI - MET CUSTOM COMPONENT (VOLLEDIG)
+# =============================================================================
+# Alle entities worden aangemaakt door het component!
+# =============================================================================
+
+substitutions:
+  device_name: "ultimatesensor-mini-fc9c8c"
+  friendly_name: "UltimateSensor Mini fc9c8c"
+  project_version: "4.0.0"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  project:
+    name: "smarthomeshop.ultimatesensor_mini"
+    version: ${project_version}
+  on_boot:
+    priority: -100
+    then:
+      - wait_until:
+          condition:
+            wifi.connected
+          timeout: 30s
+      - script.execute: play_boot_sound
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  partitions: "default_16MB.csv"
+  framework:
+    type: arduino
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+# Laad het custom component
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [ultimatesensor_radar]
+
+logger:
+  level: DEBUG
+  hardware_uart: UART0
+
+api:
+  services:
+    - service: reset_people_count
+      then:
+        - lambda: id(radar).reset_people_count();
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${device_name}
+    password: "12345678"
+
+captive_portal:
+improv_serial:
+
+# =============================================================================
+# SCRIPTS
+# =============================================================================
+script:
+  - id: play_boot_sound
+    then:
+      - media_player.volume_set:
+          id: speaker
+          volume: 50%
+      - media_player.play_media:
+          id: speaker
+          media_url: "https://smarthomeshop.io/products/ultimatesensor-mini/v1/audio/boot1.mp3"
+      - delay: 3s
+      - light.turn_on:
+          id: rgb_front_light
+          brightness: 80%
+          red: 100%
+          green: 100%
+          blue: 100%
+      - light.turn_on:
+          id: rgb_back_light
+          brightness: 80%
+          red: 100%
+          green: 100%
+          blue: 100%
+      - delay: 6s
+      - light.turn_off:
+          id: rgb_front_light
+      - light.turn_off:
+          id: rgb_back_light
+
+# =============================================================================
+# I2C BUS
+# =============================================================================
+i2c:
+  - id: bus_a
+    sda: GPIO11
+    scl: GPIO10
+    scan: true
+    frequency: 100kHz
+
+# =============================================================================
+# UART VOOR LD2450
+# =============================================================================
+uart:
+  id: uart_radar
+  tx_pin:
+    number: GPIO13
+    mode:
+      input: true
+      pullup: true
+  rx_pin:
+    number: GPIO14
+    mode:
+      input: true
+      pullup: true
+  baud_rate: 256000
+  parity: NONE
+  stop_bits: 1
+
+# =============================================================================
+# ULTIMATESENSOR RADAR COMPONENT - ALLE ENTITIES AUTOMATISCH!
+# =============================================================================
+ultimatesensor_radar:
+  id: radar
+  uart_id: uart_radar
+
+# Binary Sensors (automatisch aangemaakt)
+binary_sensor:
+  - platform: ultimatesensor_radar
+    occupancy:
+      name: "Occupancy"
+    assumed_present:
+      name: "Assumed Present"
+    zone_occupancy:
+      - zone: 1
+        name: "Zone 1 Occupancy"
+      - zone: 2
+        name: "Zone 2 Occupancy"
+      - zone: 3
+        name: "Zone 3 Occupancy"
+      - zone: 4
+        name: "Zone 4 Occupancy"
+    target_active:
+      - target: 1
+        name: "Target 1 Active"
+      - target: 2
+        name: "Target 2 Active"
+      - target: 3
+        name: "Target 3 Active"
+    entry_line_crossed:
+      - line: 1
+        name: "Entry Line 1 Crossed"
+      - line: 2
+        name: "Entry Line 2 Crossed"
+
+# Sensors (automatisch aangemaakt)
+sensor:
+  - platform: ultimatesensor_radar
+    # Target sensors
+    target_x:
+      - target: 1
+        name: "Target 1 X"
+      - target: 2
+        name: "Target 2 X"
+      - target: 3
+        name: "Target 3 X"
+    target_y:
+      - target: 1
+        name: "Target 1 Y"
+      - target: 2
+        name: "Target 2 Y"
+      - target: 3
+        name: "Target 3 Y"
+    target_speed:
+      - target: 1
+        name: "Target 1 Speed"
+      - target: 2
+        name: "Target 2 Speed"
+      - target: 3
+        name: "Target 3 Speed"
+    target_distance:
+      - target: 1
+        name: "Target 1 Distance"
+      - target: 2
+        name: "Target 2 Distance"
+      - target: 3
+        name: "Target 3 Distance"
+    target_angle:
+      - target: 1
+        name: "Target 1 Angle"
+      - target: 2
+        name: "Target 2 Angle"
+      - target: 3
+        name: "Target 3 Angle"
+    target_resolution:
+      - target: 1
+        name: "Target 1 Resolution"
+      - target: 2
+        name: "Target 2 Resolution"
+      - target: 3
+        name: "Target 3 Resolution"
+    zone_target_count:
+      - zone: 1
+        name: "Zone 1 Target Count"
+      - zone: 2
+        name: "Zone 2 Target Count"
+      - zone: 3
+        name: "Zone 3 Target Count"
+      - zone: 4
+        name: "Zone 4 Target Count"
+    people_count:
+      name: "People Count"
+    assumed_present_remaining:
+      name: "Assumed Present Remaining"
+
+  # Milieu sensors
+  - platform: scd4x
+    id: my_scd41
+    co2:
+      id: scd41_co2
+      name: "SCD41 CO2"
+    temperature:
+      id: scd41_temperature
+      name: "SCD41 Temperature"
+    humidity:
+      id: scd41_humidity
+      name: "SCD41 Humidity"
+    measurement_mode: low_power_periodic
+    update_interval: 30s
+
+  - platform: bh1750
+    id: illuminance
+    name: "BH1750 Illuminance"
+    address: 0x23
+    update_interval: 60s
+
+  - platform: sgp4x
+    id: sgp41
+    voc:
+      id: voc_index
+      name: "VOC Index"
+    nox:
+      id: nox_index
+      name: "NOx Index"
+    compensation:
+      humidity_source: scd41_humidity
+      temperature_source: scd41_temperature
+
+  - platform: sps30
+    pm_1_0:
+      name: "PM 1.0"
+      id: pm_1_0
+    pm_2_5:
+      name: "PM 2.5"
+      id: pm_2_5
+    pm_4_0:
+      name: "PM 4.0"
+      id: pm_4_0
+    pm_10_0:
+      name: "PM 10"
+      id: pm_10
+    address: 0x69
+    update_interval: 60s
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: internal_temperature
+    name: "CPU Temperature"
+    entity_category: diagnostic
+
+  # =============================================================================
+  # ROOM QUALITY SCORE (berekend op ESP - 0-10)
+  # =============================================================================
+  - platform: template
+    name: "Room Quality Score"
+    id: room_quality_score
+    unit_of_measurement: ""
+    accuracy_decimals: 1
+    icon: "mdi:home-heart"
+    update_interval: 30s
+    lambda: |-
+      float score = 10.0;
+
+      // CO2 impact (ideaal: <800, slecht: >1500)
+      if (id(scd41_co2).has_state()) {
+        float co2 = id(scd41_co2).state;
+        if (co2 > 2000) score -= 4.0;
+        else if (co2 > 1500) score -= 3.0;
+        else if (co2 > 1000) score -= 2.0;
+        else if (co2 > 800) score -= 1.0;
+      }
+
+      // PM2.5 impact (ideaal: <12, slecht: >55)
+      if (id(pm_2_5).has_state()) {
+        float pm25 = id(pm_2_5).state;
+        if (pm25 > 150) score -= 3.0;
+        else if (pm25 > 55) score -= 2.0;
+        else if (pm25 > 35) score -= 1.5;
+        else if (pm25 > 12) score -= 0.5;
+      }
+
+      // VOC impact (ideaal: <150, slecht: >400)
+      if (id(voc_index).has_state()) {
+        float voc = id(voc_index).state;
+        if (voc > 400) score -= 2.0;
+        else if (voc > 250) score -= 1.0;
+        else if (voc > 150) score -= 0.5;
+      }
+
+      // Temperature impact (ideaal: 19-23°C)
+      if (id(scd41_temperature).has_state()) {
+        float temp = id(scd41_temperature).state;
+        if (temp < 16 || temp > 28) score -= 1.5;
+        else if (temp < 18 || temp > 25) score -= 0.5;
+      }
+
+      // Humidity impact (ideaal: 40-60%)
+      if (id(scd41_humidity).has_state()) {
+        float hum = id(scd41_humidity).state;
+        if (hum < 25 || hum > 75) score -= 1.0;
+        else if (hum < 35 || hum > 65) score -= 0.5;
+      }
+
+      // Clamp between 0 and 10
+      if (score < 0) score = 0;
+      if (score > 10) score = 10;
+      return score;
+
+# Text Sensors
+text_sensor:
+  - platform: ultimatesensor_radar
+    last_crossing_direction:
+      name: "Last Crossing Direction"
+
+  - platform: template
+    name: "Room Quality Label"
+    id: room_quality_label
+    icon: "mdi:tag"
+    update_interval: 30s
+    lambda: |-
+      float score = id(room_quality_score).state;
+      if (score >= 8.5) return {"Uitstekend"};
+      if (score >= 7.0) return {"Goed"};
+      if (score >= 5.0) return {"Redelijk"};
+      if (score >= 3.0) return {"Matig"};
+      return {"Slecht"};
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+    ssid:
+      name: "Connected SSID"
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic
+
+  - platform: version
+    name: "ESPHome Version"
+    entity_category: diagnostic
+
+# Number entities (automatisch aangemaakt via component)
+number:
+  - platform: ultimatesensor_radar
+    max_distance:
+      name: "Max Distance"
+    installation_angle:
+      name: "Installation Angle"
+    assumed_present_timeout:
+      name: "Assume Present Timeout"
+    exit_threshold_pct:
+      name: "Exit Threshold Pct"
+    occupancy_off_delay:
+      name: "Occupancy Off Delay"
+    zone_off_delays:
+      - zone: 1
+        name: "Zone 1 Off Delay"
+      - zone: 2
+        name: "Zone 2 Off Delay"
+      - zone: 3
+        name: "Zone 3 Off Delay"
+      - zone: 4
+        name: "Zone 4 Off Delay"
+    zone_coordinates:
+      - zone: 1
+        coord: begin_x
+        name: "Zone 1 Begin X"
+      - zone: 1
+        coord: end_x
+        name: "Zone 1 End X"
+      - zone: 1
+        coord: begin_y
+        name: "Zone 1 Begin Y"
+      - zone: 1
+        coord: end_y
+        name: "Zone 1 End Y"
+      - zone: 2
+        coord: begin_x
+        name: "Zone 2 Begin X"
+      - zone: 2
+        coord: end_x
+        name: "Zone 2 End X"
+      - zone: 2
+        coord: begin_y
+        name: "Zone 2 Begin Y"
+      - zone: 2
+        coord: end_y
+        name: "Zone 2 End Y"
+      - zone: 3
+        coord: begin_x
+        name: "Zone 3 Begin X"
+      - zone: 3
+        coord: end_x
+        name: "Zone 3 End X"
+      - zone: 3
+        coord: begin_y
+        name: "Zone 3 Begin Y"
+      - zone: 3
+        coord: end_y
+        name: "Zone 3 End Y"
+      - zone: 4
+        coord: begin_x
+        name: "Zone 4 Begin X"
+      - zone: 4
+        coord: end_x
+        name: "Zone 4 End X"
+      - zone: 4
+        coord: begin_y
+        name: "Zone 4 Begin Y"
+      - zone: 4
+        coord: end_y
+        name: "Zone 4 End Y"
+    exclusion_coordinates:
+      - zone: 1
+        coord: begin_x
+        name: "Occupancy Mask 1 Begin X"
+      - zone: 1
+        coord: end_x
+        name: "Occupancy Mask 1 End X"
+      - zone: 1
+        coord: begin_y
+        name: "Occupancy Mask 1 Begin Y"
+      - zone: 1
+        coord: end_y
+        name: "Occupancy Mask 1 End Y"
+      - zone: 2
+        coord: begin_x
+        name: "Occupancy Mask 2 Begin X"
+      - zone: 2
+        coord: end_x
+        name: "Occupancy Mask 2 End X"
+      - zone: 2
+        coord: begin_y
+        name: "Occupancy Mask 2 Begin Y"
+      - zone: 2
+        coord: end_y
+        name: "Occupancy Mask 2 End Y"
+    entry_zone_coordinates:
+      - zone: 1
+        coord: begin_x
+        name: "Entry Zone 1 Begin X"
+      - zone: 1
+        coord: end_x
+        name: "Entry Zone 1 End X"
+      - zone: 1
+        coord: begin_y
+        name: "Entry Zone 1 Begin Y"
+      - zone: 1
+        coord: end_y
+        name: "Entry Zone 1 End Y"
+      - zone: 2
+        coord: begin_x
+        name: "Entry Zone 2 Begin X"
+      - zone: 2
+        coord: end_x
+        name: "Entry Zone 2 End X"
+      - zone: 2
+        coord: begin_y
+        name: "Entry Zone 2 Begin Y"
+      - zone: 2
+        coord: end_y
+        name: "Entry Zone 2 End Y"
+
+# Text entities voor polygons (automatisch aangemaakt via component)
+text:
+  - platform: ultimatesensor_radar
+    polygon_zones:
+      - zone: 1
+        name: "Polygon Zone 1"
+      - zone: 2
+        name: "Polygon Zone 2"
+      - zone: 3
+        name: "Polygon Zone 3"
+      - zone: 4
+        name: "Polygon Zone 4"
+    polygon_exclusions:
+      - zone: 1
+        name: "Polygon Exclusion 1"
+      - zone: 2
+        name: "Polygon Exclusion 2"
+    polygon_entries:
+      - zone: 1
+        name: "Polygon Entry 1"
+      - zone: 2
+        name: "Polygon Entry 2"
+    entry_lines:
+      - line: 1
+        name: "Entry Line 1"
+      - line: 2
+        name: "Entry Line 2"
+
+# =============================================================================
+# I2S AUDIO
+# =============================================================================
+i2s_audio:
+  - id: i2s_speaker
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO18
+  - id: i2s_microphone
+    i2s_lrclk_pin: GPIO7
+    i2s_bclk_pin: GPIO16
+
+media_player:
+  - platform: i2s_audio
+    id: speaker
+    name: "Media Player"
+    dac_type: external
+    i2s_dout_pin: GPIO17
+    i2s_audio_id: i2s_speaker
+    mode: mono
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_microphone
+    adc_type: external
+    i2s_din_pin: GPIO15
+    pdm: false
+    channel: right
+
+voice_assistant:
+  id: va
+  microphone: mic
+  use_wake_word: false
+  media_player: speaker
+
+# =============================================================================
+# LIGHTS
+# =============================================================================
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO20
+    num_leds: 1
+    rgb_order: GRB
+    name: "Back light"
+    id: rgb_back_light
+
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO5
+    num_leds: 1
+    rgb_order: GRB
+    name: "Front light"
+    id: rgb_front_light
+
+status_led:
+  pin: GPIO19
+
+# =============================================================================
+# SWITCHES - Radar (via component)
+# =============================================================================
+switch:
+  - platform: ultimatesensor_radar
+    invert_x:
+      name: "Upside Down Mounting"
+    entry_exit_enabled:
+      name: "Entry Exit Enabled"
+
+  # Voice assistant switch (niet radar gerelateerd)
+  - platform: template
+    name: "Use Wake Word"
+    id: use_wake_word
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - voice_assistant.start_continuous:
+    on_turn_off:
+      - voice_assistant.stop:
+
+# =============================================================================
+# BUTTONS - Radar (via component) + System
+# =============================================================================
+button:
+  - platform: ultimatesensor_radar
+    reset_people_count:
+      name: "Reset People Count"
+
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+
+  - platform: factory_reset
+    name: "Factory Reset"
+    entity_category: config

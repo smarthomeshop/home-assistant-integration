@@ -1,0 +1,104 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartHomeShop.io",
+        "description": "Selecteer het type SmartHomeShop product dat je wilt toevoegen.",
+        "data": {
+          "product_type": "Product type"
+        }
+      },
+      "device": {
+        "title": "Selecteer {product_name}",
+        "description": "Kies het apparaat dat je wilt configureren.",
+        "data": {
+          "device_id": "Apparaat"
+        }
+      },
+      "water_options": {
+        "title": "Lekdetectie instellingen",
+        "description": "Gevonden sensoren:\n- Water sensor: {water_sensor}\n- Flow sensor: {flow_sensor}\n\nConfigureer de lekdetectie:",
+        "data": {
+          "continuous_flow_minutes": "Continue flow alert (minuten)",
+          "night_start": "Nachtperiode start",
+          "night_end": "Nachtperiode einde",
+          "vacation_mode_entity": "Vakantie modus schakelaar (optioneel)"
+        }
+      }
+    },
+    "error": {
+      "no_water_sensor": "Geen watersensor gevonden op dit apparaat",
+      "device_not_found": "Apparaat niet gevonden",
+      "cannot_connect": "Kan niet verbinden met het apparaat"
+    },
+    "abort": {
+      "already_configured": "Dit apparaat is al geconfigureerd",
+      "no_devices_found": "Geen apparaten van dit type gevonden. Zorg dat je ESPHome apparaat is toegevoegd en online is."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SmartHomeShop instellingen",
+        "data": {
+          "continuous_flow_minutes": "Continue flow alert (minuten)",
+          "night_start": "Nachtperiode start",
+          "night_end": "Nachtperiode einde",
+          "vacation_mode_entity": "Vakantie modus schakelaar"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_flow_rate": {
+        "name": "Huidig waterverbruik"
+      },
+      "today_usage": {
+        "name": "Verbruik vandaag"
+      },
+      "week_usage": {
+        "name": "Verbruik deze week"
+      },
+      "month_usage": {
+        "name": "Verbruik deze maand"
+      },
+      "year_usage": {
+        "name": "Verbruik dit jaar"
+      },
+      "detected_device": {
+        "name": "Gedetecteerd apparaat"
+      },
+      "continuous_flow_duration": {
+        "name": "Continue flow duur"
+      }
+    },
+    "binary_sensor": {
+      "continuous_flow_leak": {
+        "name": "Continue flow lek"
+      },
+      "night_usage_detected": {
+        "name": "Nachtelijk verbruik"
+      },
+      "micro_leak_detected": {
+        "name": "Micro lek"
+      },
+      "vacation_mode_leak": {
+        "name": "Vakantie lek"
+      },
+      "any_leak_alert": {
+        "name": "Lek alarm"
+      },
+      "water_flowing": {
+        "name": "Water stroomt"
+      }
+    }
+  }
+}
+
+
+
+
+
+
+

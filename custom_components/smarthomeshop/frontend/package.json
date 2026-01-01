@@ -1,0 +1,46 @@
+{
+  "name": "smarthomeshop-cards",
+  "version": "1.0.0",
+  "description": "SmartHomeShop.io Lovelace Cards for Home Assistant",
+  "main": "dist/smarthomeshop-cards.js",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w",
+    "dev": "npm run build && npm run watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
+    "copy": "cp dist/smarthomeshop-cards.js ../js/",
+    "build:prod": "npm run build && npm run copy"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "smarthomeshop",
+    "watermeterkit",
+    "waterp1meterkit",
+    "litelement"
+  ],
+  "author": "SmartHomeShop.io",
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.5",
+    "@types/node": "^20.10.5",
+    "rollup": "^4.9.1",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "lit": "^3.2.0"
+  }
+}
+
+
+
+
+
+
+

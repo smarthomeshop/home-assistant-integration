@@ -1,0 +1,1857 @@
+# =============================================================================
+# ULTIMATESENSOR MINI - VOLLEDIGE POLYGON ZONES SUPPORT (EP LITE COMPATIBLE)
+# =============================================================================
+substitutions:
+  device_name: "ultimatesensor-mini-fc9c8c"
+  friendly_name: "UltimateSensor Mini fc9c8c"
+  project_version: "3.2.0"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  project:
+    name: "smarthomeshop.ultimatesensor_mini"
+    version: ${project_version}
+  on_boot:
+    priority: -100
+    then:
+      - wait_until:
+          condition:
+            wifi.connected
+          timeout: 30s
+      - script.execute: play_boot_sound
+      - binary_sensor.template.publish:
+          id: zone1_occupancy
+          state: false
+      - binary_sensor.template.publish:
+          id: zone2_occupancy
+          state: false
+      - binary_sensor.template.publish:
+          id: zone3_occupancy
+          state: false
+      - binary_sensor.template.publish:
+          id: zone4_occupancy
+          state: false
+      # Initialize last_crossing_direction text_sensor
+      - text_sensor.template.publish:
+          id: last_crossing_direction
+          state: "none"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 16MB
+  partitions: "default_16MB.csv"
+  framework:
+    type: arduino
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+  hardware_uart: UART0
+
+api:
+  services:
+    - service: set_polygon_zone
+      variables:
+        zone_id: int
+        polygon: string
+      then:
+        - lambda: |-
+            if (zone_id == 1) { id(poly_zone_1).make_call().set_value(polygon).perform(); }
+            else if (zone_id == 2) { id(poly_zone_2).make_call().set_value(polygon).perform(); }
+            else if (zone_id == 3) { id(poly_zone_3).make_call().set_value(polygon).perform(); }
+            else if (zone_id == 4) { id(poly_zone_4).make_call().set_value(polygon).perform(); }
+    - service: set_polygon_exclusion
+      variables:
+        zone_id: int
+        polygon: string
+      then:
+        - lambda: |-
+            if (zone_id == 1) { id(poly_exclusion_1).make_call().set_value(polygon).perform(); }
+            else if (zone_id == 2) { id(poly_exclusion_2).make_call().set_value(polygon).perform(); }
+    - service: set_polygon_entry
+      variables:
+        zone_id: int
+        polygon: string
+      then:
+        - lambda: |-
+            if (zone_id == 1) { id(poly_entry_1).make_call().set_value(polygon).perform(); }
+            else if (zone_id == 2) { id(poly_entry_2).make_call().set_value(polygon).perform(); }
+    # Entry Lijn service (format: "x1:y1;x2:y2;left" of "x1:y1;x2:y2;right")
+    - service: set_entry_line
+      variables:
+        line_id: int
+        line_data: string
+      then:
+        - lambda: |-
+            ESP_LOGI("EntryLine", "Setting entry line %d: %s", line_id, line_data.c_str());
+            if (line_id == 1) { id(entry_line_1).make_call().set_value(line_data).perform(); }
+            else if (line_id == 2) { id(entry_line_2).make_call().set_value(line_data).perform(); }
+    - service: reset_people_count
+      then:
+        - lambda: |-
+            id(room_people_count) = 0;
+            id(people_count).publish_state(0);
+            ESP_LOGI("EntryLine", "People count reset to 0");
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: ${device_name}
+    password: "12345678"
+
+captive_portal:
+improv_serial:
+
+# =============================================================================
+# GLOBALS (Identiek aan EP Lite + polygon string storage)
+# =============================================================================
+globals:
+  - id: mmwave_update_time
+    type: unsigned long
+    restore_value: false
+    initial_value: '0'
+  - id: mmwave_update_interval
+    type: int
+    restore_value: false
+    initial_value: '1000'
+  - id: extra_entities
+    type: int
+    restore_value: false
+    initial_value: '5'
+  - id: entities_update_count
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: entities_update_max_count
+    type: int
+    restore_value: false
+    initial_value: '1'
+  - id: assumed_present_until_ms
+    type: unsigned long
+    restore_value: false
+    initial_value: '0'
+  - id: assumed_present_active
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: last_zone_hold
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: last_target_x_mm
+    type: float
+    restore_value: false
+    initial_value: '0'
+  - id: last_target_y_mm
+    type: float
+    restore_value: false
+    initial_value: '0'
+  # Previous target positions voor line crossing
+  - id: prev_target_x
+    type: float[3]
+    restore_value: false
+    initial_value: '{0.0f, 0.0f, 0.0f}'
+  - id: prev_target_y
+    type: float[3]
+    restore_value: false
+    initial_value: '{0.0f, 0.0f, 0.0f}'
+  - id: prev_target_valid
+    type: bool[3]
+    restore_value: false
+    initial_value: '{false, false, false}'
+  # People counter
+  - id: room_people_count
+    type: int
+    restore_value: true
+    initial_value: '0'
+
+# =============================================================================
+# SCRIPTS
+# =============================================================================
+script:
+  - id: play_boot_sound
+    then:
+      - media_player.volume_set:
+          id: speaker
+          volume: 50%
+      - media_player.play_media:
+          id: speaker
+          media_url: "https://smarthomeshop.io/products/ultimatesensor-mini/v1/audio/boot1.mp3"
+      - delay: 3s
+      - light.turn_on:
+          id: rgb_front_light
+          brightness: 80%
+          red: 100%
+          green: 100%
+          blue: 100%
+      - light.turn_on:
+          id: rgb_back_light
+          brightness: 80%
+          red: 100%
+          green: 100%
+          blue: 100%
+      - delay: 6s
+      - light.turn_off:
+          id: rgb_front_light
+      - light.turn_off:
+          id: rgb_back_light
+
+# =============================================================================
+# I2C BUS
+# =============================================================================
+i2c:
+  - id: bus_a
+    sda: GPIO11
+    scl: GPIO10
+    scan: true
+    frequency: 100kHz
+
+# =============================================================================
+# UART FOR LD2450 - VOLLEDIGE EP LITE LAMBDA MET POLYGON SUPPORT
+# =============================================================================
+uart:
+  id: uart_bus
+  tx_pin:
+    number: GPIO13
+    mode:
+      input: true
+      pullup: true
+  rx_pin:
+    number: GPIO14
+    mode:
+      input: true
+      pullup: true
+  baud_rate: 256000
+  parity: NONE
+  stop_bits: 1
+  data_bits: 8
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    after:
+      delimiter: [0x55, 0xCC]
+    sequence:
+      - lambda: |-
+          if ((millis() - id(mmwave_update_time)) <= id(mmwave_update_interval)) {
+            return;
+          };
+          id(mmwave_update_time) = millis();
+          if (bytes.size() != 30) {
+            ESP_LOGW("LD2450", "Expected 30 bytes but received %d!", bytes.size());
+            return;
+          }
+          bool update_entities = true;
+          const static float RADIANS_TO_DEGREES = 180.0 / 3.14159265358979323846;
+          const static float DEGREES_TO_RADIANS = 3.14159265358979323846 / 180.0;
+          const static int16_t MIN_INT16_VAL = -32768;
+          float max_distance = float(id(radar_max_distance).state) * 10;
+          float installation_angle = id(installation_angle_ui).state * DEGREES_TO_RADIANS;
+          static unsigned long assumed_present_until = 0;
+          static bool prev_detected[3] = {false,false,false};
+          const static int MAX_POLY_VERTICES = 20;
+          struct ParsedPolygon {
+            float vx[20];
+            float vy[20];
+            int count;
+          };
+          static ParsedPolygon poly_zones[4];
+          static ParsedPolygon poly_exclusions[2];
+          static ParsedPolygon poly_entries[2];
+          static std::string last_poly_zone_text[4];
+          static std::string last_poly_excl_text[2];
+          static std::string last_poly_entry_text[2];
+          static bool poly_initialized = false;
+          // Entry line struct
+          struct EntryLine {
+            float x1, y1, x2, y2;
+            bool in_is_left;  // true = links van lijn is "in", false = rechts is "in"
+            bool valid;
+          };
+          static EntryLine entry_lines[2];
+          static std::string last_entry_line_text[2];
+          auto parse_polygon_text = [](const std::string& text, ParsedPolygon& poly) {
+            poly.count = 0;
+            if (text.empty()) return;
+            size_t pos = 0;
+            while (pos < text.length() && poly.count < 20) {
+              int x, y;
+              int chars_read;
+              if (sscanf(text.c_str() + pos, "%d:%d%n", &x, &y, &chars_read) == 2) {
+                poly.vx[poly.count] = (float)x;
+                poly.vy[poly.count] = (float)y;
+                poly.count++;
+                pos += chars_read;
+                if (pos < text.length() && text[pos] == ';') pos++;
+              } else {
+                break;
+              }
+            }
+          };
+          auto point_in_poly = [](float px, float py, const ParsedPolygon& poly) -> bool {
+            if (poly.count < 3) return false;
+            bool inside = false;
+            for (int i = 0, j = poly.count - 1; i < poly.count; j = i++) {
+              float xi = poly.vx[i], yi = poly.vy[i];
+              float xj = poly.vx[j], yj = poly.vy[j];
+              if (((yi > py) != (yj > py)) &&
+                  (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+              }
+            }
+            return inside;
+          };
+          // Parse entry line: "x1:y1;x2:y2;left" of "x1:y1;x2:y2;right"
+          auto parse_entry_line = [](const std::string& text, EntryLine& line) {
+            line.valid = false;
+            if (text.empty()) return;
+            int x1, y1, x2, y2;
+            char dir[10];
+            if (sscanf(text.c_str(), "%d:%d;%d:%d;%9s", &x1, &y1, &x2, &y2, dir) >= 4) {
+              line.x1 = (float)x1;
+              line.y1 = (float)y1;
+              line.x2 = (float)x2;
+              line.y2 = (float)y2;
+              line.in_is_left = (strcmp(dir, "left") == 0);
+              line.valid = true;
+              ESP_LOGD("EntryLine", "Parsed line: (%.0f,%.0f)-(%.0f,%.0f), in=%s", line.x1, line.y1, line.x2, line.y2, line.in_is_left ? "left" : "right");
+            }
+          };
+          // Check welke kant van de lijn een punt ligt
+          // Returns: >0 = links, <0 = rechts, =0 = op de lijn
+          auto side_of_line = [](float px, float py, const EntryLine& line) -> float {
+            return (line.x2 - line.x1) * (py - line.y1) - (line.y2 - line.y1) * (px - line.x1);
+          };
+          // Check of een beweging van (px0,py0) naar (px1,py1) de lijn kruist
+          // Returns: 0=geen crossing, 1=in richting, -1=uit richting
+          auto check_line_crossing = [&side_of_line](float px0, float py0, float px1, float py1, const EntryLine& line) -> int {
+            if (!line.valid) return 0;
+            float side0 = side_of_line(px0, py0, line);
+            float side1 = side_of_line(px1, py1, line);
+            // Alleen een crossing als we van de ene naar de andere kant gaan
+            if (side0 * side1 < 0) {
+              // We zijn van kant gewisseld - check of de crossing binnen de lijn segment valt
+              float dx = line.x2 - line.x1;
+              float dy = line.y2 - line.y1;
+              float len_sq = dx*dx + dy*dy;
+              if (len_sq < 1.0f) return 0;  // Te korte lijn
+              // Bereken de kruisingspunt parameter t langs de bewegingslijn
+              float dpx = px1 - px0;
+              float dpy = py1 - py0;
+              float t = ((line.x1 - px0) * (-dy) + (line.y1 - py0) * dx) / (dpx * (-dy) + dpy * dx);
+              // Check of kruisingspunt binnen de beweging valt
+              if (t < 0.0f || t > 1.0f) return 0;
+              // Bereken kruisingspunt op de lijn
+              float cx = px0 + t * dpx;
+              float cy = py0 + t * dpy;
+              // Check of kruisingspunt binnen lijn segment valt
+              float u = ((cx - line.x1) * dx + (cy - line.y1) * dy) / len_sq;
+              if (u < 0.0f || u > 1.0f) return 0;
+              // Bepaal richting: side1 > 0 = nu links van lijn
+              bool now_on_left = (side1 > 0);
+              if (line.in_is_left) {
+                return now_on_left ? 1 : -1;  // nu links = in (+1), nu rechts = uit (-1)
+              } else {
+                return now_on_left ? -1 : 1;  // nu links = uit (-1), nu rechts = in (+1)
+              }
+            }
+            return 0;
+          };
+          bool polygon_mode = id(polygon_zones_enabled).state;
+          if (polygon_mode) {
+            std::string z1_text = id(poly_zone_1).state;
+            std::string z2_text = id(poly_zone_2).state;
+            std::string z3_text = id(poly_zone_3).state;
+            std::string z4_text = id(poly_zone_4).state;
+            if (!poly_initialized || z1_text != last_poly_zone_text[0]) { parse_polygon_text(z1_text, poly_zones[0]); last_poly_zone_text[0] = z1_text; }
+            if (!poly_initialized || z2_text != last_poly_zone_text[1]) { parse_polygon_text(z2_text, poly_zones[1]); last_poly_zone_text[1] = z2_text; }
+            if (!poly_initialized || z3_text != last_poly_zone_text[2]) { parse_polygon_text(z3_text, poly_zones[2]); last_poly_zone_text[2] = z3_text; }
+            if (!poly_initialized || z4_text != last_poly_zone_text[3]) { parse_polygon_text(z4_text, poly_zones[3]); last_poly_zone_text[3] = z4_text; }
+            std::string e1_text = id(poly_exclusion_1).state;
+            std::string e2_text = id(poly_exclusion_2).state;
+            if (!poly_initialized || e1_text != last_poly_excl_text[0]) { parse_polygon_text(e1_text, poly_exclusions[0]); last_poly_excl_text[0] = e1_text; }
+            if (!poly_initialized || e2_text != last_poly_excl_text[1]) { parse_polygon_text(e2_text, poly_exclusions[1]); last_poly_excl_text[1] = e2_text; }
+            std::string en1_text = id(poly_entry_1).state;
+            std::string en2_text = id(poly_entry_2).state;
+            if (!poly_initialized || en1_text != last_poly_entry_text[0]) { parse_polygon_text(en1_text, poly_entries[0]); last_poly_entry_text[0] = en1_text; }
+            if (!poly_initialized || en2_text != last_poly_entry_text[1]) { parse_polygon_text(en2_text, poly_entries[1]); last_poly_entry_text[1] = en2_text; }
+            // Parse entry lines
+            std::string el1_text = id(entry_line_1).state;
+            std::string el2_text = id(entry_line_2).state;
+            if (!poly_initialized || el1_text != last_entry_line_text[0]) { parse_entry_line(el1_text, entry_lines[0]); last_entry_line_text[0] = el1_text; }
+            if (!poly_initialized || el2_text != last_entry_line_text[1]) { parse_entry_line(el2_text, entry_lines[1]); last_entry_line_text[1] = el2_text; }
+            poly_initialized = true;
+          }
+          int zone1_count = 0;
+          int zone1_begin_x_value = min(id(zone1_begin_x).state, id(zone1_end_x).state);
+          int zone1_end_x_value = max(id(zone1_begin_x).state, id(zone1_end_x).state);
+          int zone1_begin_y_value = min(id(zone1_begin_y).state, id(zone1_end_y).state);
+          int zone1_end_y_value = max(id(zone1_begin_y).state, id(zone1_end_y).state);
+          int zone2_count = 0;
+          int zone2_begin_x_value = min(id(zone2_begin_x).state, id(zone2_end_x).state);
+          int zone2_end_x_value = max(id(zone2_begin_x).state, id(zone2_end_x).state);
+          int zone2_begin_y_value = min(id(zone2_begin_y).state, id(zone2_end_y).state);
+          int zone2_end_y_value = max(id(zone2_begin_y).state, id(zone2_end_y).state);
+          int zone3_count = 0;
+          int zone3_begin_x_value = min(id(zone3_begin_x).state, id(zone3_end_x).state);
+          int zone3_end_x_value = max(id(zone3_begin_x).state, id(zone3_end_x).state);
+          int zone3_begin_y_value = min(id(zone3_begin_y).state, id(zone3_end_y).state);
+          int zone3_end_y_value = max(id(zone3_begin_y).state, id(zone3_end_y).state);
+          int zone4_count = 0;
+          int zone4_begin_x_value = min(id(zone4_begin_x).state, id(zone4_end_x).state);
+          int zone4_end_x_value = max(id(zone4_begin_x).state, id(zone4_end_x).state);
+          int zone4_begin_y_value = min(id(zone4_begin_y).state, id(zone4_end_y).state);
+          int zone4_end_y_value = max(id(zone4_begin_y).state, id(zone4_end_y).state);
+          int occupancy_mask_1_count = 0;
+          int occupancy_mask_1_begin_x_value = min(id(occupancy_mask_1_begin_x).state, id(occupancy_mask_1_end_x).state);
+          int occupancy_mask_1_end_x_value = max(id(occupancy_mask_1_begin_x).state, id(occupancy_mask_1_end_x).state);
+          int occupancy_mask_1_begin_y_value = min(id(occupancy_mask_1_begin_y).state, id(occupancy_mask_1_end_y).state);
+          int occupancy_mask_1_end_y_value = max(id(occupancy_mask_1_begin_y).state, id(occupancy_mask_1_end_y).state);
+          int occupancy_mask_2_count = 0;
+          int occupancy_mask_2_begin_x_value = min(id(occupancy_mask_2_begin_x).state, id(occupancy_mask_2_end_x).state);
+          int occupancy_mask_2_end_x_value = max(id(occupancy_mask_2_begin_x).state, id(occupancy_mask_2_end_x).state);
+          int occupancy_mask_2_begin_y_value = min(id(occupancy_mask_2_begin_y).state, id(occupancy_mask_2_end_y).state);
+          int occupancy_mask_2_end_y_value = max(id(occupancy_mask_2_begin_y).state, id(occupancy_mask_2_end_y).state);
+          bool p1_detected = *((uint16_t *)(&bytes[10])) != 0;
+          bool p2_detected = *((uint16_t *)(&bytes[18])) != 0;
+          bool p3_detected = *((uint16_t *)(&bytes[26])) != 0;
+          bool target_masked = false;
+          if (p1_detected) {
+            int16_t p1_x = *((int16_t *)(&bytes[4]));
+            if (p1_x < 0) p1_x += MIN_INT16_VAL;
+            else p1_x = -p1_x;
+            int16_t p1_y = *((int16_t *)(&bytes[6]));
+            if (p1_y < 0) p1_y += MIN_INT16_VAL;
+            else p1_y = -p1_y;
+            float p1_distance = sqrt(p1_x * p1_x + p1_y * p1_y);
+            if (id(inverse_mounting).state) { p1_x = -p1_x; }
+            if (p1_distance > max_distance) {
+              p1_detected = false;
+            } else {
+              float p1_angle;
+              if (installation_angle != 0 || update_entities) { p1_angle = atan2(p1_y, p1_x); }
+              if (installation_angle != 0) {
+                float angle = p1_angle - installation_angle;
+                p1_x = p1_distance * cos(angle);
+                p1_y = p1_distance * sin(angle);
+              }
+              if (polygon_mode) {
+                if (point_in_poly(p1_x, p1_y, poly_exclusions[0])) { occupancy_mask_1_count++; p1_detected = false; target_masked = true; }
+                else if (point_in_poly(p1_x, p1_y, poly_exclusions[1])) { occupancy_mask_2_count++; p1_detected = false; target_masked = true; }
+                else {
+                  if (point_in_poly(p1_x, p1_y, poly_zones[0])) { zone1_count++; id(last_zone_hold) = 1; }
+                  if (point_in_poly(p1_x, p1_y, poly_zones[1])) { zone2_count++; id(last_zone_hold) = 2; }
+                  if (point_in_poly(p1_x, p1_y, poly_zones[2])) { zone3_count++; id(last_zone_hold) = 3; }
+                  if (point_in_poly(p1_x, p1_y, poly_zones[3])) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              } else {
+                if ((occupancy_mask_1_begin_x_value <= p1_x && p1_x <= occupancy_mask_1_end_x_value) &&
+                    (occupancy_mask_1_begin_y_value <= p1_y && p1_y <= occupancy_mask_1_end_y_value)) {
+                  occupancy_mask_1_count++; p1_detected = false; target_masked = true;
+                } else if ((occupancy_mask_2_begin_x_value <= p1_x && p1_x <= occupancy_mask_2_end_x_value) &&
+                    (occupancy_mask_2_begin_y_value <= p1_y && p1_y <= occupancy_mask_2_end_y_value)) {
+                  occupancy_mask_2_count++; p1_detected = false; target_masked = true;
+                } else {
+                  if ((zone1_begin_x_value <= p1_x && p1_x <= zone1_end_x_value) && (zone1_begin_y_value <= p1_y && p1_y <= zone1_end_y_value)) { zone1_count++; id(last_zone_hold) = 1; }
+                  if ((zone2_begin_x_value <= p1_x && p1_x <= zone2_end_x_value) && (zone2_begin_y_value <= p1_y && p1_y <= zone2_end_y_value)) { zone2_count++; id(last_zone_hold) = 2; }
+                  if ((zone3_begin_x_value <= p1_x && p1_x <= zone3_end_x_value) && (zone3_begin_y_value <= p1_y && p1_y <= zone3_end_y_value)) { zone3_count++; id(last_zone_hold) = 3; }
+                  if ((zone4_begin_x_value <= p1_x && p1_x <= zone4_end_x_value) && (zone4_begin_y_value <= p1_y && p1_y <= zone4_end_y_value)) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              }
+              if (update_entities) {
+                uint16_t p1_resolution = *((uint16_t *)(&bytes[10]));
+                int16_t p1_speed = *((int16_t *)(&bytes[8]));
+                if (p1_speed < 0) p1_speed += MIN_INT16_VAL;
+                else p1_speed = -p1_speed;
+                float p1_speed_float = p1_speed / 100.0;
+                id(target1_speed).publish_state(p1_speed_float);
+                id(target1_resolution).publish_state(p1_resolution);
+                p1_angle = (p1_angle * RADIANS_TO_DEGREES) - 90;
+                id(target1_angle).publish_state(p1_angle);
+                id(target1_distance).publish_state(p1_distance);
+                id(target1_active).publish_state(true);
+                id(target1_x).publish_state(p1_x);
+                id(target1_y).publish_state(p1_y);
+                id(last_target_x_mm) = p1_x;
+                id(last_target_y_mm) = p1_y;
+                // Line crossing check voor target 1
+                if (polygon_mode && id(prev_target_valid)[0]) {
+                  float prev_x = id(prev_target_x)[0];
+                  float prev_y = id(prev_target_y)[0];
+                  for (int li = 0; li < 2; li++) {
+                    int crossing = check_line_crossing(prev_x, prev_y, (float)p1_x, (float)p1_y, entry_lines[li]);
+                    if (crossing != 0) {
+                      int new_count = id(room_people_count) + crossing;
+                      if (new_count < 0) new_count = 0;  // Kan niet negatief
+                      id(room_people_count) = new_count;
+                      id(people_count).publish_state(new_count);
+                      if (li == 0) id(entry_line_1_crossed).publish_state(true);
+                      else id(entry_line_2_crossed).publish_state(true);
+                      id(last_crossing_direction).publish_state(crossing > 0 ? "in" : "out");
+                      ESP_LOGI("EntryLine", "Target 1 crossed line %d: %s, people=%d", li+1, crossing > 0 ? "IN" : "OUT", new_count);
+                    }
+                  }
+                }
+                id(prev_target_x)[0] = (float)p1_x;
+                id(prev_target_y)[0] = (float)p1_y;
+                id(prev_target_valid)[0] = true;
+              }
+            }
+          }
+          bool any_now = p1_detected || p2_detected || p3_detected;
+          if (update_entities && !p1_detected && !target_masked) {
+            bool preventClear = id(entry_exit_enabled).state && !any_now && prev_detected[0];
+            if (!(assumed_present_until != 0 && millis() < assumed_present_until) && !preventClear) {
+              id(target1_speed).publish_state(0);
+              id(target1_resolution).publish_state(0);
+              id(target1_distance).publish_state(0);
+              id(target1_angle).publish_state(0);
+              id(target1_active).publish_state(false);
+              id(target1_x).publish_state(0);
+              id(target1_y).publish_state(0);
+            }
+          }
+          target_masked = false;
+          if (p2_detected) {
+            int16_t p2_x = *((int16_t *)(&bytes[12]));
+            if (p2_x < 0) p2_x += MIN_INT16_VAL;
+            else p2_x = -p2_x;
+            int16_t p2_y = *((int16_t *)(&bytes[14]));
+            if (p2_y < 0) p2_y += MIN_INT16_VAL;
+            else p2_y = -p2_y;
+            float p2_distance = sqrt(p2_x * p2_x + p2_y * p2_y);
+            if (id(inverse_mounting).state) { p2_x = -p2_x; }
+            if (p2_distance > max_distance) {
+              p2_detected = false;
+            } else {
+              float p2_angle;
+              if (installation_angle != 0 || update_entities) { p2_angle = atan2(p2_y, p2_x); }
+              if (installation_angle != 0) {
+                float angle = p2_angle - installation_angle;
+                p2_x = p2_distance * cos(angle);
+                p2_y = p2_distance * sin(angle);
+              }
+              if (polygon_mode) {
+                if (point_in_poly(p2_x, p2_y, poly_exclusions[0])) { occupancy_mask_1_count++; p2_detected = false; target_masked = true; }
+                else if (point_in_poly(p2_x, p2_y, poly_exclusions[1])) { occupancy_mask_2_count++; p2_detected = false; target_masked = true; }
+                else {
+                  if (point_in_poly(p2_x, p2_y, poly_zones[0])) { zone1_count++; id(last_zone_hold) = 1; }
+                  if (point_in_poly(p2_x, p2_y, poly_zones[1])) { zone2_count++; id(last_zone_hold) = 2; }
+                  if (point_in_poly(p2_x, p2_y, poly_zones[2])) { zone3_count++; id(last_zone_hold) = 3; }
+                  if (point_in_poly(p2_x, p2_y, poly_zones[3])) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              } else {
+                if ((occupancy_mask_1_begin_x_value <= p2_x && p2_x <= occupancy_mask_1_end_x_value) &&
+                    (occupancy_mask_1_begin_y_value <= p2_y && p2_y <= occupancy_mask_1_end_y_value)) {
+                  occupancy_mask_1_count++; p2_detected = false; target_masked = true;
+                } else if ((occupancy_mask_2_begin_x_value <= p2_x && p2_x <= occupancy_mask_2_end_x_value) &&
+                    (occupancy_mask_2_begin_y_value <= p2_y && p2_y <= occupancy_mask_2_end_y_value)) {
+                  occupancy_mask_2_count++; p2_detected = false; target_masked = true;
+                } else {
+                  if ((zone1_begin_x_value <= p2_x && p2_x <= zone1_end_x_value) && (zone1_begin_y_value <= p2_y && p2_y <= zone1_end_y_value)) { zone1_count++; id(last_zone_hold) = 1; }
+                  if ((zone2_begin_x_value <= p2_x && p2_x <= zone2_end_x_value) && (zone2_begin_y_value <= p2_y && p2_y <= zone2_end_y_value)) { zone2_count++; id(last_zone_hold) = 2; }
+                  if ((zone3_begin_x_value <= p2_x && p2_x <= zone3_end_x_value) && (zone3_begin_y_value <= p2_y && p2_y <= zone3_end_y_value)) { zone3_count++; id(last_zone_hold) = 3; }
+                  if ((zone4_begin_x_value <= p2_x && p2_x <= zone4_end_x_value) && (zone4_begin_y_value <= p2_y && p2_y <= zone4_end_y_value)) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              }
+              if (update_entities) {
+                uint16_t p2_resolution = *((uint16_t *)(&bytes[18]));
+                int16_t p2_speed = *((int16_t *)(&bytes[16]));
+                if (p2_speed < 0) p2_speed += MIN_INT16_VAL;
+                else p2_speed = -p2_speed;
+                id(target2_speed).publish_state(p2_speed / 100.0);
+                id(target2_resolution).publish_state(p2_resolution);
+                float p2_angle_deg = (p2_angle * RADIANS_TO_DEGREES) - 90;
+                id(target2_angle).publish_state(p2_angle_deg);
+                id(target2_distance).publish_state(p2_distance);
+                id(target2_active).publish_state(true);
+                id(target2_x).publish_state(p2_x);
+                id(target2_y).publish_state(p2_y);
+                // Line crossing check voor target 2
+                if (polygon_mode && id(prev_target_valid)[1]) {
+                  float prev_x = id(prev_target_x)[1];
+                  float prev_y = id(prev_target_y)[1];
+                  for (int li = 0; li < 2; li++) {
+                    int crossing = check_line_crossing(prev_x, prev_y, (float)p2_x, (float)p2_y, entry_lines[li]);
+                    if (crossing != 0) {
+                      int new_count = id(room_people_count) + crossing;
+                      if (new_count < 0) new_count = 0;
+                      id(room_people_count) = new_count;
+                      id(people_count).publish_state(new_count);
+                      if (li == 0) id(entry_line_1_crossed).publish_state(true);
+                      else id(entry_line_2_crossed).publish_state(true);
+                      id(last_crossing_direction).publish_state(crossing > 0 ? "in" : "out");
+                      ESP_LOGI("EntryLine", "Target 2 crossed line %d: %s, people=%d", li+1, crossing > 0 ? "IN" : "OUT", new_count);
+                    }
+                  }
+                }
+                id(prev_target_x)[1] = (float)p2_x;
+                id(prev_target_y)[1] = (float)p2_y;
+                id(prev_target_valid)[1] = true;
+              }
+            }
+          }
+          if (update_entities && !p2_detected && !target_masked) {
+            bool preventClear2 = id(entry_exit_enabled).state && !any_now && prev_detected[1];
+            if (!(assumed_present_until != 0 && millis() < assumed_present_until) && !preventClear2) {
+              id(target2_speed).publish_state(0);
+              id(target2_resolution).publish_state(0);
+              id(target2_distance).publish_state(0);
+              id(target2_angle).publish_state(0);
+              id(target2_active).publish_state(false);
+              id(target2_x).publish_state(0);
+              id(target2_y).publish_state(0);
+            }
+          }
+          target_masked = false;
+          if (p3_detected) {
+            int16_t p3_x = *((int16_t *)(&bytes[20]));
+            if (p3_x < 0) p3_x += MIN_INT16_VAL;
+            else p3_x = -p3_x;
+            int16_t p3_y = *((int16_t *)(&bytes[22]));
+            if (p3_y < 0) p3_y += MIN_INT16_VAL;
+            else p3_y = -p3_y;
+            float p3_distance = sqrt(p3_x * p3_x + p3_y * p3_y);
+            if (id(inverse_mounting).state) { p3_x = -p3_x; }
+            if (p3_distance > max_distance) {
+              p3_detected = false;
+            } else {
+              float p3_angle;
+              if (installation_angle != 0 || update_entities) { p3_angle = atan2(p3_y, p3_x); }
+              if (installation_angle != 0) {
+                float angle = p3_angle - installation_angle;
+                p3_x = p3_distance * cos(angle);
+                p3_y = p3_distance * sin(angle);
+              }
+              if (polygon_mode) {
+                if (point_in_poly(p3_x, p3_y, poly_exclusions[0])) { occupancy_mask_1_count++; p3_detected = false; target_masked = true; }
+                else if (point_in_poly(p3_x, p3_y, poly_exclusions[1])) { occupancy_mask_2_count++; p3_detected = false; target_masked = true; }
+                else {
+                  if (point_in_poly(p3_x, p3_y, poly_zones[0])) { zone1_count++; id(last_zone_hold) = 1; }
+                  if (point_in_poly(p3_x, p3_y, poly_zones[1])) { zone2_count++; id(last_zone_hold) = 2; }
+                  if (point_in_poly(p3_x, p3_y, poly_zones[2])) { zone3_count++; id(last_zone_hold) = 3; }
+                  if (point_in_poly(p3_x, p3_y, poly_zones[3])) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              } else {
+                if ((occupancy_mask_1_begin_x_value <= p3_x && p3_x <= occupancy_mask_1_end_x_value) &&
+                    (occupancy_mask_1_begin_y_value <= p3_y && p3_y <= occupancy_mask_1_end_y_value)) {
+                  occupancy_mask_1_count++; p3_detected = false; target_masked = true;
+                } else if ((occupancy_mask_2_begin_x_value <= p3_x && p3_x <= occupancy_mask_2_end_x_value) &&
+                    (occupancy_mask_2_begin_y_value <= p3_y && p3_y <= occupancy_mask_2_end_y_value)) {
+                  occupancy_mask_2_count++; p3_detected = false; target_masked = true;
+                } else {
+                  if ((zone1_begin_x_value <= p3_x && p3_x <= zone1_end_x_value) && (zone1_begin_y_value <= p3_y && p3_y <= zone1_end_y_value)) { zone1_count++; id(last_zone_hold) = 1; }
+                  if ((zone2_begin_x_value <= p3_x && p3_x <= zone2_end_x_value) && (zone2_begin_y_value <= p3_y && p3_y <= zone2_end_y_value)) { zone2_count++; id(last_zone_hold) = 2; }
+                  if ((zone3_begin_x_value <= p3_x && p3_x <= zone3_end_x_value) && (zone3_begin_y_value <= p3_y && p3_y <= zone3_end_y_value)) { zone3_count++; id(last_zone_hold) = 3; }
+                  if ((zone4_begin_x_value <= p3_x && p3_x <= zone4_end_x_value) && (zone4_begin_y_value <= p3_y && p3_y <= zone4_end_y_value)) { zone4_count++; id(last_zone_hold) = 4; }
+                }
+              }
+              if (update_entities) {
+                uint16_t p3_resolution = *((uint16_t *)(&bytes[26]));
+                int16_t p3_speed = *((int16_t *)(&bytes[24]));
+                if (p3_speed < 0) p3_speed += MIN_INT16_VAL;
+                else p3_speed = -p3_speed;
+                id(target3_speed).publish_state(p3_speed / 100.0);
+                id(target3_resolution).publish_state(p3_resolution);
+                float p3_angle_deg = (p3_angle * RADIANS_TO_DEGREES) - 90;
+                id(target3_angle).publish_state(p3_angle_deg);
+                id(target3_distance).publish_state(p3_distance);
+                id(target3_active).publish_state(true);
+                id(target3_x).publish_state(p3_x);
+                id(target3_y).publish_state(p3_y);
+                // Line crossing check voor target 3
+                if (polygon_mode && id(prev_target_valid)[2]) {
+                  float prev_x = id(prev_target_x)[2];
+                  float prev_y = id(prev_target_y)[2];
+                  for (int li = 0; li < 2; li++) {
+                    int crossing = check_line_crossing(prev_x, prev_y, (float)p3_x, (float)p3_y, entry_lines[li]);
+                    if (crossing != 0) {
+                      int new_count = id(room_people_count) + crossing;
+                      if (new_count < 0) new_count = 0;
+                      id(room_people_count) = new_count;
+                      id(people_count).publish_state(new_count);
+                      if (li == 0) id(entry_line_1_crossed).publish_state(true);
+                      else id(entry_line_2_crossed).publish_state(true);
+                      id(last_crossing_direction).publish_state(crossing > 0 ? "in" : "out");
+                      ESP_LOGI("EntryLine", "Target 3 crossed line %d: %s, people=%d", li+1, crossing > 0 ? "IN" : "OUT", new_count);
+                    }
+                  }
+                }
+                id(prev_target_x)[2] = (float)p3_x;
+                id(prev_target_y)[2] = (float)p3_y;
+                id(prev_target_valid)[2] = true;
+              }
+            }
+          }
+          if (update_entities && !p3_detected && !target_masked) {
+            bool preventClear3 = id(entry_exit_enabled).state && !any_now && prev_detected[2];
+            if (!(assumed_present_until != 0 && millis() < assumed_present_until) && !preventClear3) {
+              id(target3_speed).publish_state(0);
+              id(target3_resolution).publish_state(0);
+              id(target3_distance).publish_state(0);
+              id(target3_angle).publish_state(0);
+              id(target3_active).publish_state(false);
+              id(target3_x).publish_state(0);
+              id(target3_y).publish_state(0);
+            }
+          }
+          if (update_entities) {
+            id(zone1_target_count).publish_state(zone1_count);
+            id(zone2_target_count).publish_state(zone2_count);
+            id(zone3_target_count).publish_state(zone3_count);
+            id(zone4_target_count).publish_state(zone4_count);
+            id(occupancy_mask_1_target_count).publish_state(occupancy_mask_1_count);
+            id(occupancy_mask_2_target_count).publish_state(occupancy_mask_2_count);
+          }
+          static const int BUF_SZ = 600;
+          struct Sample { unsigned long t; float x; float y; };
+          static Sample hist[3][BUF_SZ];
+          static uint16_t head[3] = {0,0,0};
+          int e1_x1 = min((int)id(entry_zone_1_begin_x).state, (int)id(entry_zone_1_end_x).state);
+          int e1_x2 = max((int)id(entry_zone_1_begin_x).state, (int)id(entry_zone_1_end_x).state);
+          int e1_y1 = min((int)id(entry_zone_1_begin_y).state, (int)id(entry_zone_1_end_y).state);
+          int e1_y2 = max((int)id(entry_zone_1_begin_y).state, (int)id(entry_zone_1_end_y).state);
+          int e2_x1 = min((int)id(entry_zone_2_begin_x).state, (int)id(entry_zone_2_end_x).state);
+          int e2_x2 = max((int)id(entry_zone_2_begin_x).state, (int)id(entry_zone_2_end_x).state);
+          int e2_y1 = min((int)id(entry_zone_2_begin_y).state, (int)id(entry_zone_2_end_y).state);
+          int e2_y2 = max((int)id(entry_zone_2_begin_y).state, (int)id(entry_zone_2_end_y).state);
+          float poly_e1_y_min = 0, poly_e1_y_max = 0, poly_e2_y_min = 0, poly_e2_y_max = 0;
+          if (polygon_mode) {
+            if (poly_entries[0].count >= 3) {
+              poly_e1_y_min = poly_e1_y_max = poly_entries[0].vy[0];
+              for (int vi = 1; vi < poly_entries[0].count; vi++) {
+                if (poly_entries[0].vy[vi] < poly_e1_y_min) poly_e1_y_min = poly_entries[0].vy[vi];
+                if (poly_entries[0].vy[vi] > poly_e1_y_max) poly_e1_y_max = poly_entries[0].vy[vi];
+              }
+            }
+            if (poly_entries[1].count >= 3) {
+              poly_e2_y_min = poly_e2_y_max = poly_entries[1].vy[0];
+              for (int vi = 1; vi < poly_entries[1].count; vi++) {
+                if (poly_entries[1].vy[vi] < poly_e2_y_min) poly_e2_y_min = poly_entries[1].vy[vi];
+                if (poly_entries[1].vy[vi] > poly_e2_y_max) poly_e2_y_max = poly_entries[1].vy[vi];
+              }
+            }
+          }
+          unsigned long now_ms = millis();
+          if (p1_detected) { head[0] = (head[0] + 1) % BUF_SZ; hist[0][head[0]].t = now_ms; hist[0][head[0]].x = id(target1_x).state; hist[0][head[0]].y = id(target1_y).state; }
+          if (p2_detected) { head[1] = (head[1] + 1) % BUF_SZ; hist[1][head[1]].t = now_ms; hist[1][head[1]].x = id(target2_x).state; hist[1][head[1]].y = id(target2_y).state; }
+          if (p3_detected) { head[2] = (head[2] + 1) % BUF_SZ; hist[2][head[2]].t = now_ms; hist[2][head[2]].x = id(target3_x).state; hist[2][head[2]].y = id(target3_y).state; }
+          bool detected_now[3] = {p1_detected, p2_detected, p3_detected};
+          bool any_detected_now = p1_detected || p2_detected || p3_detected;
+          if (any_detected_now) { assumed_present_until = 0; }
+          if (id(entry_exit_enabled).state) {
+            const unsigned long window_ms = 30000;
+            const float threshold_scale = 1.0f + (id(exit_threshold_pct).state / 100.0f);
+            if (!any_detected_now) {
+              for (int i = 0; i < 3; i++) {
+                if (prev_detected[i] && !detected_now[i]) {
+                  float len_e1 = 0.0f, len_e2 = 0.0f;
+                  bool e1_valid = polygon_mode ? (poly_entries[0].count >= 3) : !(e1_x1 == e1_x2 && e1_y1 == e1_y2);
+                  bool e2_valid = polygon_mode ? (poly_entries[1].count >= 3) : !(e2_x1 == e2_x2 && e2_y1 == e2_y2);
+                  if (e1_valid) {
+                    uint16_t ii = head[i];
+                    unsigned int steps = 0;
+                    while (steps < BUF_SZ) {
+                      uint16_t jj = (ii + BUF_SZ - 1) % BUF_SZ;
+                      const Sample &a = hist[i][jj];
+                      const Sample &b = hist[i][ii];
+                      if (b.t == 0 || a.t == 0) break;
+                      if (now_ms - b.t > window_ms) break;
+                      float mx = 0.5f * (a.x + b.x);
+                      float my = 0.5f * (a.y + b.y);
+                      bool in_e1 = polygon_mode ? point_in_poly(mx, my, poly_entries[0]) : (mx >= e1_x1 && mx <= e1_x2 && my >= e1_y1 && my <= e1_y2);
+                      if (in_e1) { float dx = b.x - a.x; float dy = b.y - a.y; len_e1 += sqrt(dx*dx + dy*dy); }
+                      ii = jj; steps++;
+                    }
+                  }
+                  if (e2_valid) {
+                    uint16_t ii2 = head[i];
+                    unsigned int steps2 = 0;
+                    while (steps2 < BUF_SZ) {
+                      uint16_t jj2 = (ii2 + BUF_SZ - 1) % BUF_SZ;
+                      const Sample &a2 = hist[i][jj2];
+                      const Sample &b2 = hist[i][ii2];
+                      if (b2.t == 0 || a2.t == 0) break;
+                      if (now_ms - b2.t > window_ms) break;
+                      float mx2 = 0.5f * (a2.x + b2.x);
+                      float my2 = 0.5f * (a2.y + b2.y);
+                      bool in_e2 = polygon_mode ? point_in_poly(mx2, my2, poly_entries[1]) : (mx2 >= e2_x1 && mx2 <= e2_x2 && my2 >= e2_y1 && my2 <= e2_y2);
+                      if (in_e2) { float dx2 = b2.x - a2.x; float dy2 = b2.y - a2.y; len_e2 += sqrt(dx2*dx2 + dy2*dy2); }
+                      ii2 = jj2; steps2++;
+                    }
+                  }
+                  float door1_depth = polygon_mode ? abs(poly_e1_y_max - poly_e1_y_min) : abs(e1_y2 - e1_y1);
+                  float door2_depth = polygon_mode ? abs(poly_e2_y_max - poly_e2_y_min) : abs(e2_y2 - e2_y1);
+                  bool valid_exit = false;
+                  if (door1_depth > 0 && len_e1 >= door1_depth * threshold_scale) valid_exit = true;
+                  if (door2_depth > 0 && len_e2 >= door2_depth * threshold_scale) valid_exit = true;
+                  if (!valid_exit) {
+                    unsigned long hold_ms = (unsigned long) (id(assume_present_timeout_s).state * 1000.0f);
+                    if (hold_ms > 0) { assumed_present_until = now_ms + hold_ms; }
+                  }
+                  break;
+                }
+              }
+            }
+          }
+          bool occ_now = any_detected_now;
+          if (!occ_now && id(entry_exit_enabled).state) {
+            if (assumed_present_until != 0 && millis() < assumed_present_until) { occ_now = true; }
+          }
+          id(occupancy).publish_state(occ_now);
+          bool hold_active = (assumed_present_until != 0 && millis() < assumed_present_until);
+          id(assumed_present_active) = hold_active;
+          id(assumed_present_until_ms) = assumed_present_until;
+          id(assumed_present).publish_state(hold_active);
+          if (hold_active) {
+            float remain = (assumed_present_until - millis()) / 1000.0f;
+            if (remain < 0) remain = 0;
+            id(assumed_present_remaining_s).publish_state(remain);
+          } else {
+            id(assumed_present_remaining_s).publish_state(0);
+          }
+          bool hold_active2 = (assumed_present_until != 0 && millis() < assumed_present_until);
+          bool z1 = zone1_count > 0; if (hold_active2 && id(last_zone_hold) == 1) z1 = true;
+          bool z2 = zone2_count > 0; if (hold_active2 && id(last_zone_hold) == 2) z2 = true;
+          bool z3 = zone3_count > 0; if (hold_active2 && id(last_zone_hold) == 3) z3 = true;
+          bool z4 = zone4_count > 0; if (hold_active2 && id(last_zone_hold) == 4) z4 = true;
+          id(zone1_occupancy).publish_state(z1);
+          id(zone2_occupancy).publish_state(z2);
+          id(zone3_occupancy).publish_state(z3);
+          id(zone4_occupancy).publish_state(z4);
+          prev_detected[0] = p1_detected;
+          prev_detected[1] = p2_detected;
+          prev_detected[2] = p3_detected;
+
+# =============================================================================
+# I2S AUDIO (UltimateSensor Mini specifiek)
+# =============================================================================
+i2s_audio:
+  - id: i2s_speaker
+    i2s_lrclk_pin: GPIO8
+    i2s_bclk_pin: GPIO18
+  - id: i2s_microphone
+    i2s_lrclk_pin: GPIO7
+    i2s_bclk_pin: GPIO16
+
+media_player:
+  - platform: i2s_audio
+    id: speaker
+    name: "Media Player"
+    dac_type: external
+    i2s_dout_pin: GPIO17
+    i2s_audio_id: i2s_speaker
+    mode: mono
+
+microphone:
+  - platform: i2s_audio
+    id: mic
+    i2s_audio_id: i2s_microphone
+    adc_type: external
+    i2s_din_pin: GPIO15
+    pdm: false
+    channel: right
+
+voice_assistant:
+  id: va
+  microphone: mic
+  use_wake_word: false
+  media_player: speaker
+
+# =============================================================================
+# LIGHTS (UltimateSensor Mini specifiek)
+# =============================================================================
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO20
+    num_leds: 1
+    rgb_order: GRB
+    name: "Back light"
+    id: rgb_back_light
+
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO5
+    num_leds: 1
+    rgb_order: GRB
+    name: "Front light"
+    id: rgb_front_light
+
+status_led:
+  pin: GPIO19
+
+# =============================================================================
+# SWITCHES
+# =============================================================================
+switch:
+  - platform: template
+    name: "Use Wake Word"
+    id: use_wake_word
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - voice_assistant.start_continuous:
+    on_turn_off:
+      - voice_assistant.stop:
+
+  - platform: template
+    name: "Upside Down Mounting"
+    id: inverse_mounting
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Zones"
+    id: polygon_zones_enabled
+    restore_mode: RESTORE_DEFAULT_ON
+    optimistic: true
+    entity_category: config
+
+  - platform: template
+    name: "Entry Exit Enabled"
+    id: entry_exit_enabled
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+  - platform: template
+    name: "Stale Target Reset"
+    id: stale_target_reset
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    entity_category: config
+
+# =============================================================================
+# BINARY SENSORS
+# =============================================================================
+binary_sensor:
+  - platform: template
+    name: "Occupancy"
+    id: occupancy
+    device_class: occupancy
+
+  - platform: template
+    name: "Zone 1 Occupancy"
+    id: zone1_occupancy
+    device_class: occupancy
+
+  - platform: template
+    name: "Zone 2 Occupancy"
+    id: zone2_occupancy
+    device_class: occupancy
+
+  - platform: template
+    name: "Zone 3 Occupancy"
+    id: zone3_occupancy
+    device_class: occupancy
+
+  - platform: template
+    name: "Zone 4 Occupancy"
+    id: zone4_occupancy
+    device_class: occupancy
+
+  - platform: template
+    name: "Target 1 Active"
+    id: target1_active
+
+  - platform: template
+    name: "Target 2 Active"
+    id: target2_active
+
+  - platform: template
+    name: "Target 3 Active"
+    id: target3_active
+
+  - platform: template
+    name: "Assumed Present"
+    id: assumed_present
+    device_class: occupancy
+
+  # Entry Line Crossed sensors
+  - platform: template
+    name: "Entry Line 1 Crossed"
+    id: entry_line_1_crossed
+    icon: "mdi:door-open"
+    on_press:
+      then:
+        - delay: 500ms
+        - binary_sensor.template.publish:
+            id: entry_line_1_crossed
+            state: false
+
+  - platform: template
+    name: "Entry Line 2 Crossed"
+    id: entry_line_2_crossed
+    icon: "mdi:door-open"
+    on_press:
+      then:
+        - delay: 500ms
+        - binary_sensor.template.publish:
+            id: entry_line_2_crossed
+            state: false
+
+# =============================================================================
+# SENSORS
+# =============================================================================
+sensor:
+  # SCD41 - CO2, Temperature, Humidity
+  - platform: scd4x
+    id: my_scd41
+    co2:
+      id: scd41_co2
+      name: "SCD41 CO2"
+    temperature:
+      id: scd41_temperature
+      name: "SCD41 Temperature"
+    humidity:
+      id: scd41_humidity
+      name: "SCD41 Humidity"
+    measurement_mode: low_power_periodic
+    update_interval: 30s
+
+  # BH1750 - Illuminance
+  - platform: bh1750
+    id: illuminance
+    name: "BH1750 Illuminance"
+    address: 0x23
+    update_interval: 60s
+
+  # SGP41 - VOC and NOx
+  - platform: sgp4x
+    id: sgp41
+    voc:
+      id: voc_index
+      name: "VOC Index"
+    nox:
+      id: nox_index
+      name: "NOx Index"
+    compensation:
+      humidity_source: scd41_humidity
+      temperature_source: scd41_temperature
+
+  # SPS30 - Particulate Matter
+  - platform: sps30
+    pm_1_0:
+      name: "PM 1.0"
+      id: pm_1_0
+    pm_2_5:
+      name: "PM 2.5"
+      id: pm_2_5
+    pm_4_0:
+      name: "PM 4.0"
+      id: pm_4_0
+    pm_10_0:
+      name: "PM 10"
+      id: pm_10
+    address: 0x69
+    update_interval: 60s
+
+  # WiFi
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+    entity_category: diagnostic
+
+  - platform: internal_temperature
+    name: "CPU Temperature"
+    entity_category: diagnostic
+
+  # Target 1
+  - platform: template
+    name: "Target 1 X"
+    id: target1_x
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 1 Y"
+    id: target1_y
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 1 Speed"
+    id: target1_speed
+    unit_of_measurement: "cm/s"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 1 Resolution"
+    id: target1_resolution
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 1 Distance"
+    id: target1_distance
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 1 Angle"
+    id: target1_angle
+    unit_of_measurement: "°"
+    accuracy_decimals: 1
+
+  # Target 2
+  - platform: template
+    name: "Target 2 X"
+    id: target2_x
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 2 Y"
+    id: target2_y
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 2 Speed"
+    id: target2_speed
+    unit_of_measurement: "cm/s"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 2 Resolution"
+    id: target2_resolution
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 2 Distance"
+    id: target2_distance
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 2 Angle"
+    id: target2_angle
+    unit_of_measurement: "°"
+    accuracy_decimals: 1
+
+  # Target 3
+  - platform: template
+    name: "Target 3 X"
+    id: target3_x
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 3 Y"
+    id: target3_y
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 3 Speed"
+    id: target3_speed
+    unit_of_measurement: "cm/s"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 3 Resolution"
+    id: target3_resolution
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 3 Distance"
+    id: target3_distance
+    unit_of_measurement: "mm"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Target 3 Angle"
+    id: target3_angle
+    unit_of_measurement: "°"
+    accuracy_decimals: 1
+
+  # Zone Target Counts
+  - platform: template
+    name: "Zone 1 Target Count"
+    id: zone1_target_count
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Zone 2 Target Count"
+    id: zone2_target_count
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Zone 3 Target Count"
+    id: zone3_target_count
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Zone 4 Target Count"
+    id: zone4_target_count
+    accuracy_decimals: 0
+
+  # Occupancy Mask Target Counts
+  - platform: template
+    name: "Occupancy Mask 1 Target Count"
+    id: occupancy_mask_1_target_count
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+  - platform: template
+    name: "Occupancy Mask 2 Target Count"
+    id: occupancy_mask_2_target_count
+    accuracy_decimals: 0
+    entity_category: diagnostic
+
+  # Assumed Present Remaining
+  - platform: template
+    name: "Assumed Present Remaining"
+    id: assumed_present_remaining_s
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+
+  # Entry Line People Counter
+  - platform: template
+    name: "People Count"
+    id: people_count
+    icon: "mdi:account-group"
+    accuracy_decimals: 0
+    unit_of_measurement: "people"
+
+# =============================================================================
+# NUMBER CONTROLS
+# =============================================================================
+number:
+  - platform: template
+    name: "Occupancy Off Delay"
+    id: occupancy_off_delay
+    max_value: 600
+    min_value: 0
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 15
+    entity_category: config
+
+  - platform: template
+    name: "Zone 1 Off Delay"
+    id: zone_1_off_delay
+    max_value: 600
+    min_value: 0
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 15
+    entity_category: config
+
+  - platform: template
+    name: "Zone 2 Off Delay"
+    id: zone_2_off_delay
+    max_value: 600
+    min_value: 0
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 15
+    entity_category: config
+
+  - platform: template
+    name: "Zone 3 Off Delay"
+    id: zone_3_off_delay
+    max_value: 600
+    min_value: 0
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 15
+    entity_category: config
+
+  - platform: template
+    name: "Zone 4 Off Delay"
+    id: zone_4_off_delay
+    max_value: 600
+    min_value: 0
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 15
+    entity_category: config
+
+  - platform: template
+    name: "Stale Target Reset Timeout"
+    id: stale_target_reset_timeout
+    max_value: 60
+    min_value: 1
+    step: 1
+    optimistic: true
+    restore_value: true
+    unit_of_measurement: "s"
+    initial_value: 3
+    entity_category: config
+
+  - platform: template
+    name: "Max Distance"
+    id: radar_max_distance
+    max_value: 600
+    min_value: 0
+    unit_of_measurement: "cm"
+    step: 1
+    optimistic: true
+    restore_value: true
+    initial_value: 600
+
+  - platform: template
+    name: "Installation Angle"
+    id: installation_angle_ui
+    min_value: -45
+    max_value: 45
+    step: 1
+    unit_of_measurement: "°"
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Assume Present Timeout"
+    id: assume_present_timeout_s
+    min_value: 0
+    max_value: 300
+    step: 1
+    unit_of_measurement: "s"
+    optimistic: true
+    restore_value: true
+    initial_value: 60
+
+  - platform: template
+    name: "Exit Threshold Pct"
+    id: exit_threshold_pct
+    min_value: 0
+    max_value: 100
+    step: 5
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    initial_value: 50
+
+  # Zone 1
+  - platform: template
+    name: "Zone 1 Begin X"
+    id: zone1_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: -4000
+
+  - platform: template
+    name: "Zone 1 End X"
+    id: zone1_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 4000
+
+  - platform: template
+    name: "Zone 1 Begin Y"
+    id: zone1_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 1 End Y"
+    id: zone1_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 6000
+
+  # Zone 2
+  - platform: template
+    name: "Zone 2 Begin X"
+    id: zone2_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 2 End X"
+    id: zone2_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 2 Begin Y"
+    id: zone2_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 2 End Y"
+    id: zone2_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  # Zone 3
+  - platform: template
+    name: "Zone 3 Begin X"
+    id: zone3_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 3 End X"
+    id: zone3_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 3 Begin Y"
+    id: zone3_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 3 End Y"
+    id: zone3_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  # Zone 4
+  - platform: template
+    name: "Zone 4 Begin X"
+    id: zone4_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 4 End X"
+    id: zone4_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 4 Begin Y"
+    id: zone4_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  - platform: template
+    name: "Zone 4 End Y"
+    id: zone4_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+
+  # Occupancy Mask 1
+  - platform: template
+    name: "Occupancy Mask 1 Begin X"
+    id: occupancy_mask_1_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 1 End X"
+    id: occupancy_mask_1_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 1 Begin Y"
+    id: occupancy_mask_1_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 1 End Y"
+    id: occupancy_mask_1_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  # Occupancy Mask 2
+  - platform: template
+    name: "Occupancy Mask 2 Begin X"
+    id: occupancy_mask_2_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 2 End X"
+    id: occupancy_mask_2_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 2 Begin Y"
+    id: occupancy_mask_2_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Occupancy Mask 2 End Y"
+    id: occupancy_mask_2_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  # Entry Zone 1
+  - platform: template
+    name: "Entry Zone 1 Begin X"
+    id: entry_zone_1_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 1 End X"
+    id: entry_zone_1_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 1 Begin Y"
+    id: entry_zone_1_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 1 End Y"
+    id: entry_zone_1_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  # Entry Zone 2
+  - platform: template
+    name: "Entry Zone 2 Begin X"
+    id: entry_zone_2_begin_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 2 End X"
+    id: entry_zone_2_end_x
+    max_value: 4000
+    min_value: -4000
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 2 Begin Y"
+    id: entry_zone_2_begin_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+  - platform: template
+    name: "Entry Zone 2 End Y"
+    id: entry_zone_2_end_y
+    max_value: 6000
+    min_value: 0
+    unit_of_measurement: "mm"
+    step: 10
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    entity_category: config
+
+# =============================================================================
+# TEXT ENTITIES - POLYGON ZONES (zoals EP Lite doet!)
+# =============================================================================
+text:
+  - platform: template
+    name: "Polygon Zone 1"
+    id: poly_zone_1
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Zone 2"
+    id: poly_zone_2
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Zone 3"
+    id: poly_zone_3
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Zone 4"
+    id: poly_zone_4
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Exclusion 1"
+    id: poly_exclusion_1
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Exclusion 2"
+    id: poly_exclusion_2
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Entry 1"
+    id: poly_entry_1
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Polygon Entry 2"
+    id: poly_entry_2
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  # Entry Lines (format: "x1:y1;x2:y2;left" of "x1:y1;x2:y2;right")
+  - platform: template
+    name: "Entry Line 1"
+    id: entry_line_1
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+  - platform: template
+    name: "Entry Line 2"
+    id: entry_line_2
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    entity_category: config
+
+# =============================================================================
+# TEXT SENSORS (alleen-lezen status sensoren)
+# =============================================================================
+text_sensor:
+  # Last crossing direction (updated via publish_state when line is crossed)
+  - platform: template
+    name: "Last Crossing Direction"
+    id: last_crossing_direction
+    icon: "mdi:arrow-left-right"
+
+  # WiFi info
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      entity_category: diagnostic
+    ssid:
+      name: "Connected SSID"
+      entity_category: diagnostic
+    mac_address:
+      name: "MAC Address"
+      entity_category: diagnostic
+
+  - platform: version
+    name: "ESPHome Version"
+    entity_category: diagnostic
+
+# =============================================================================
+# BUTTONS
+# =============================================================================
+button:
+  - platform: restart
+    name: "Restart"
+    entity_category: config
+
+  - platform: factory_reset
+    name: "Factory Reset"
+    entity_category: config
