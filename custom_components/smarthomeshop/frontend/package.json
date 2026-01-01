@@ -10,7 +10,7 @@
     "dev": "npm run build && npm run watch",
     "clean": "rm -rf dist",
     "type-check": "tsc --noEmit",
-    "copy": "cp dist/smarthomeshop-cards.js ../js/",
+    "copy": "cp dist/smarthomeshop-cards.js ../www/",
     "build:prod": "npm run build && npm run copy"
   },
   "keywords": [

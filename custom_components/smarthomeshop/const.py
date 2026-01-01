@@ -8,7 +8,7 @@ from typing import Final
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN: Final = "smarthomeshop"
-VERSION: Final = "0.0.2"
+VERSION: Final = "0.0.3"
 MANUFACTURER: Final = "SmartHomeShop.io"
 
 # Product types

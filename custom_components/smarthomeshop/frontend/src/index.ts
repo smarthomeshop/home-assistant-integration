@@ -16,7 +16,7 @@ import { SmartHomeShopSensorSettings } from './components/sensor-settings';
 import { SmartHomeShopZoneEditor } from './components/zone-editor';
 import './components/card-editors';
 
-const VERSION = '6.6.1';
+const VERSION = '0.0.3';
 
 console.info(
   `%c SMARTHOMESHOP-CARDS %c ${VERSION} `,
