@@ -1,0 +1,59 @@
+# SmartHomeShop.io Integration for Home Assistant
+
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+
+Custom integration for Home Assistant to integrate SmartHomeShop.io devices.
+
+## Installation
+
+### HACS (Recommended)
+
+Use this installation method if you have HACS installed in Home Assistant.
+
+1. Click the My Home Assistant button below to open this repository in HACS.
+
+   [![Open your Home Assistant instance and add this repository to HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
+
+2. Click **Add**.
+3. Search for **SmartHomeShop.io** in HACS and install it.
+4. Restart Home Assistant.
+
+If the button does not work:
+
+1. Open **HACS** in Home Assistant.
+2. Go to **Integrations**.
+3. Click the three dots in the top right corner and select **Custom repositories**.
+4. Add this repository URL:
+
+   ```text
+   https://github.com/smarthomeshop/home-assistant-integration
+   ```
+
+5. Select **Integration** as the category.
+6. Click **Add**.
+7. Search for **SmartHomeShop.io** and install it.
+8. Restart Home Assistant.
+
+### Manual Installation
+
+1. Download the latest release
+2. Copy the `custom_components/smarthomeshop` folder to your Home Assistant `custom_components` directory
+3. Restart Home Assistant
+
+## Configuration
+
+1. Go to **Settings** > **Devices & Services**
+2. Click **Add Integration**
+3. Search for "SmartHomeShop.io"
+4. Follow the configuration steps
+
+## Support
+
+- [Documentation](https://docs.smarthomeshop.io)
+- [Issue Tracker](https://github.com/smarthomeshop/home-assistant-integration/issues)
+
+## License
+
+Copyright (c) 2025 SmartHomeShop.io - All Rights Reserved.
+
+This software is proprietary. Unauthorized copying, modification, distribution, or use of this software, via any medium, is strictly prohibited without prior written permission from SmartHomeShop.io.

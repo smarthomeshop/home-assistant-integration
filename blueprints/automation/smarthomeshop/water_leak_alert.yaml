@@ -1,0 +1,47 @@
+blueprint:
+  name: SmartHomeShop water leak alert
+  description: >-
+    Send a notification when a SmartHomeShop water product (WaterMeterKit,
+    WaterP1MeterKit or WaterFlowKit) detects a possible leak, and a follow-up
+    when the leak is cleared.
+  domain: automation
+  source_url: https://github.com/smarthomeshop/home-assistant-integration/blob/main/blueprints/automation/smarthomeshop/water_leak_alert.yaml
+  input:
+    notify_device:
+      name: Notify device
+      description: The phone (Home Assistant Companion app) that should receive the alert.
+      selector:
+        device:
+          integration: mobile_app
+
+triggers:
+  - trigger: event
+    event_type: smarthomeshop_leak_detected
+    id: detected
+  - trigger: event
+    event_type: smarthomeshop_leak_cleared
+    id: cleared
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: detected
+        sequence:
+          - domain: mobile_app
+            type: notify
+            device_id: !input notify_device
+            title: "💧 Possible water leak"
+            message: >-
+              {{ trigger.event.data.device }} detected a possible leak
+              ({{ trigger.event.data.leak_type }}). Check your water usage.
+      - conditions:
+          - condition: trigger
+            id: cleared
+        sequence:
+          - domain: mobile_app
+            type: notify
+            device_id: !input notify_device
+            title: "✅ Water leak cleared"
+            message: "{{ trigger.event.data.device }} reports normal water usage again."
+mode: queued

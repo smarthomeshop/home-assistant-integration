@@ -1,0 +1,89 @@
+"""Shared P1 energy sensor descriptions for P1MeterKit and WaterP1MeterKit."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+
+from .coordinator import EnergyData
+
+
+@dataclass(frozen=True, kw_only=True)
+class P1SensorDescription(SensorEntityDescription):
+    """Describes a shared P1 energy sensor."""
+
+    value_fn: Callable[[EnergyData], Any]
+    attr_fn: Callable[[EnergyData], dict[str, Any] | None] | None = None
+    # Restore the value across restarts (month peak / standby power)
+    restore: bool = False
+
+
+P1_SENSORS: tuple[P1SensorDescription, ...] = (
+    P1SensorDescription(
+        key="standby_power",
+        name="Standby power (CC)",
+        icon="mdi:power-sleep",
+        native_unit_of_measurement="W",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        restore=True,
+        value_fn=lambda data: data.standby_w,
+        attr_fn=lambda data: {"measured_night": data.standby_day} if data.standby_day else None,
+    ),
+    P1SensorDescription(
+        key="standby_cost_year",
+        name="Standby cost per year (CC)",
+        icon="mdi:currency-eur",
+        native_unit_of_measurement="EUR",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.standby_cost_year,
+    ),
+    P1SensorDescription(
+        key="month_peak",
+        name="Month peak (CC)",
+        icon="mdi:transmission-tower",
+        native_unit_of_measurement="kW",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        restore=True,
+        value_fn=lambda data: data.month_peak_kw,
+        attr_fn=lambda data: {"month": data.peak_month} if data.peak_month else None,
+    ),
+    P1SensorDescription(
+        key="energy_cost_today",
+        name="Energy cost today (CC)",
+        icon="mdi:currency-eur",
+        native_unit_of_measurement="EUR",
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.cost_today,
+    ),
+    P1SensorDescription(
+        key="energy_cost_month",
+        name="Energy cost this month (CC)",
+        icon="mdi:currency-eur",
+        native_unit_of_measurement="EUR",
+        state_class=SensorStateClass.TOTAL,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.cost_month,
+    ),
+    P1SensorDescription(
+        key="phase_max_load",
+        name="Highest phase load (CC)",
+        icon="mdi:speedometer",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.phase_max_load_pct,
+        attr_fn=lambda data: dict(data.phase_currents) if data.phase_currents else None,
+    ),
+)

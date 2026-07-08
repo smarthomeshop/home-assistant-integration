@@ -1,0 +1,224 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartHomeShop.io",
+        "description": "Add a SmartHomeShop product to Home Assistant.\n\nSelect the product that matches your physical device. The device must already be online in Home Assistant through the ESPHome integration.",
+        "data": {
+          "product_type": "Product"
+        },
+        "data_description": {
+          "product_type": "Choose the SmartHomeShop product you want to configure."
+        }
+      },
+      "device": {
+        "title": "Select {product_name}",
+        "description": "{product_description}\n\nSelect the ESPHome device that belongs to this product.",
+        "data": {
+          "device_id": "ESPHome device"
+        }
+      },
+      "water_options": {
+        "title": "Lekdetectie",
+        "description": "Deze sensoren zijn op je apparaat gevonden:\n- Waterverbruik: `{water_sensor}`\n- Doorstroom: `{flow_sensor}`\n\nDe lekdetectie bewaakt deze sensoren en voegt alarm-entiteiten toe aan Home Assistant. Kies instellingen die bij je huishouden passen — je kunt alles later aanpassen via **Configureren**.",
+        "data": {
+          "continuous_flow_minutes": "Continu-stroom alarm na",
+          "night_start": "Nachtbewaking start",
+          "night_end": "Nachtbewaking einde",
+          "vacation_mode_entity": "Vakantiemodus schakelaar (optioneel)"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Waarschuw als er zó lang onafgebroken water blijft stromen. Dit vangt een gesprongen leiding, een vergeten tuinslang of een doorlopend toilet af. 30 minuten is een goed startpunt; kies langer als je vaak een bad of zwembad vult.",
+          "night_start": "Vanaf dit tijdstip gebruikt je huis normaal weinig tot geen water. Onverwacht verbruik in het nachtvenster telt als mogelijk lek.",
+          "night_end": "Einde van het nachtvenster. Daarna geldt weer het normale dagverbruik.",
+          "vacation_mode_entity": "Optioneel: kies een schakelaar-helper (input_boolean) die je aanzet als je weg bent. Zolang die aan staat geeft élk waterverbruik direct een lekalarm."
+        }
+      },
+      "summary": {
+        "title": "Klaar om toe te voegen",
+        "description": "**{product_name}** op **{device_name}** staat klaar.\n\nDe volgende entiteiten worden toegevoegd aan Home Assistant:\n\n{entities}\n\nAlle entiteitsnamen eindigen op *(CC)* zodat je ze kunt onderscheiden van de ingebouwde ESPHome-entiteiten."
+      }
+    },
+    "error": {
+      "no_water_sensor": "No water sensor found on this device",
+      "device_not_found": "Device not found",
+      "cannot_connect": "Cannot connect to the device"
+    },
+    "abort": {
+      "already_configured": "This device is already configured",
+      "no_devices_found": "No devices of this type found.\n\nMake sure your SmartHomeShop device is added to Home Assistant via the ESPHome integration and is online.\n\nFor setup instructions, visit: docs.smarthomeshop.io"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Lekdetectie",
+        "data": {
+          "continuous_flow_minutes": "Continu-stroom alarm na",
+          "night_start": "Nachtbewaking start",
+          "night_end": "Nachtbewaking einde",
+          "vacation_mode_entity": "Vakantiemodus schakelaar (optioneel)",
+          "price_electricity_t1": "Stroomprijs tarief 1",
+          "price_electricity_t2": "Stroomprijs tarief 2",
+          "price_feed_in": "Terugleververgoeding",
+          "price_gas": "Gasprijs",
+          "price_water": "Waterprijs",
+          "main_fuse_amps": "Hoofdzekering per fase"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Waarschuw als er zó lang onafgebroken water blijft stromen. Dit vangt een gesprongen leiding, een vergeten tuinslang of een doorlopend toilet af. 30 minuten is een goed startpunt; kies langer als je vaak een bad of zwembad vult.",
+          "night_start": "Vanaf dit tijdstip gebruikt je huis normaal weinig tot geen water. Onverwacht verbruik in het nachtvenster telt als mogelijk lek.",
+          "night_end": "Einde van het nachtvenster. Daarna geldt weer het normale dagverbruik.",
+          "vacation_mode_entity": "Optioneel: kies een schakelaar-helper (input_boolean) die je aanzet als je weg bent. Zolang die aan staat geeft élk waterverbruik direct een lekalarm.",
+          "price_electricity_t1": "Wat je betaalt per kWh tegen normaal/dagtarief. Gebruikt voor de kostensensoren.",
+          "price_electricity_t2": "Wat je betaalt per kWh tegen dal/nachttarief.",
+          "price_feed_in": "Wat je ontvangt per kWh die je zonnepanelen terugleveren aan het net.",
+          "price_gas": "Wat je betaalt per m³ gas.",
+          "price_water": "Wat je betaalt per m³ (1000 liter) water. Gebruikt voor de waterkosten-sensor.",
+          "main_fuse_amps": "De grootte van je hoofdzekering per fase (zie je meterkast, bijv. 25A of 35A). Gebruikt voor de fasebelasting-sensor."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_flow_rate": {
+        "name": "Current water usage"
+      },
+      "today_usage": {
+        "name": "Usage today"
+      },
+      "week_usage": {
+        "name": "Usage this week"
+      },
+      "month_usage": {
+        "name": "Usage this month"
+      },
+      "year_usage": {
+        "name": "Usage this year"
+      },
+      "continuous_flow_duration": {
+        "name": "Continuous flow duration"
+      },
+      "flow1_current_flow_rate": {
+        "name": "Flow 1 current usage"
+      },
+      "flow1_today_usage": {
+        "name": "Flow 1 usage today"
+      },
+      "flow1_week_usage": {
+        "name": "Flow 1 usage this week"
+      },
+      "flow1_month_usage": {
+        "name": "Flow 1 usage this month"
+      },
+      "flow1_year_usage": {
+        "name": "Flow 1 usage this year"
+      },
+      "flow1_leak_score": {
+        "name": "Flow 1 leak score"
+      },
+      "flow1_continuous_flow_duration": {
+        "name": "Flow 1 continuous flow duration"
+      },
+      "flow2_current_flow_rate": {
+        "name": "Flow 2 current usage"
+      },
+      "flow2_today_usage": {
+        "name": "Flow 2 usage today"
+      },
+      "flow2_week_usage": {
+        "name": "Flow 2 usage this week"
+      },
+      "flow2_month_usage": {
+        "name": "Flow 2 usage this month"
+      },
+      "flow2_year_usage": {
+        "name": "Flow 2 usage this year"
+      },
+      "flow2_leak_score": {
+        "name": "Flow 2 leak score"
+      },
+      "flow2_continuous_flow_duration": {
+        "name": "Flow 2 continuous flow duration"
+      },
+      "combined_flow_rate": {
+        "name": "Total current usage"
+      },
+      "combined_today_usage": {
+        "name": "Total usage today"
+      },
+      "combined_week_usage": {
+        "name": "Total usage this week"
+      },
+      "combined_month_usage": {
+        "name": "Total usage this month"
+      },
+      "combined_year_usage": {
+        "name": "Total usage this year"
+      }
+    },
+    "binary_sensor": {
+      "continuous_flow_leak": {
+        "name": "Continuous flow leak"
+      },
+      "night_usage_detected": {
+        "name": "Night usage"
+      },
+      "micro_leak_detected": {
+        "name": "Micro leak"
+      },
+      "vacation_mode_leak": {
+        "name": "Vacation leak"
+      },
+      "any_leak_alert": {
+        "name": "Leak alert"
+      },
+      "water_flowing": {
+        "name": "Water flowing"
+      },
+      "flow1_smart_leak_detected": {
+        "name": "Flow 1 smart leak detection"
+      },
+      "flow1_continuous_flow_leak": {
+        "name": "Flow 1 continuous flow leak"
+      },
+      "flow1_micro_leak_detected": {
+        "name": "Flow 1 micro leak"
+      },
+      "flow1_water_flowing": {
+        "name": "Flow 1 water flowing"
+      },
+      "flow1_baseline_ready": {
+        "name": "Flow 1 baseline learned"
+      },
+      "flow2_smart_leak_detected": {
+        "name": "Flow 2 smart leak detection"
+      },
+      "flow2_continuous_flow_leak": {
+        "name": "Flow 2 continuous flow leak"
+      },
+      "flow2_micro_leak_detected": {
+        "name": "Flow 2 micro leak"
+      },
+      "flow2_water_flowing": {
+        "name": "Flow 2 water flowing"
+      },
+      "flow2_baseline_ready": {
+        "name": "Flow 2 baseline learned"
+      },
+      "any_leak_detected": {
+        "name": "Leak detection (both flows)"
+      },
+      "any_water_flowing": {
+        "name": "Water flowing (both flows)"
+      }
+    }
+  },
+  "issues": {
+    "leak_detected": {
+      "title": "Mogelijk waterlek bij {device}",
+      "description": "De lekdetectie van **{device}** meldt een mogelijk lek (type: {leak_type}).\n\nControleer je kranen, toilet en apparaten. Deze melding verdwijnt automatisch zodra het waterverbruik weer normaal is."
+    }
+  }
+}

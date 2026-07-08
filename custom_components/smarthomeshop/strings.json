@@ -1,0 +1,131 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartHomeShop.io",
+        "description": "Voeg een SmartHomeShop product toe aan Home Assistant.\n\nSelecteer het product dat overeenkomt met je fysieke apparaat. Het apparaat moet al online zijn in Home Assistant via de ESPHome integratie.",
+        "data": {
+          "product_type": "Product"
+        },
+        "data_description": {
+          "product_type": "Kies het SmartHomeShop product dat je wilt configureren."
+        }
+      },
+      "device": {
+        "title": "Selecteer {product_name}",
+        "description": "{product_description}\n\nSelecteer het ESPHome apparaat dat bij dit product hoort.",
+        "data": {
+          "device_id": "ESPHome apparaat"
+        }
+      },
+      "water_options": {
+        "title": "Leak detection",
+        "description": "These sensors were found on your device:\n- Water usage: `{water_sensor}`\n- Flow rate: `{flow_sensor}`\n\nLeak detection watches these sensors and adds alert entities to Home Assistant. Pick settings that match your household — you can change everything later via **Configure**.",
+        "data": {
+          "continuous_flow_minutes": "Continuous flow alarm after",
+          "night_start": "Night monitoring starts",
+          "night_end": "Night monitoring ends",
+          "vacation_mode_entity": "Vacation mode switch (optional)"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alert when water keeps flowing non-stop for this long. This catches a burst pipe, a forgotten garden hose or a running toilet. 30 minutes is a good default; choose longer if you often fill a bath or pool.",
+          "night_start": "From this time on your home normally uses little to no water. Unexpected usage during the night window is treated as a possible leak.",
+          "night_end": "End of the night window. After this time, normal daytime usage applies again.",
+          "vacation_mode_entity": "Optional: pick a toggle helper (input_boolean) that you switch on when you are away. While it is on, any water usage immediately raises a leak alert."
+        }
+      },
+      "summary": {
+        "title": "Ready to add",
+        "description": "**{product_name}** on **{device_name}** is ready.\n\nThe following entities will be added to Home Assistant:\n\n{entities}\n\nAll entity names end in *(CC)* so you can tell them apart from the built-in ESPHome entities."
+      }
+    },
+    "error": {
+      "no_water_sensor": "Geen watersensor gevonden op dit apparaat",
+      "device_not_found": "Apparaat niet gevonden",
+      "cannot_connect": "Kan niet verbinden met het apparaat"
+    },
+    "abort": {
+      "already_configured": "Dit apparaat is al geconfigureerd",
+      "no_devices_found": "Geen apparaten van dit type gevonden. Zorg dat je ESPHome apparaat is toegevoegd en online is."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Leak detection",
+        "data": {
+          "continuous_flow_minutes": "Continuous flow alarm after",
+          "night_start": "Night monitoring starts",
+          "night_end": "Night monitoring ends",
+          "vacation_mode_entity": "Vacation mode switch (optional)",
+          "price_electricity_t1": "Electricity price tariff 1",
+          "price_electricity_t2": "Electricity price tariff 2",
+          "price_feed_in": "Feed-in compensation",
+          "price_gas": "Gas price",
+          "price_water": "Water price",
+          "main_fuse_amps": "Main fuse per phase"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alert when water keeps flowing non-stop for this long. This catches a burst pipe, a forgotten garden hose or a running toilet. 30 minutes is a good default; choose longer if you often fill a bath or pool.",
+          "night_start": "From this time on your home normally uses little to no water. Unexpected usage during the night window is treated as a possible leak.",
+          "night_end": "End of the night window. After this time, normal daytime usage applies again.",
+          "vacation_mode_entity": "Optional: pick a toggle helper (input_boolean) that you switch on when you are away. While it is on, any water usage immediately raises a leak alert.",
+          "price_electricity_t1": "What you pay per kWh at the normal/day tariff. Used for the cost sensors.",
+          "price_electricity_t2": "What you pay per kWh at the low/night tariff.",
+          "price_feed_in": "What you receive per kWh that your solar panels feed back into the grid.",
+          "price_gas": "What you pay per m³ of gas.",
+          "price_water": "What you pay per m³ (1000 litres) of water. Used for the water cost sensor.",
+          "main_fuse_amps": "The size of your main fuse per phase (see your meter cupboard, e.g. 25A or 35A). Used for the phase load sensor."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_flow_rate": {
+        "name": "Huidig waterverbruik"
+      },
+      "today_usage": {
+        "name": "Verbruik vandaag"
+      },
+      "week_usage": {
+        "name": "Verbruik deze week"
+      },
+      "month_usage": {
+        "name": "Verbruik deze maand"
+      },
+      "year_usage": {
+        "name": "Verbruik dit jaar"
+      },
+      "continuous_flow_duration": {
+        "name": "Continue flow duur"
+      }
+    },
+    "binary_sensor": {
+      "continuous_flow_leak": {
+        "name": "Continue flow lek"
+      },
+      "night_usage_detected": {
+        "name": "Nachtelijk verbruik"
+      },
+      "micro_leak_detected": {
+        "name": "Micro lek"
+      },
+      "vacation_mode_leak": {
+        "name": "Vakantie lek"
+      },
+      "any_leak_alert": {
+        "name": "Lek alarm"
+      },
+      "water_flowing": {
+        "name": "Water stroomt"
+      }
+    }
+  },
+  "issues": {
+    "leak_detected": {
+      "title": "Possible water leak on {device}",
+      "description": "The leak detection of **{device}** reports a possible leak (type: {leak_type}).\n\nCheck your taps, toilet and appliances. This issue disappears automatically once water usage is back to normal."
+    }
+  }
+}

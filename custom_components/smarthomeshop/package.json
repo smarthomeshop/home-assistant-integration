@@ -1,0 +1,14 @@
+{
+  "name": "smarthomeshop-integration",
+  "private": true,
+  "description": "SmartHomeShop.io Home Assistant Integration",
+  "scripts": {
+    "build": "npm run build:frontend && npm run build:panel",
+    "build:frontend": "cd frontend && npm run build",
+    "build:panel": "cd panel && npm run build",
+    "watch:frontend": "cd frontend && npm run watch",
+    "watch:panel": "cd panel && npm run watch",
+    "install:all": "cd frontend && npm install && cd ../panel && npm install",
+    "clean": "rm -rf frontend/dist panel/dist www/*.js"
+  }
+}
