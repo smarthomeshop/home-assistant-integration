@@ -21,6 +21,7 @@ from .const import DOMAIN, LOGGER
 
 DEFAULT_BASE_URL = "https://api.smarthomeshop.io"
 PRICES_PATH = "/api/v1/energy/prices"
+CONTRACTS_PATH = "/api/v1/energy/contracts"
 UPDATE_INTERVAL = timedelta(minutes=30)
 REQUEST_TIMEOUT = 20
 
@@ -53,6 +54,11 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def base_url(self) -> str:
         return (self._account().get("base_url") or DEFAULT_BASE_URL).rstrip("/")
 
+    @property
+    def contract_id(self) -> str | None:
+        value = self._account().get("contract_id")
+        return str(value) if value not in (None, "") else None
+
     def _ssl_option(self, url: str):
         """Return an aiohttp ssl arg; disable verification for local dev hosts."""
         lowered = url.lower()
@@ -71,6 +77,9 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {}
 
         url = f"{self.base_url}{PRICES_PATH}"
+        params = {}
+        if self.contract_id:
+            params["contract"] = self.contract_id
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
@@ -78,6 +87,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             async with self._session.get(
                 url,
+                params=params,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
                 ssl=self._ssl_option(url),
@@ -134,3 +144,28 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def tomorrow(self) -> list[dict[str, Any]]:
         return self._elec().get("tomorrow") or []
+
+    def contract(self) -> dict[str, Any] | None:
+        return (self.data or {}).get("contract")
+
+    async def async_fetch_contracts(self) -> list[dict[str, Any]]:
+        """Fetch the user's energy contracts (for the panel dropdown)."""
+        account = self._account()
+        api_key = account.get("api_key")
+        if not api_key:
+            return []
+        url = f"{self.base_url}{CONTRACTS_PATH}"
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+        try:
+            async with self._session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                ssl=self._ssl_option(url),
+            ) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                return data.get("contracts", []) or []
+        except (aiohttp.ClientError, TimeoutError):
+            return []

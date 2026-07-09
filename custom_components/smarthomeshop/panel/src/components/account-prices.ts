@@ -16,6 +16,7 @@ export class AccountPrices extends LitElement {
   @state() private _showAdvanced = false;
   @state() private _savingKey = false;
   @state() private _showKeyForm = false;
+  @state() private _contracts: any[] = [];
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; }
@@ -34,6 +35,10 @@ export class AccountPrices extends LitElement {
     .status-badge { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; text-transform: capitalize; margin-left: 6px; }
     .status-badge.ok { background: rgba(34,197,94,0.12); color: #22c55e; }
     .status-badge.alert { background: rgba(239,68,68,0.12); color: #ef4444; }
+    .contract-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+    .contract-row label { font-size: 12px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.4px; }
+    .contract-row select { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 13px; font-family: inherit; }
+    .contract-row select:focus { outline: none; border-color: var(--shs-primary); }
     .chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
     .chip { background: var(--secondary-background-color); border-radius: 10px; padding: 10px 12px; }
     .chip-label { font-size: 11px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.4px; }
@@ -63,7 +68,23 @@ export class AccountPrices extends LitElement {
     try {
       this._account = await this.hass.callWS({ type: 'smarthomeshop/account' });
       this._baseUrlInput = this._account?.base_url || '';
+      if (this._account?.status === 'ok') this._loadContracts();
     } catch (err) { console.error('account load failed', err); }
+  }
+
+  private async _loadContracts(): Promise<void> {
+    try {
+      const res = await this.hass.callWS<{ contracts: any[] }>({ type: 'smarthomeshop/account/contracts' });
+      this._contracts = res.contracts || [];
+    } catch (err) { console.error('contracts load failed', err); }
+  }
+
+  private async _selectContract(id: string): Promise<void> {
+    this._savingKey = true;
+    try {
+      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', contract_id: id });
+    } catch (err) { console.error('select contract failed', err); }
+    this._savingKey = false;
   }
 
   private async _save(): Promise<void> {
@@ -117,6 +138,20 @@ export class AccountPrices extends LitElement {
               ${statusText[status] || statusText.error}
             </div>
           </div>
+
+          ${status === 'ok' && this._contracts.length > 0 ? html`
+            <div class="contract-row">
+              <label>Contract</label>
+              <select ?disabled=${this._savingKey}
+                @change=${(e: Event) => this._selectContract((e.target as HTMLSelectElement).value)}>
+                <option value="" ?selected=${!a?.contract_id}>Active contract (automatic)</option>
+                ${this._contracts.map((c) => html`
+                  <option value=${String(c.id)} ?selected=${String(a?.contract_id) === String(c.id)}>
+                    ${c.name}${c.supplier ? ` · ${c.supplier}` : ''}
+                  </option>`)}
+              </select>
+            </div>
+          ` : nothing}
 
           ${status === 'ok' && cur ? html`
             <div class="chips">

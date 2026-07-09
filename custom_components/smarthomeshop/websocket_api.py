@@ -61,6 +61,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_device_config)
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
+    websocket_api.async_register_command(hass, ws_get_contracts)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/config"})
@@ -534,6 +535,7 @@ def _account_result(hass: HomeAssistant) -> dict:
     result = {
         "has_key": bool(account.get("api_key")),
         "base_url": account.get("base_url") or "https://api.smarthomeshop.io",
+        "contract_id": account.get("contract_id"),
         "status": getattr(prices, "status", "unconfigured"),
     }
     if prices is not None and prices.status == "ok":
@@ -544,6 +546,7 @@ def _account_result(hass: HomeAssistant) -> dict:
             "gas": prices.gas_price(),
             "level": prices.electricity_level(),
         }
+        result["contract"] = prices.contract()
     return result
 
 
@@ -552,6 +555,15 @@ def _account_result(hass: HomeAssistant) -> dict:
 def ws_get_account(hass: HomeAssistant, connection, msg: dict) -> None:
     """Return the account/API-key status and current prices."""
     connection.send_result(msg["id"], _account_result(hass))
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})
+@websocket_api.async_response
+async def ws_get_contracts(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the user's energy contracts for the panel dropdown."""
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    contracts = await prices.async_fetch_contracts() if prices is not None else []
+    connection.send_result(msg["id"], {"contracts": contracts})
 
 
 @websocket_api.websocket_command({
@@ -576,6 +588,8 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
         account["api_key"] = (msg.get("api_key") or "").strip()
     if "base_url" in msg:
         account["base_url"] = (msg.get("base_url") or "").strip() or None
+    if "contract_id" in msg:
+        account["contract_id"] = (str(msg.get("contract_id")).strip() or None) if msg.get("contract_id") not in (None, "") else None
     await store.async_set_account(account)
 
     # Refresh prices against the new key so we can report the status back.
