@@ -20,6 +20,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, VERSION
 from .price_coordinator import PriceCoordinator
@@ -123,12 +124,16 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
 
 
 def _block_start(block: dict[str, Any] | None) -> datetime | None:
+    """Parse a block start into a timezone-aware datetime (TIMESTAMP class)."""
     if not block or not block.get("start"):
         return None
-    try:
-        return datetime.fromisoformat(block["start"])
-    except (ValueError, TypeError):
+    parsed = dt_util.parse_datetime(str(block["start"]))
+    if parsed is None:
         return None
+    if parsed.tzinfo is None:
+        # Naive timestamps from the API are in the HA-configured timezone.
+        parsed = parsed.replace(tzinfo=dt_util.get_default_time_zone())
+    return parsed
 
 
 def _block_attrs(block: dict[str, Any] | None) -> dict[str, Any]:
@@ -141,6 +146,9 @@ class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity
     """A dynamic energy price sensor backed by the price coordinator."""
 
     _attr_has_entity_name = True
+    # The hourly arrays are for the UI/automations only; keeping them out of
+    # the recorder avoids writing ~100 rows of price data on every state.
+    _unrecorded_attributes = frozenset({"prices_today", "prices_tomorrow"})
     entity_description: PriceSensorDescription
 
     def __init__(

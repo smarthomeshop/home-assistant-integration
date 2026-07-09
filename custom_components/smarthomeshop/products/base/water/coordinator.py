@@ -136,7 +136,9 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
         # Current period for resets
         self._current_day: int | None = None
-        self._current_week: int | None = None
+        # (ISO year, ISO week) — the year is included so week 1 of a new year
+        # never matches week 1 of a previous year.
+        self._current_week: tuple[int, int] | None = None
         self._current_month: int | None = None
         self._current_year: int | None = None
 
@@ -469,9 +471,10 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             self._night_start_reading = None
 
         # Weekly reset (Monday is 0)
-        if self._current_week != now.isocalendar()[1]:
+        iso_week = now.isocalendar()[:2]
+        if self._current_week != iso_week:
             self._week_start_reading = data.meter_total
-            self._current_week = now.isocalendar()[1]
+            self._current_week = iso_week
 
         # Monthly reset
         if self._current_month != now.month:

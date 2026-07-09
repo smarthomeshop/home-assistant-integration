@@ -539,11 +539,26 @@ async def ws_set_device_config(hass: HomeAssistant, connection, msg: dict) -> No
         return
 
     product_type = entry.data.get(CONF_PRODUCT_TYPE)
-    allowed = {f["key"]: f for f in _config_fields(product_type, dict(entry.options))}
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    tariffs = (
+        prices.contract_tariffs()
+        if prices is not None and prices.contract_active()
+        else {}
+    )
+    allowed = {
+        f["key"]: f
+        for f in _config_fields(
+            product_type, dict(entry.options), contract_tariffs=tariffs
+        )
+    }
     new_options = dict(entry.options)
     for key, value in (msg["values"] or {}).items():
         field = allowed.get(key)
         if field is None:
+            continue
+        # Contract-managed prices are read-only (the contract is the source
+        # of truth); the panel hides them, so reject writes here too.
+        if field.get("managed"):
             continue
         if field["type"] == "number":
             try:
@@ -654,7 +669,11 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
 
     account = store.get_account()
     if "api_key" in msg:
-        account["api_key"] = (msg.get("api_key") or "").strip()
+        # An explicit None disconnects; an empty string is ignored so a
+        # partial form submit can never wipe a working key by accident.
+        new_key = (msg.get("api_key") or "").strip()
+        if new_key or msg.get("api_key") is None:
+            account["api_key"] = new_key
     if "base_url" in msg:
         account["base_url"] = (msg.get("base_url") or "").strip() or None
     if "contract_id" in msg:
@@ -727,10 +746,22 @@ def _float_or_none(state) -> float | None:
         return None
 
 
+def _zone_num_from_entity(entity_id: str, marker: str) -> int | None:
+    """Extract a zone number from entity IDs like *_zone_1_*."""
+    try:
+        return int(entity_id.split(marker, 1)[1].split("_", 1)[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def _radar_overview(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
     """Collect live radar values for a presence device."""
     entity_registry = er.async_get(hass)
+    zones: dict[int, dict[str, Any]] = {}
     overview: dict[str, Any] = {"zones": []}
+
+    def zone_data(zone_num: int) -> dict[str, Any]:
+        return zones.setdefault(zone_num, {"zone": zone_num})
 
     for entity in er.async_entries_for_device(entity_registry, device_id):
         eid = entity.entity_id
@@ -738,23 +769,59 @@ def _radar_overview(hass: HomeAssistant, device_id: str) -> dict[str, Any]:
         if state is None:
             continue
 
-        if eid.startswith("binary_sensor.") and eid.endswith("_presence") and "zone" not in eid:
-            overview["presence"] = state.state == "on"
+        if (
+            eid.startswith("binary_sensor.")
+            and eid.endswith("_presence")
+            and "_zone_" not in eid
+            and "_polygon_zone_" not in eid
+        ):
+            if eid.endswith("_still_presence"):
+                overview["still_presence"] = state.state == "on"
+            else:
+                overview["presence"] = state.state == "on"
         elif eid.startswith("binary_sensor.") and "_polygon_zone_" in eid and eid.endswith("_presence"):
-            try:
-                zone_num = int(eid.split("_polygon_zone_")[1].split("_")[0])
-            except (ValueError, IndexError):
+            zone_num = _zone_num_from_entity(eid, "_polygon_zone_")
+            if zone_num is None:
                 continue
-            overview["zones"].append({"zone": zone_num, "occupied": state.state == "on"})
+            zone_data(zone_num)["occupied"] = state.state == "on"
+        elif eid.startswith("binary_sensor.") and "_zone_" in eid and (
+            eid.endswith("_presence") or eid.endswith("_occupancy")
+        ):
+            zone_num = _zone_num_from_entity(eid, "_zone_")
+            if zone_num is None:
+                continue
+            zone_data(zone_num).setdefault("occupied", state.state == "on")
         elif eid.endswith("_people_count"):
             overview["people_count"] = _float_or_none(state)
         elif eid.endswith("_last_crossing_direction"):
             overview["last_crossing"] = state.state
         elif eid.endswith("_radar_target_count"):
             overview["target_count"] = _float_or_none(state)
-        elif eid.endswith("_occupancy") and eid.startswith("binary_sensor.") and "presence" not in overview:
+        elif eid.endswith("_tracking_target_count") and "target_count" not in overview:
+            overview["target_count"] = _float_or_none(state)
+        elif eid.startswith("sensor.") and "_polygon_zone_" in eid and eid.endswith("_target_count"):
+            zone_num = _zone_num_from_entity(eid, "_polygon_zone_")
+            if zone_num is None:
+                continue
+            zone_data(zone_num)["target_count"] = _float_or_none(state)
+        elif eid.startswith("sensor.") and "_zone_" in eid and eid.endswith("_target_count"):
+            zone_num = _zone_num_from_entity(eid, "_zone_")
+            if zone_num is None:
+                continue
+            zdata = zone_data(zone_num)
+            if eid.endswith("_still_target_count"):
+                zdata["still_target_count"] = _float_or_none(state)
+            elif eid.endswith("_moving_target_count"):
+                zdata["moving_target_count"] = _float_or_none(state)
+            else:
+                zdata.setdefault("target_count", _float_or_none(state))
+        elif (
+            eid.endswith("_occupancy")
+            and eid.startswith("binary_sensor.")
+            and "_zone_" not in eid
+            and "presence" not in overview
+        ):
             overview.setdefault("presence", state.state == "on")
 
-    overview["zones"].sort(key=lambda z: z["zone"])
+    overview["zones"] = [zones[key] for key in sorted(zones)]
     return overview
-

@@ -18,6 +18,7 @@ export class AccountPrices extends LitElement {
   @state() private _showKeyForm = false;
   @state() private _syncing = false;
   @state() private _contracts: any[] = [];
+  @state() private _error: string | null = null;
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; }
@@ -68,6 +69,8 @@ export class AccountPrices extends LitElement {
     .hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
     .linkbtn { margin-top: 10px; background: none; border: none; padding: 0; color: var(--shs-primary); font-size: 12px; font-family: inherit; cursor: pointer; }
     .linkbtn:hover { text-decoration: underline; }
+    .error-banner { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; background: rgba(239,68,68,0.1); color: #ef4444; }
+    .error-banner ha-icon { --mdc-icon-size: 16px; }
   `;
 
   connectedCallback(): void {
@@ -101,15 +104,23 @@ export class AccountPrices extends LitElement {
   private async _save(): Promise<void> {
     if (this._savingKey) return;
     this._savingKey = true;
+    this._error = null;
     try {
-      this._account = await this.hass.callWS({
+      // Never send an empty api_key: the backend treats a key as write-once
+      // per submit, and an empty value must not wipe a working connection.
+      const payload: Record<string, unknown> = {
         type: 'smarthomeshop/account/set',
-        api_key: this._apiKeyInput.trim(),
         base_url: this._baseUrlInput.trim(),
-      });
+      };
+      const key = this._apiKeyInput.trim();
+      if (key) payload.api_key = key;
+      this._account = await this.hass.callWS(payload);
       this._apiKeyInput = '';
       this._showKeyForm = false;
-    } catch (err) { console.error('account save failed', err); }
+    } catch (err) {
+      console.error('account save failed', err);
+      this._error = 'Could not save — please try again.';
+    }
     this._savingKey = false;
   }
 
@@ -164,9 +175,14 @@ export class AccountPrices extends LitElement {
 
   private async _disconnect(): Promise<void> {
     this._savingKey = true;
+    this._error = null;
     try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: '' });
-    } catch (err) { console.error('disconnect failed', err); }
+      // Explicit null = disconnect (an empty string is ignored by the backend).
+      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: null });
+    } catch (err) {
+      console.error('disconnect failed', err);
+      this._error = 'Could not disconnect — please try again.';
+    }
     this._savingKey = false;
   }
 
@@ -198,6 +214,13 @@ export class AccountPrices extends LitElement {
               ${statusText[status] || statusText.error}
             </div>
           </div>
+
+          ${this._error ? html`
+            <div class="error-banner">
+              <ha-icon icon="mdi:alert-circle-outline"></ha-icon>
+              <span>${this._error}</span>
+            </div>
+          ` : nothing}
 
           ${status === 'ok' && this._contracts.length > 0 ? html`
             <div class="contract-row">

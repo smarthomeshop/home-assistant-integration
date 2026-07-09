@@ -114,12 +114,26 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except (aiohttp.ClientError, TimeoutError) as err:
             self.status = "error"
             raise UpdateFailed(f"Connection error: {err}") from err
+        except ValueError as err:  # invalid JSON body on a 200 response
+            self.status = "error"
+            raise UpdateFailed(f"Invalid JSON response: {err}") from err
+
+        if not isinstance(data, dict):
+            self.status = "error"
+            raise UpdateFailed("Unexpected response format")
 
         self.status = "ok"
         self.last_synced = dt_util.utcnow().isoformat()
         return data or {}
 
     # ---- Convenience accessors for sensors / panel ----
+
+    @staticmethod
+    def _float_or_none(value: Any) -> float | None:
+        """Only accept real numbers from the API; never a bool or string."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value)
 
     def _elec(self) -> dict[str, Any]:
         return (self.data or {}).get("electricity") or {}
@@ -129,15 +143,15 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def electricity_price(self) -> float | None:
         cur = self.current_electricity()
-        return cur.get("consumer") if cur else None
+        return self._float_or_none(cur.get("consumer")) if cur else None
 
     def electricity_market_price(self) -> float | None:
         cur = self.current_electricity()
-        return cur.get("market") if cur else None
+        return self._float_or_none(cur.get("market")) if cur else None
 
     def electricity_feed_in(self) -> float | None:
         cur = self.current_electricity()
-        return cur.get("feed_in") if cur else None
+        return self._float_or_none(cur.get("feed_in")) if cur else None
 
     def electricity_level(self) -> str | None:
         return self._elec().get("level")
@@ -145,7 +159,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def gas_price(self) -> float | None:
         gas = (self.data or {}).get("gas") or {}
         cur = gas.get("current") or {}
-        return cur.get("consumer")
+        return self._float_or_none(cur.get("consumer"))
 
     def today(self) -> list[dict[str, Any]]:
         return self._elec().get("today") or []
@@ -173,20 +187,19 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         if not self.contract_active():
             return None
-        value = self.contract_tariffs().get(key)
-        return value if isinstance(value, (int, float)) else None
+        return self._float_or_none(self.contract_tariffs().get(key))
 
     def _summary(self) -> dict[str, Any]:
         return (self.data or {}).get("summary") or {}
 
     def average_today(self) -> float | None:
-        return self._summary().get("average_today")
+        return self._float_or_none(self._summary().get("average_today"))
 
     def lowest_today(self) -> float | None:
-        return self._summary().get("lowest_today")
+        return self._float_or_none(self._summary().get("lowest_today"))
 
     def highest_today(self) -> float | None:
-        return self._summary().get("highest_today")
+        return self._float_or_none(self._summary().get("highest_today"))
 
     def cheap_now(self) -> bool | None:
         return self._summary().get("cheap_now")
@@ -212,6 +225,8 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if resp.status != 200:
                     return []
                 data = await resp.json()
+                if not isinstance(data, dict):
+                    return []
                 return data.get("contracts", []) or []
-        except (aiohttp.ClientError, TimeoutError):
+        except (aiohttp.ClientError, TimeoutError, ValueError):
             return []
