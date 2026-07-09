@@ -31,72 +31,85 @@ interface BatteryConfig {
 }
 
 const dom = (e: string): string => e.split('.')[0];
-const CHARGE_ID = 'shs_batt_charge';
-const DISCHARGE_ID = 'shs_batt_discharge';
+const BATT_ID = 'shs_batt';
+const LEGACY_IDS = ['shs_batt_charge', 'shs_batt_discharge'];
 const NON_PEAK = ['very_low', 'low', 'medium', 'high'];
+const numOr = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 
 const turn = (entity: string, on: boolean) => ({ service: `${dom(entity)}.${on ? 'turn_on' : 'turn_off'}`, target: { entity_id: entity } });
 const setNumber = (entity: string, value: number) => ({ service: 'number.set_value', target: { entity_id: entity }, data: { value } });
 const selectOption = (entity: string, option: string) => ({ service: 'select.select_option', target: { entity_id: entity }, data: { option } });
 
-function chargeControl(c: BatteryConfig, on: boolean) {
-  if (c.control_kind === 'switch') return turn(c.control_entity!, on);
-  if (c.control_kind === 'number') return setNumber(c.control_entity!, on ? (c.charge_power ?? 0) : (c.off_min ?? 0));
-  return selectOption(c.control_entity!, on ? (c.charge_option || '') : (c.idle_option || ''));
-}
+const chargeAct = (c: BatteryConfig) =>
+  c.control_kind === 'switch' ? turn(c.control_entity!, true)
+    : c.control_kind === 'number' ? setNumber(c.control_entity!, numOr(c.charge_power, 0))
+      : selectOption(c.control_entity!, c.charge_option || '');
+const idleAct = (c: BatteryConfig) =>
+  c.control_kind === 'switch' ? turn(c.control_entity!, false)
+    : c.control_kind === 'number' ? setNumber(c.control_entity!, numOr(c.off_min, 0))
+      : selectOption(c.control_entity!, c.idle_option || '');
 
-function chargeAutomation(c: BatteryConfig, px: Record<string, string | null>, alias: string) {
-  const N = c.charge_hours || 3;
+// One automation owns the control entity and decides the mode in priority
+// order (charge in the cheap window → discharge at peak → idle), so charge and
+// discharge can never fight each other on a shared mode-select.
+function batteryAutomation(c: BatteryConfig, px: Record<string, string | null>, alias: string) {
+  const N = numOr(c.charge_hours, 3);
   const win = px[`cheapest_${N}h_window_now`];
-  const startConds: Record<string, unknown>[] = [
+  const target = numOr(c.target_soc, 100);
+  const reserve = numOr(c.reserve_soc, 10);
+  const isSelect = c.control_kind === 'select';
+  const hasDischarge = isSelect && !!c.discharge_option && !!c.soc_sensor;
+
+  const chargeConds: Record<string, unknown>[] = [
     { condition: 'state', entity_id: win, state: 'on' },
     { condition: 'state', entity_id: px.contract_active, state: 'on' },
   ];
-  if (c.soc_sensor) startConds.push({ condition: 'numeric_state', entity_id: c.soc_sensor, below: c.target_soc ?? 100 });
+  if (c.soc_sensor) chargeConds.push({ condition: 'numeric_state', entity_id: c.soc_sensor, below: target });
   if (c.pv_forecast_sensor && c.soc_sensor && c.capacity_kwh) {
-    // Only grid-charge when the forecast solar left today is LESS than the kWh
-    // still needed to reach the target — otherwise let the sun fill it.
-    startConds.push({ condition: 'template', value_template:
-      `{{ (states('${c.pv_forecast_sensor}')|float(0)) < ((${c.target_soc ?? 100} - states('${c.soc_sensor}')|float(0)) / 100 * ${c.capacity_kwh}) }}` });
+    // Grid-charge unless the forecast solar left today COMFORTABLY covers the
+    // kWh still needed (0.7 haircut for house self-consumption + round-trip
+    // losses), so we don't skip and leave the battery under-charged.
+    chargeConds.push({ condition: 'template', value_template:
+      `{{ (states('${c.pv_forecast_sensor}')|float(0)) * 0.7 < ((${target} - states('${c.soc_sensor}')|float(0)) / 100 * ${numOr(c.capacity_kwh, 0)}) }}` });
   }
+
   const trigger: Record<string, unknown>[] = [
     { platform: 'state', entity_id: win, to: 'on', id: 'edge' },
     { platform: 'state', entity_id: win, to: ['off', 'unavailable'], id: 'edge' },
+    { platform: 'state', entity_id: px.contract_active, to: 'on', id: 'edge' },
     { platform: 'homeassistant', event: 'start', id: 'boot' },
   ];
-  if (c.soc_sensor) trigger.push({ platform: 'numeric_state', entity_id: c.soc_sensor, above: (c.target_soc ?? 100) - 0.001, id: 'soc_full' });
-  if (c.control_kind === 'switch') trigger.push({ platform: 'state', entity_id: c.control_entity!, to: 'on', for: { hours: N + 2 }, id: 'watchdog' });
-  return {
-    alias, description: 'Created with the SmartHomeShop.io panel · battery charge', mode: 'restart',
-    trigger, condition: [],
-    action: [{ choose: [
-      { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [chargeControl(c, false)] },
-      { conditions: startConds, sequence: [chargeControl(c, true)] },
-    ], default: [chargeControl(c, false)] }],
-  };
-}
+  if (c.soc_sensor) {
+    // Re-evaluate whenever SoC crosses the target either way, so charging
+    // resumes if it drops back below target while the window is still open.
+    trigger.push({ platform: 'numeric_state', entity_id: c.soc_sensor, below: target, id: 'edge' });
+    trigger.push({ platform: 'numeric_state', entity_id: c.soc_sensor, above: target - 0.001, id: 'edge' });
+  }
+  if (isSelect) {
+    trigger.push({ platform: 'state', entity_id: px.price_level, to: 'peak', id: 'edge' });
+    trigger.push({ platform: 'state', entity_id: px.price_level, to: NON_PEAK, id: 'edge' });
+  }
+  if (c.control_kind === 'switch') {
+    trigger.push({ platform: 'state', entity_id: c.control_entity!, to: 'on', for: { hours: N + 2 }, id: 'watchdog' });
+  } else if (c.control_kind === 'number') {
+    trigger.push({ platform: 'numeric_state', entity_id: c.control_entity!, above: numOr(c.off_min, 0) + 0.001, for: { hours: N + 2 }, id: 'watchdog' });
+  }
 
-function dischargeAutomation(c: BatteryConfig, px: Record<string, string | null>, alias: string) {
-  // Only meaningful for a mode select with a discharge option + a SoC sensor.
-  const reserve = c.reserve_soc ?? 10;
+  const branches: Record<string, unknown>[] = [
+    { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [idleAct(c)] },
+    { conditions: chargeConds, sequence: [chargeAct(c)] },
+  ];
+  if (hasDischarge) {
+    branches.push({ conditions: [
+      { condition: 'state', entity_id: px.price_level, state: 'peak' },
+      { condition: 'state', entity_id: px.contract_active, state: 'on' },
+      { condition: 'numeric_state', entity_id: c.soc_sensor!, above: reserve },
+    ], sequence: [selectOption(c.control_entity!, c.discharge_option || '')] });
+  }
   return {
-    alias, description: 'Created with the SmartHomeShop.io panel · battery discharge', mode: 'restart',
-    trigger: [
-      { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'peak' },
-      { platform: 'state', entity_id: px.price_level, to: NON_PEAK, id: 'offpeak' },
-      { platform: 'numeric_state', entity_id: c.soc_sensor!, below: reserve, id: 'reserve' },
-      { platform: 'homeassistant', event: 'start', id: 'boot' },
-    ],
-    condition: [],
-    action: [{ choose: [
-      // Protect the reserve first — never discharge below it.
-      { conditions: [{ condition: 'numeric_state', entity_id: c.soc_sensor!, below: reserve }], sequence: [selectOption(c.control_entity!, c.idle_option || '')] },
-      // At peak with charge to spare, discharge to cover the expensive hours.
-      { conditions: [
-        { condition: 'state', entity_id: px.price_level, state: 'peak' },
-        { condition: 'state', entity_id: px.contract_active, state: 'on' },
-      ], sequence: [selectOption(c.control_entity!, c.discharge_option || '')] },
-    ], default: [selectOption(c.control_entity!, c.idle_option || '')] }],
+    alias, description: 'Created with the SmartHomeShop.io panel · battery arbitrage', mode: 'restart',
+    trigger, condition: [],
+    action: [{ choose: branches, default: [idleAct(c)] }],
   };
 }
 
@@ -169,11 +182,14 @@ export class EnergyBattery extends LitElement {
     this._loaded = true;
   }
 
-  private _entityOptions(domains: string[], deviceClass?: string): Array<{ value: string; label: string }> {
+  private _entityOptions(domains: string[], kind?: 'battery' | 'energy'): Array<{ value: string; label: string }> {
     const out = [{ value: '', label: 'Select…' }];
     for (const [entityId, st] of Object.entries(this.hass.states || {})) {
       if (!domains.includes(dom(entityId))) continue;
-      if (deviceClass && st.attributes?.device_class !== deviceClass && st.attributes?.unit_of_measurement !== '%') continue;
+      const dc = st.attributes?.device_class;
+      const unit = String(st.attributes?.unit_of_measurement || '');
+      if (kind === 'battery' && dc !== 'battery' && unit !== '%') continue;
+      if (kind === 'energy' && dc !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
       out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
     }
     return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
@@ -182,6 +198,12 @@ export class EnergyBattery extends LitElement {
   private _selectOptions(entityId?: string): string[] {
     if (!entityId) return [];
     return (this.hass.states[entityId]?.attributes?.options as string[]) || [];
+  }
+
+  private _numberMin(entityId?: string): number {
+    if (!entityId) return 0;
+    const min = Number(this.hass.states[entityId]?.attributes?.min);
+    return Number.isFinite(min) ? min : 0;
   }
 
   private _openModal(): void {
@@ -202,26 +224,32 @@ export class EnergyBattery extends LitElement {
     if (!this.hass.user?.is_admin) { this._error = 'Administrator required.'; return; }
     const f = this._form;
     if (!f.control_entity) { this._error = 'Pick the entity that controls charging.'; return; }
-    if (f.control_kind === 'number' && !(f.charge_power! > 0)) { this._error = 'Set the charge power.'; return; }
+    if (f.control_kind === 'number' && !(numOr(f.charge_power, 0) > 0)) { this._error = 'Set the charge power.'; return; }
     if (f.control_kind === 'select' && (!f.charge_option || !f.idle_option)) { this._error = 'Pick the charge and idle options.'; return; }
+    const target = numOr(f.target_soc, NaN), reserve = numOr(f.reserve_soc, NaN);
+    if (!Number.isFinite(target) || target < 10 || target > 100) { this._error = 'Target SoC must be 10–100%.'; return; }
+    if (!Number.isFinite(reserve) || reserve < 0 || reserve >= target) { this._error = 'Reserve SoC must be below the target.'; return; }
     this._busy = true; this._error = '';
     try {
       if (f.control_kind === 'number') {
         const min = Number(this.hass.states[f.control_entity]?.attributes?.min);
         f.off_min = Number.isFinite(min) ? min : 0;
+      } else {
+        f.off_min = 0;
       }
+      // Build first and refuse to write a broken automation (price sensors not ready).
+      const config = batteryAutomation(f, this._px, `${this.deviceName || 'Battery'} – Battery arbitrage`);
+      if (JSON.stringify(config).includes('"entity_id":null')) {
+        this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
+        this._busy = false;
+        return;
+      }
+      // Write the automation BEFORE persisting the mapping, so a failed POST
+      // does not leave the card showing "active" with no working automation.
+      await this.hass.callApi('POST', `config/automation/config/${BATT_ID}`, config);
+      for (const id of LEGACY_IDS) { try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* none */ } }
       await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: f });
       this._cfg = { ...f };
-      // (Re)generate the charge automation.
-      await this.hass.callApi('POST', `config/automation/config/${CHARGE_ID}`,
-        chargeAutomation(f, this._px, `${this.deviceName || 'Battery'} – Charge in cheapest hours`));
-      // Discharge automation only when a mode select with a discharge option is set.
-      if (f.control_kind === 'select' && f.discharge_option && f.soc_sensor) {
-        await this.hass.callApi('POST', `config/automation/config/${DISCHARGE_ID}`,
-          dischargeAutomation(f, this._px, `${this.deviceName || 'Battery'} – Cover the peak`));
-      } else {
-        try { await this.hass.callApi('DELETE', `config/automation/config/${DISCHARGE_ID}`); } catch { /* none */ }
-      }
       this._modal = false;
     } catch (err: any) {
       console.error('energy-battery: save failed', err);
@@ -232,11 +260,11 @@ export class EnergyBattery extends LitElement {
 
   private async _remove(): Promise<void> {
     if (!this.hass.user?.is_admin) return;
-    if (!window.confirm('Remove the battery setup and its automations?')) return;
+    if (!window.confirm('Remove the battery setup and its automation?')) return;
     try {
       await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: {} });
       this._cfg = {};
-      for (const id of [CHARGE_ID, DISCHARGE_ID]) {
+      for (const id of [BATT_ID, ...LEGACY_IDS]) {
         try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* none */ }
       }
       this._modal = false;
@@ -248,7 +276,7 @@ export class EnergyBattery extends LitElement {
     if (!c.control_entity) return '';
     const name = (this.hass.states[c.control_entity]?.attributes?.friendly_name as string) || c.control_entity;
     const bits = [`via ${name}`, `${c.charge_hours || 3}h`, `to ${c.target_soc ?? 100}%`];
-    if (c.pv_forecast_sensor) bits.push('solar-aware');
+    if (c.pv_forecast_sensor && c.soc_sensor && c.capacity_kwh) bits.push('solar-aware');
     if (c.control_kind === 'select' && c.discharge_option) bits.push(`covers peak (reserve ${c.reserve_soc ?? 10}%)`);
     return bits.join(' · ');
   }
@@ -290,6 +318,7 @@ export class EnergyBattery extends LitElement {
                 <input type="number" min="100" max="20000" step="100" .value=${String(f.charge_power ?? 2000)}
                   @input=${(e: Event) => this._set('charge_power', parseFloat((e.target as HTMLInputElement).value))} />
                 <span class="help">Watt to set while charging. Stops by setting the number’s own minimum.</span>
+                ${this._numberMin(f.control_entity) > 0 ? html`<div class="warn" style="margin-top:8px;">This number’s minimum is ${this._numberMin(f.control_entity)} W, so it can’t be set to 0 — the battery won’t fully stop charging. Map a grid-charge switch instead if you need a real off.</div>` : nothing}
               </div>` : nothing}
             ${kind === 'select' ? html`
               <div class="two">
@@ -352,7 +381,7 @@ export class EnergyBattery extends LitElement {
               <div class="field">
                 <label class="f">PV forecast sensor (kWh left today)</label>
                 <select @change=${(e: Event) => this._set('pv_forecast_sensor', (e.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(['sensor']).map(o => html`<option value=${o.value} ?selected=${o.value === f.pv_forecast_sensor}>${o.label}</option>`)}
+                  ${this._entityOptions(['sensor'], 'energy').map(o => html`<option value=${o.value} ?selected=${o.value === f.pv_forecast_sensor}>${o.label}</option>`)}
                 </select>
               </div>
             </div>

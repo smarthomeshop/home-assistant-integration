@@ -769,13 +769,31 @@ def ws_get_battery(hass: HomeAssistant, connection, msg: dict) -> None:
     connection.send_result(msg["id"], {"battery": store.get_battery() if store else {}})
 
 
+_BATTERY_SCHEMA = vol.Schema({
+    vol.Optional("enabled"): bool,
+    vol.Optional("control_kind"): vol.In(["switch", "number", "select"]),
+    vol.Optional("control_entity"): str,
+    vol.Optional("charge_power"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("off_min"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("charge_option"): vol.Any(None, str),
+    vol.Optional("idle_option"): vol.Any(None, str),
+    vol.Optional("discharge_option"): vol.Any(None, str),
+    vol.Optional("soc_sensor"): vol.Any(None, str),
+    vol.Optional("target_soc"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0, max=100))),
+    vol.Optional("reserve_soc"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0, max=100))),
+    vol.Optional("charge_hours"): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=6))),
+    vol.Optional("capacity_kwh"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("pv_forecast_sensor"): vol.Any(None, str),
+}, extra=vol.REMOVE_EXTRA)
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/battery/set",
     vol.Required("config"): dict,
 })
 @websocket_api.async_response
 async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Save the home-battery control mapping."""
+    """Save the home-battery control mapping (validated, unknown keys dropped)."""
     if not connection.user.is_admin:
         connection.send_error(msg["id"], "unauthorized", "Administrator required")
         return
@@ -783,7 +801,12 @@ async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
     if store is None:
         connection.send_error(msg["id"], "not_ready", "Store not loaded")
         return
-    saved = await store.async_set_battery(msg["config"])
+    try:
+        config = _BATTERY_SCHEMA(msg["config"])
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    saved = await store.async_set_battery(config)
     connection.send_result(msg["id"], {"battery": saved})
 
 
