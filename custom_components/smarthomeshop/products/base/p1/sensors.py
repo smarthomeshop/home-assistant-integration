@@ -98,4 +98,16 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         suggested_display_precision=0,
         value_fn=lambda data: data.net_power_w,
     ),
+    # Headroom before the main fuse on the tightest phase, so automations can
+    # avoid switching on a heavy load that would trip the connection.
+    P1SensorDescription(
+        key="available_grid_power",
+        name="Available grid power (CC)",
+        icon="mdi:gauge",
+        native_unit_of_measurement="W",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.available_grid_w,
+    ),
 )

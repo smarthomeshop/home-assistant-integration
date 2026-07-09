@@ -65,6 +65,7 @@ class EnergyData:
 
     phase_max_load_pct: float | None = None
     phase_currents: dict[str, float] = field(default_factory=dict)
+    available_grid_w: float | None = None
 
 
 class EnergyTracker:
@@ -235,7 +236,11 @@ class EnergyTracker:
                 currents[f"L{phase}"] = amps
         data.phase_currents = currents
         if currents and fuse > 0:
-            data.phase_max_load_pct = round(max(currents.values()) / fuse * 100, 1)
+            max_current = max(currents.values())
+            data.phase_max_load_pct = round(max_current / fuse * 100, 1)
+            # Headroom in watts before the main fuse on the tightest phase, so
+            # automations can avoid switching on a big load that would trip it.
+            data.available_grid_w = round(max(0.0, fuse - max_current) * 230, 0)
 
         # ---- Month peak (quarter-hour average power) ----
         avg_demand = self._value_watts("current_average_demand")
