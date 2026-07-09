@@ -88,7 +88,7 @@ export class AccountPrices extends LitElement {
       unconfigured: 'The integration works fully locally — no account needed. Connect a key only to pull live dynamic spot prices.',
       ok: 'Connected — live prices are being fetched.',
       unauthorized: 'That API key is invalid or was revoked.',
-      forbidden: 'Your account needs an API subscription for dynamic prices.',
+      forbidden: 'The price service rejected this key. Create a new API token in your account.',
       error: 'Could not reach the price service. Check your connection and try again.',
     };
     const cls = status === 'ok' ? 'ok' : status === 'unconfigured' ? '' : 'alert';
@@ -139,9 +139,9 @@ export class AccountPrices extends LitElement {
               </button>
             </div>
             <div class="hint">
-              Fixed prices are set above and are free. For live spot prices, create an API key in
-              your account at <b>smarthomeshop.io → Settings → API tokens</b> (requires an API
-              subscription) and paste it here.
+              Fixed prices are set above and are free. For live dynamic spot prices, create an
+              API key in your account at <b>smarthomeshop.io → Settings → API tokens</b>
+              (free with any account) and paste it here.
             </div>
           `}
         </div>
