@@ -547,6 +547,13 @@ def _account_result(hass: HomeAssistant) -> dict:
             "level": prices.electricity_level(),
         }
         result["contract"] = prices.contract()
+        result["summary"] = {
+            "average": prices.average_today(),
+            "lowest": prices.lowest_today(),
+            "highest": prices.highest_today(),
+            "cheap_now": prices.cheap_now(),
+            "cheapest_3h": prices.cheapest_block(3),
+        }
     return result
 
 

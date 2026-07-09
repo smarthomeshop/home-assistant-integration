@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    DOMAIN,
     CONF_PRODUCT_TYPE,
     PRODUCT_WATERFLOWKIT,
     PRODUCT_WATERMETERKIT,
@@ -46,6 +47,16 @@ async def async_setup_entry(
             SmartHomeShopWaterBinarySensor(coordinator, description, config_entry)
             for description in WATER_BINARY_SENSORS
         )
+
+    # Account-wide "cheap electricity now" — hosted by a single entry, only
+    # when an API key is set (mirrors the price sensors).
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    if prices is not None and getattr(prices, "has_key", False):
+        entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
+        if entry_ids and config_entry.entry_id == min(entry_ids):
+            from .price_binary_sensors import SmartHomeShopCheapNowBinarySensor
+
+            entities.append(SmartHomeShopCheapNowBinarySensor(prices))
 
     async_add_entities(entities)
 

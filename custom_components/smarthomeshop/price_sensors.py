@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
     SensorStateClass,
@@ -79,7 +81,60 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         icon="mdi:chart-line-variant",
         value_fn=lambda c: c.electricity_level(),
     ),
+    PriceSensorDescription(
+        key="average_price_today",
+        name="Average price today",
+        icon="mdi:chart-bell-curve",
+        native_unit_of_measurement="€/kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda c: c.average_today(),
+    ),
+    PriceSensorDescription(
+        key="lowest_price_today",
+        name="Lowest price today",
+        icon="mdi:trending-down",
+        native_unit_of_measurement="€/kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda c: c.lowest_today(),
+    ),
+    PriceSensorDescription(
+        key="highest_price_today",
+        name="Highest price today",
+        icon="mdi:trending-up",
+        native_unit_of_measurement="€/kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda c: c.highest_today(),
+    ),
+    *(
+        PriceSensorDescription(
+            key=f"cheapest_{h}h_start",
+            name=f"Cheapest {h}h block start",
+            icon="mdi:clock-star-four-points-outline",
+            device_class=SensorDeviceClass.TIMESTAMP,
+            value_fn=(lambda c, hours=h: _block_start(c.cheapest_block(hours))),
+            attr_fn=(lambda c, hours=h: _block_attrs(c.cheapest_block(hours))),
+        )
+        for h in range(1, 7)
+    ),
 )
+
+
+def _block_start(block: dict[str, Any] | None) -> datetime | None:
+    if not block or not block.get("start"):
+        return None
+    try:
+        return datetime.fromisoformat(block["start"])
+    except (ValueError, TypeError):
+        return None
+
+
+def _block_attrs(block: dict[str, Any] | None) -> dict[str, Any]:
+    if not block:
+        return {}
+    return {"end": block.get("end"), "average_price": block.get("average")}
 
 
 class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity):

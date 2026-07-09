@@ -148,6 +148,24 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def contract(self) -> dict[str, Any] | None:
         return (self.data or {}).get("contract")
 
+    def _summary(self) -> dict[str, Any]:
+        return (self.data or {}).get("summary") or {}
+
+    def average_today(self) -> float | None:
+        return self._summary().get("average_today")
+
+    def lowest_today(self) -> float | None:
+        return self._summary().get("lowest_today")
+
+    def highest_today(self) -> float | None:
+        return self._summary().get("highest_today")
+
+    def cheap_now(self) -> bool | None:
+        return self._summary().get("cheap_now")
+
+    def cheapest_block(self, hours: int) -> dict[str, Any] | None:
+        return (self._summary().get("cheapest_blocks") or {}).get(str(hours))
+
     async def async_fetch_contracts(self) -> list[dict[str, Any]]:
         """Fetch the user's energy contracts (for the panel dropdown)."""
         account = self._account()

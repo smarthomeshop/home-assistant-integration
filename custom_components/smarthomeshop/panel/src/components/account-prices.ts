@@ -39,6 +39,10 @@ export class AccountPrices extends LitElement {
     .contract-row label { font-size: 12px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.4px; }
     .contract-row select { flex: 1; min-width: 200px; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 13px; font-family: inherit; }
     .contract-row select:focus { outline: none; border-color: var(--shs-primary); }
+    .summary-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+    .chip-tag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--secondary-text-color); background: var(--secondary-background-color); border-radius: 999px; padding: 4px 12px; }
+    .chip-tag.good { color: #22c55e; background: rgba(34,197,94,0.12); }
+    .chip-tag ha-icon { --mdc-icon-size: 14px; }
     .chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
     .chip { background: var(--secondary-background-color); border-radius: 10px; padding: 10px 12px; }
     .chip-label { font-size: 11px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.4px; }
@@ -100,6 +104,14 @@ export class AccountPrices extends LitElement {
       this._showKeyForm = false;
     } catch (err) { console.error('account save failed', err); }
     this._savingKey = false;
+  }
+
+  private _hm(iso: string): string {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
   }
 
   private async _disconnect(): Promise<void> {
@@ -165,10 +177,26 @@ export class AccountPrices extends LitElement {
               ${cur.feed_in != null ? html`<div class="chip"><div class="chip-label">Feed-in now</div><div class="chip-value">€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span></div></div>` : nothing}
               ${cur.gas != null ? html`<div class="chip"><div class="chip-label">Gas now</div><div class="chip-value">€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span></div></div>` : nothing}
             </div>
+            ${a?.summary ? html`
+              <div class="summary-row">
+                ${a.summary.cheap_now != null ? html`
+                  <span class="chip-tag ${a.summary.cheap_now ? 'good' : ''}">
+                    <ha-icon icon=${a.summary.cheap_now ? 'mdi:cash-clock' : 'mdi:clock-outline'}></ha-icon>
+                    ${a.summary.cheap_now ? 'Cheap right now' : 'Above average now'}
+                  </span>
+                ` : nothing}
+                ${a.summary.cheapest_3h ? html`
+                  <span class="chip-tag">Cheapest 3h: ${this._hm(a.summary.cheapest_3h.start)}–${this._hm(a.summary.cheapest_3h.end)} · € ${Number(a.summary.cheapest_3h.average).toFixed(3)}</span>
+                ` : nothing}
+                ${a.summary.average != null ? html`<span class="chip-tag">Avg today € ${Number(a.summary.average).toFixed(3)}</span>` : nothing}
+              </div>
+            ` : nothing}
             <div class="hint">
               Point the Home Assistant Energy Dashboard at
               <code>sensor.smarthomeshop_energy_prices_electricity_price</code>
-              ("use an entity with current price") for accurate dynamic cost tracking.
+              ("use an entity with current price") for accurate dynamic cost tracking. There are
+              also sensors for the average/low/high price and the cheapest 1–6&nbsp;hour blocks,
+              plus a <code>binary_sensor…cheap_electricity_now</code> for easy automations.
             </div>
           ` : nothing}
 
