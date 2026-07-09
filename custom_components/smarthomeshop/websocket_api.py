@@ -61,6 +61,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_device_config)
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
+    websocket_api.async_register_command(hass, ws_refresh_account)
     websocket_api.async_register_command(hass, ws_get_contracts)
 
 
@@ -572,6 +573,8 @@ def _account_result(hass: HomeAssistant) -> dict:
         "base_url": account.get("base_url") or "https://api.smarthomeshop.io",
         "contract_id": account.get("contract_id"),
         "status": getattr(prices, "status", "unconfigured"),
+        "last_synced": getattr(prices, "last_synced", None),
+        "interval_minutes": getattr(prices, "update_interval_minutes", 30),
     }
     if prices is not None and prices.status == "ok":
         result["current"] = {
@@ -596,6 +599,16 @@ def _account_result(hass: HomeAssistant) -> dict:
 @callback
 def ws_get_account(hass: HomeAssistant, connection, msg: dict) -> None:
     """Return the account/API-key status and current prices."""
+    connection.send_result(msg["id"], _account_result(hass))
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/refresh"})
+@websocket_api.async_response
+async def ws_refresh_account(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Fetch prices from the account API right now and return fresh status."""
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    if prices is not None:
+        await prices.async_refresh()
     connection.send_result(msg["id"], _account_result(hass))
 
 

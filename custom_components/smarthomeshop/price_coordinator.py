@@ -16,6 +16,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, LOGGER
 
@@ -41,6 +42,12 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # forbidden | error
         self.status: str = "unconfigured"
         self.account_email: str | None = None
+        # ISO timestamp of the last successful sync with the account API.
+        self.last_synced: str | None = None
+
+    @property
+    def update_interval_minutes(self) -> int:
+        return int(UPDATE_INTERVAL.total_seconds() // 60)
 
     def _account(self) -> dict[str, Any]:
         store = self.hass.data.get(DOMAIN, {}).get("store")
@@ -109,6 +116,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Connection error: {err}") from err
 
         self.status = "ok"
+        self.last_synced = dt_util.utcnow().isoformat()
         return data or {}
 
     # ---- Convenience accessors for sensors / panel ----

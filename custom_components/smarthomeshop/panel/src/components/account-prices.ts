@@ -16,6 +16,7 @@ export class AccountPrices extends LitElement {
   @state() private _showAdvanced = false;
   @state() private _savingKey = false;
   @state() private _showKeyForm = false;
+  @state() private _syncing = false;
   @state() private _contracts: any[] = [];
 
   static styles = css`
@@ -52,7 +53,10 @@ export class AccountPrices extends LitElement {
     .form input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
     .form input:focus { outline: none; border-color: var(--shs-primary); }
     .actions { display: flex; gap: 10px; margin-top: 14px; }
-    .btn { padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; border: none; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; border: none; }
+    .btn ha-icon { --mdc-icon-size: 16px; }
+    .sync-info { display: flex; align-items: center; gap: 6px; margin-top: 14px; font-size: 11.5px; color: var(--secondary-text-color); }
+    .sync-info ha-icon { --mdc-icon-size: 15px; color: var(--shs-primary); }
     .btn.primary { background: var(--shs-primary); color: #fff; }
     .btn.primary:disabled { opacity: 0.5; cursor: default; }
     .btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
@@ -106,9 +110,31 @@ export class AccountPrices extends LitElement {
     this._savingKey = false;
   }
 
+  private async _syncNow(): Promise<void> {
+    if (this._syncing) return;
+    this._syncing = true;
+    try {
+      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/refresh' });
+      if (this._account?.status === 'ok') this._loadContracts();
+    } catch (err) { console.error('sync failed', err); }
+    this._syncing = false;
+  }
+
   private _hm(iso: string): string {
     try {
       return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  }
+
+  private _lastSyncedLabel(iso: string): string {
+    try {
+      const then = new Date(iso).getTime();
+      const mins = Math.floor((Date.now() - then) / 60000);
+      if (mins <= 0) return 'just now';
+      if (mins < 60) return `${mins} min ago`;
+      return `at ${this._hm(iso)}`;
     } catch {
       return '';
     }
@@ -200,8 +226,21 @@ export class AccountPrices extends LitElement {
             </div>
           ` : nothing}
 
+          ${a?.has_key && status === 'ok' ? html`
+            <div class="sync-info">
+              <ha-icon icon="mdi:sync"></ha-icon>
+              <span>
+                ${a?.last_synced ? `Last synced ${this._lastSyncedLabel(a.last_synced)}` : 'Not synced yet'}
+                · auto-syncs every ${a?.interval_minutes ?? 30} min
+              </span>
+            </div>
+          ` : nothing}
+
           ${a?.has_key && !this._showKeyForm ? html`
             <div class="actions">
+              <button class="btn primary" ?disabled=${this._syncing} @click=${this._syncNow}>
+                <ha-icon icon="mdi:sync"></ha-icon> ${this._syncing ? 'Syncing…' : 'Sync now'}
+              </button>
               <button class="btn ghost" @click=${() => { this._showKeyForm = true; }}>Replace key</button>
               <button class="btn ghost danger" ?disabled=${this._savingKey} @click=${this._disconnect}>Disconnect</button>
             </div>
