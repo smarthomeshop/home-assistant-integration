@@ -70,6 +70,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     except Exception as err:
         LOGGER.error("Failed to register panel: %s", err)
 
+    # Account-wide dynamic energy price coordinator
+    try:
+        from .price_coordinator import PriceCoordinator
+
+        prices = PriceCoordinator(hass)
+        hass.data[DOMAIN]["prices"] = prices
+        await prices.async_refresh()  # best-effort; no-op without an API key
+    except Exception as err:
+        LOGGER.error("Failed to set up price coordinator: %s", err)
+
     return True
 
 

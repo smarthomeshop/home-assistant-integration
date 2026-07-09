@@ -59,6 +59,8 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_device_insights)
     websocket_api.async_register_command(hass, ws_get_device_config)
     websocket_api.async_register_command(hass, ws_set_device_config)
+    websocket_api.async_register_command(hass, ws_get_account)
+    websocket_api.async_register_command(hass, ws_set_account)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/config"})
@@ -522,6 +524,71 @@ async def ws_set_device_config(hass: HomeAssistant, connection, msg: dict) -> No
 
     hass.config_entries.async_update_entry(entry, options=new_options)
     connection.send_result(msg["id"], {"ok": True})
+
+
+def _account_result(hass: HomeAssistant) -> dict:
+    """Build the account/price status payload for the panel."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    account = store.get_account() if store else {}
+    result = {
+        "has_key": bool(account.get("api_key")),
+        "base_url": account.get("base_url") or "https://api.smarthomeshop.io",
+        "status": getattr(prices, "status", "unconfigured"),
+    }
+    if prices is not None and prices.status == "ok":
+        result["current"] = {
+            "electricity": prices.electricity_price(),
+            "electricity_market": prices.electricity_market_price(),
+            "feed_in": prices.electricity_feed_in(),
+            "gas": prices.gas_price(),
+            "level": prices.electricity_level(),
+        }
+    return result
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account"})
+@callback
+def ws_get_account(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the account/API-key status and current prices."""
+    connection.send_result(msg["id"], _account_result(hass))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/account/set",
+    vol.Optional("api_key"): vol.Any(str, None),
+    vol.Optional("base_url"): vol.Any(str, None),
+})
+@websocket_api.async_response
+async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Store the API key / base URL and refresh prices immediately."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+
+    account = store.get_account()
+    if "api_key" in msg:
+        account["api_key"] = (msg.get("api_key") or "").strip()
+    if "base_url" in msg:
+        account["base_url"] = (msg.get("base_url") or "").strip() or None
+    await store.async_set_account(account)
+
+    # Refresh prices against the new key so we can report the status back.
+    if prices is not None:
+        await prices.async_refresh()
+
+    # Materialise/remove the price sensors by reloading the host entry.
+    entries = hass.config_entries.async_entries(DOMAIN)
+    if entries:
+        host = min(entries, key=lambda e: e.entry_id)
+        hass.async_create_task(hass.config_entries.async_reload(host.entry_id))
+
+    connection.send_result(msg["id"], _account_result(hass))
 
 
 def _connectivity_for_device(

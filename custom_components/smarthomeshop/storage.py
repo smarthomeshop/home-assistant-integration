@@ -30,11 +30,22 @@ class SmartHomeShopStore:
             self._data = data
         else:
             self._data = {"rooms": {}}
+        self._data.setdefault("rooms", {})
+        self._data.setdefault("account", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
         """Save data to storage."""
         await self._store.async_save(self._data)
+
+    def get_account(self) -> dict[str, Any]:
+        """Return the account settings (API key, base URL)."""
+        return dict(self._data.get("account", {}))
+
+    async def async_set_account(self, account: dict[str, Any]) -> None:
+        """Save the account settings."""
+        self._data["account"] = account
+        await self.async_save()
 
     def get_rooms(self) -> list[dict[str, Any]]:
         """Get all rooms as a list."""

@@ -11,6 +11,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    DOMAIN,
     CONF_PRODUCT_TYPE,
     PRODUCT_P1METERKIT,
     PRODUCT_WATERFLOWKIT,
@@ -82,6 +83,19 @@ async def async_setup_entry(
     # Note: Energy period tracking (daily, weekly, monthly, yearly) is now handled
     # by automatically created Utility Meter helpers. See:
     # products/waterp1meterkit/utility_meters.py
+
+    # Account-wide dynamic price sensors: hosted by a single entry (the one
+    # with the lowest entry_id) so they exist once, not per device.
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    if prices is not None and getattr(prices, "has_key", False):
+        entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
+        if entry_ids and config_entry.entry_id == min(entry_ids):
+            from .price_sensors import PRICE_SENSORS, SmartHomeShopPriceSensor
+
+            entities.extend(
+                SmartHomeShopPriceSensor(prices, description)
+                for description in PRICE_SENSORS
+            )
 
     async_add_entities(entities)
 
