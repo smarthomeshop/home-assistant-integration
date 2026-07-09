@@ -407,20 +407,50 @@ def _entry_for_device(hass: HomeAssistant, device_id: str):
     return None
 
 
+# Local price option -> tariff key from a connected contract. A field is
+# "managed" (hidden in the panel, driven by the contract) only when the
+# contract actually supplies that value, matching the coordinator logic.
+_CONTRACT_TARIFF_KEYS = {
+    CONF_PRICE_T1: "electricity_t1",
+    CONF_PRICE_T2: "electricity_t2",
+    CONF_PRICE_FEED_IN: "feed_in",
+    CONF_PRICE_GAS: "gas",
+    CONF_PRICE_WATER: "water",
+}
+
+
 def _config_fields(
-    product_type: str | None, options: dict, ha_prices: dict | None = None
+    product_type: str | None,
+    options: dict,
+    ha_prices: dict | None = None,
+    contract_tariffs: dict | None = None,
 ) -> list[dict]:
     """Editable product options, mirroring the config/options flow.
 
     Price fields fall back to the HA Energy Dashboard static price (if set)
     before the hardcoded default, so the panel prefills what HA already uses.
+    When a contract supplies a price, the field is flagged ``managed`` so the
+    panel hides it (the contract is the source of truth).
     """
     ha_prices = ha_prices or {}
+    contract_tariffs = contract_tariffs or {}
 
     def pick(key: str, default):
         if options.get(key) not in (None, ""):
             return options.get(key)
         return ha_prices.get(key, default)
+
+    def managed(key: str) -> bool:
+        value = contract_tariffs.get(_CONTRACT_TARIFF_KEYS.get(key, ""))
+        if not isinstance(value, (int, float)):
+            return False
+        # Water only counts when a real price is set (coordinator ignores 0).
+        return value > 0 if key == CONF_PRICE_WATER else True
+
+    def price_field(field: dict) -> dict:
+        field["price"] = True
+        field["managed"] = managed(field["key"])
+        return field
 
     fields: list[dict] = []
     if product_type in _WATER_PRODUCTS:
@@ -438,24 +468,24 @@ def _config_fields(
              "help": "Optional input_boolean that marks you as away (stricter leak checks).",
              "type": "entity", "domain": "input_boolean",
              "value": options.get(CONF_VACATION_MODE_ENTITY, "")},
-            {"key": CONF_PRICE_WATER, "label": "Water price",
+            price_field({"key": CONF_PRICE_WATER, "label": "Water price",
              "type": "number", "unit": "€/m³", "min": 0, "max": 15, "step": 0.01,
-             "value": pick(CONF_PRICE_WATER, DEFAULT_PRICE_WATER)},
+             "value": pick(CONF_PRICE_WATER, DEFAULT_PRICE_WATER)}),
         ]
     if product_type in _ENERGY_PRODUCTS:
         fields += [
-            {"key": CONF_PRICE_T1, "label": "Electricity price (T1)", "type": "number",
+            price_field({"key": CONF_PRICE_T1, "label": "Electricity price (T1)", "type": "number",
              "unit": "€/kWh", "min": 0, "max": 5, "step": 0.001,
-             "value": pick(CONF_PRICE_T1, DEFAULT_PRICE_T1)},
-            {"key": CONF_PRICE_T2, "label": "Electricity price (T2)", "type": "number",
+             "value": pick(CONF_PRICE_T1, DEFAULT_PRICE_T1)}),
+            price_field({"key": CONF_PRICE_T2, "label": "Electricity price (T2)", "type": "number",
              "unit": "€/kWh", "min": 0, "max": 5, "step": 0.001,
-             "value": pick(CONF_PRICE_T2, DEFAULT_PRICE_T2)},
-            {"key": CONF_PRICE_FEED_IN, "label": "Feed-in price", "type": "number",
+             "value": pick(CONF_PRICE_T2, DEFAULT_PRICE_T2)}),
+            price_field({"key": CONF_PRICE_FEED_IN, "label": "Feed-in price", "type": "number",
              "unit": "€/kWh", "min": 0, "max": 5, "step": 0.001,
-             "value": pick(CONF_PRICE_FEED_IN, DEFAULT_PRICE_FEED_IN)},
-            {"key": CONF_PRICE_GAS, "label": "Gas price", "type": "number",
+             "value": pick(CONF_PRICE_FEED_IN, DEFAULT_PRICE_FEED_IN)}),
+            price_field({"key": CONF_PRICE_GAS, "label": "Gas price", "type": "number",
              "unit": "€/m³", "min": 0, "max": 15, "step": 0.001,
-             "value": pick(CONF_PRICE_GAS, DEFAULT_PRICE_GAS)},
+             "value": pick(CONF_PRICE_GAS, DEFAULT_PRICE_GAS)}),
             {"key": CONF_MAIN_FUSE_AMPS, "label": "Main fuse",
              "help": "Your main fuse rating, used for the phase-load percentage.",
              "type": "number", "unit": "A", "min": 10, "max": 80, "step": 1,
@@ -479,10 +509,15 @@ async def ws_get_device_config(hass: HomeAssistant, connection, msg: dict) -> No
     from .energy_prices import async_ha_energy_prices
 
     ha_prices = await async_ha_energy_prices(hass)
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    contract = prices.contract() if prices and prices.contract_active() else None
+    tariffs = prices.contract_tariffs() if contract else {}
     connection.send_result(msg["id"], {
         "configured": True,
         "product_type": product_type,
-        "fields": _config_fields(product_type, dict(entry.options), ha_prices),
+        "fields": _config_fields(product_type, dict(entry.options), ha_prices, tariffs),
+        "contract_active": contract is not None,
+        "contract_name": (contract or {}).get("name"),
     })
 
 

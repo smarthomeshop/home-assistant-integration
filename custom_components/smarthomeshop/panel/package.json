@@ -6,7 +6,7 @@
   "scripts": {
     "build": "rollup -c",
     "build:prod": "npm run build && npm run copy",
-    "copy": "cp dist/smarthomeshop-panel.js ./dist/",
+    "copy": "cp dist/smarthomeshop-panel.js ../www/smarthomeshop-panel.js",
     "watch": "rollup -c -w"
   },
   "dependencies": {

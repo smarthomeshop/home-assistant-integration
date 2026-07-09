@@ -58,6 +58,8 @@ export class SettingsPage extends LitElement {
   @state() private _productType = '';
   @state() private _savingConfig = false;
   @state() private _configSaved = false;
+  @state() private _contractActive = false;
+  @state() private _contractName: string | null = null;
 
   static styles = css`
     :host { display: block; max-width: 1100px; margin: 0 auto; --shs-primary: #4361ee; }
@@ -123,6 +125,9 @@ export class SettingsPage extends LitElement {
     .cfg-info { min-width: 0; }
     .cfg-label { font-size: 13.5px; font-weight: 500; color: var(--primary-text-color); }
     .cfg-help { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 2px; line-height: 1.4; }
+    .cfg-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; font-size: 12.5px; line-height: 1.5; color: var(--secondary-text-color); background: var(--shs-primary-10, rgba(3, 169, 244, 0.08)); border-bottom: 1px solid var(--divider-color); }
+    .cfg-note ha-icon { --mdc-icon-size: 18px; color: var(--shs-primary); flex-shrink: 0; margin-top: 1px; }
+    .cfg-note strong { color: var(--primary-text-color); }
     .cfg-control { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .cfg-control input, .cfg-control select {
       padding: 7px 10px; border: 1px solid var(--divider-color); border-radius: 8px;
@@ -182,9 +187,11 @@ export class SettingsPage extends LitElement {
 
   private async _loadConfig(deviceId: string): Promise<void> {
     try {
-      const res = await this.hass.callWS<{ fields: any[]; product_type?: string }>({ type: 'smarthomeshop/device/config', device_id: deviceId });
+      const res = await this.hass.callWS<{ fields: any[]; product_type?: string; contract_active?: boolean; contract_name?: string | null }>({ type: 'smarthomeshop/device/config', device_id: deviceId });
       this._configFields = res.fields || [];
       this._productType = res.product_type || '';
+      this._contractActive = !!res.contract_active;
+      this._contractName = res.contract_name || null;
       const values: Record<string, any> = {};
       for (const f of this._configFields) values[f.key] = f.value;
       this._configValues = values;
@@ -253,13 +260,22 @@ export class SettingsPage extends LitElement {
   private _renderConfigCard() {
     if (this._configFields.length === 0) return nothing;
     const isAdmin = !!this.hass.user?.is_admin;
+    // When a contract supplies a price it is the single source of truth, so
+    // hide those fields (flagged "managed" by the backend) and explain why.
+    const visibleFields = this._configFields.filter(f => !f.managed);
+    const hidePrices = this._contractActive && visibleFields.length !== this._configFields.length;
     return html`
       <div class="settings-group cfg-card">
         <div class="group-header">
           <ha-icon icon="mdi:cog-outline"></ha-icon>
           <span class="group-title">Product settings</span>
         </div>
-        ${this._configFields.map(f => this._renderConfigField(f))}
+        ${hidePrices ? html`
+          <div class="cfg-note">
+            <ha-icon icon="mdi:file-document-check-outline"></ha-icon>
+            <span>Prices come from your connected energy contract${this._contractName ? html` <strong>${this._contractName}</strong>` : nothing}. Change them in your SmartHomeShop account, or disconnect below to set prices manually.</span>
+          </div>` : nothing}
+        ${visibleFields.map(f => this._renderConfigField(f))}
         <div class="cfg-foot">
           ${this._configSaved ? html`<span class="cfg-saved"><ha-icon icon="mdi:check-circle"></ha-icon> Saved</span>` : nothing}
           <button class="cfg-save" ?disabled=${!isAdmin || this._savingConfig} @click=${this._saveConfig}>

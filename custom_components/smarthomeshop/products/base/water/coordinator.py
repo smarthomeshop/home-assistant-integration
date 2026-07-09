@@ -247,6 +247,14 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             self._ha_water_price = None
         await super().async_config_entry_first_refresh()
 
+    def _contract_water_price(self) -> float | None:
+        """Water price from a connected contract, if one is active."""
+        prices = self.hass.data.get(DOMAIN, {}).get("prices")
+        if prices is None:
+            return None
+        price = prices.contract_price("water")
+        return price if price and price > 0 else None
+
     async def _async_update_data(self) -> WaterUsageData:
         """Fetch data from sensors and calculate leak detection."""
         data = WaterUsageData()
@@ -301,15 +309,18 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         self._track_session(data, now)
         data.last_session = self._last_session
 
-        # Water cost today, based on the configured price per m3. Falls back
-        # to the HA Energy Dashboard water price, then the hardcoded default.
-        price_opt = self.config_entry.options.get(CONF_PRICE_WATER)
-        if price_opt in (None, ""):
-            price_opt = getattr(self, "_ha_water_price", None)
-        try:
-            price_water = float(price_opt) if price_opt is not None else DEFAULT_PRICE_WATER
-        except (ValueError, TypeError):
-            price_water = DEFAULT_PRICE_WATER
+        # Water cost today, based on the price per m3. A connected energy
+        # contract is the single source of truth; otherwise the configured
+        # price, then the HA Energy Dashboard water price, then the default.
+        price_water = self._contract_water_price()
+        if price_water is None:
+            price_opt = self.config_entry.options.get(CONF_PRICE_WATER)
+            if price_opt in (None, ""):
+                price_opt = getattr(self, "_ha_water_price", None)
+            try:
+                price_water = float(price_opt) if price_opt is not None else DEFAULT_PRICE_WATER
+            except (ValueError, TypeError):
+                price_water = DEFAULT_PRICE_WATER
         if price_water > 0:
             data.water_cost_today = round(data.today_usage / 1000 * price_water, 2)
 

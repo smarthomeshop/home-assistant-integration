@@ -148,6 +148,26 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def contract(self) -> dict[str, Any] | None:
         return (self.data or {}).get("contract")
 
+    def contract_active(self) -> bool:
+        """True when a contract is connected and its prices apply."""
+        return self.status == "ok" and self.contract() is not None
+
+    def contract_tariffs(self) -> dict[str, Any]:
+        """Per-unit prices from the connected contract (empty if none)."""
+        contract = self.contract()
+        return (contract or {}).get("tariffs") or {}
+
+    def contract_price(self, key: str) -> float | None:
+        """A single contract tariff (electricity_t1/t2, feed_in, gas, water).
+
+        Returns None when no contract is connected or the value is unset, so
+        callers can fall back to the user's own configured price.
+        """
+        if not self.contract_active():
+            return None
+        value = self.contract_tariffs().get(key)
+        return value if isinstance(value, (int, float)) else None
+
     def _summary(self) -> dict[str, Any]:
         return (self.data or {}).get("summary") or {}
 

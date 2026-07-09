@@ -21,12 +21,22 @@ from ....const import (
     DEFAULT_PRICE_GAS,
     DEFAULT_PRICE_T1,
     DEFAULT_PRICE_T2,
+    DOMAIN,
     LOGGER,
 )
 
 # Night window used to determine standby (always-on) power
 STANDBY_WINDOW_START = 2  # 02:00
 STANDBY_WINDOW_END = 5    # 05:00
+
+# Maps a local price option to the matching tariff key from a connected
+# contract, so a connected contract drives the cost sensors too.
+CONTRACT_TARIFF_KEYS = {
+    CONF_PRICE_T1: "electricity_t1",
+    CONF_PRICE_T2: "electricity_t2",
+    CONF_PRICE_FEED_IN: "feed_in",
+    CONF_PRICE_GAS: "gas",
+}
 
 
 @dataclass
@@ -166,6 +176,11 @@ class EnergyTracker:
             return None
 
     def _price(self, key: str, default: float) -> float:
+        # A connected energy contract is the single source of truth: it drives
+        # the cost sensors so prices only need to be set in one place.
+        contract_price = self._contract_price(key)
+        if contract_price is not None:
+            return contract_price
         value = self.entry.options.get(key)
         if value in (None, ""):
             value = self._ha_prices.get(key, default)
@@ -173,6 +188,15 @@ class EnergyTracker:
             return float(value)
         except (ValueError, TypeError):
             return default
+
+    def _contract_price(self, key: str) -> float | None:
+        tariff_key = CONTRACT_TARIFF_KEYS.get(key)
+        if tariff_key is None:
+            return None
+        prices = self.hass.data.get(DOMAIN, {}).get("prices")
+        if prices is None:
+            return None
+        return prices.contract_price(tariff_key)
 
     # ---- main update ----
 
