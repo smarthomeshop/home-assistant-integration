@@ -46,6 +46,9 @@ export class AccountPrices extends LitElement {
     .chip-tag ha-icon { --mdc-icon-size: 14px; }
     .chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
     .chip { background: var(--secondary-background-color); border-radius: 10px; padding: 10px 12px; }
+    .chip.clickable { cursor: pointer; transition: background 0.12s, transform 0.12s; }
+    .chip.clickable:hover { background: var(--divider-color); transform: translateY(-1px); }
+    .chip.clickable:active { transform: none; }
     .chip-label { font-size: 11px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.4px; }
     .chip-value { font-size: 16px; font-weight: 700; color: var(--primary-text-color); margin-top: 2px; }
     .chip-value .unit { font-size: 11px; font-weight: 400; color: var(--secondary-text-color); }
@@ -118,6 +121,25 @@ export class AccountPrices extends LitElement {
       if (this._account?.status === 'ok') this._loadContracts();
     } catch (err) { console.error('sync failed', err); }
     this._syncing = false;
+  }
+
+  private _moreInfo(entityId?: string): void {
+    if (!entityId) return;
+    this.dispatchEvent(new CustomEvent('hass-more-info', {
+      detail: { entityId },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _chip(label: string, value: unknown, entityId?: string) {
+    return html`
+      <div class="chip ${entityId ? 'clickable' : ''}"
+        title=${entityId ? 'Open in Home Assistant' : ''}
+        @click=${() => this._moreInfo(entityId)}>
+        <div class="chip-label">${label}</div>
+        <div class="chip-value">${value}</div>
+      </div>`;
   }
 
   private _hm(iso: string): string {
@@ -198,11 +220,11 @@ export class AccountPrices extends LitElement {
 
           ${status === 'ok' && cur ? html`
             <div class="chips">
-              <div class="chip"><div class="chip-label">Electricity now</div><div class="chip-value">€ ${(cur.electricity ?? 0).toFixed(3)} <span class="unit">/kWh</span></div></div>
-              ${cur.level ? html`<div class="chip"><div class="chip-label">Tariff level</div><div class="chip-value" style="text-transform: capitalize;">${String(cur.level).replace('_', ' ')}</div></div>` : nothing}
-              ${cur.feed_in != null ? html`<div class="chip"><div class="chip-label">Feed-in now</div><div class="chip-value">€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span></div></div>` : nothing}
-              ${cur.gas != null ? html`<div class="chip"><div class="chip-label">Gas now</div><div class="chip-value">€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span></div></div>` : nothing}
-              ${a?.contract?.tariffs?.water > 0 ? html`<div class="chip"><div class="chip-label">Water</div><div class="chip-value">€ ${Number(a.contract.tariffs.water).toFixed(4)} <span class="unit">/m³</span></div></div>` : nothing}
+              ${this._chip('Electricity now', html`€ ${(cur.electricity ?? 0).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.electricity)}
+              ${cur.level ? this._chip('Tariff level', html`<span style="text-transform: capitalize;">${String(cur.level).replace('_', ' ')}</span>`, a?.entities?.level) : nothing}
+              ${cur.feed_in != null ? this._chip('Feed-in now', html`€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.feed_in) : nothing}
+              ${cur.gas != null ? this._chip('Gas now', html`€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span>`, a?.entities?.gas) : nothing}
+              ${a?.contract?.tariffs?.water > 0 ? this._chip('Water', html`€ ${Number(a.contract.tariffs.water).toFixed(4)} <span class="unit">/m³</span>`) : nothing}
             </div>
             ${a?.summary ? html`
               <div class="summary-row">

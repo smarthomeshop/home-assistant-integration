@@ -576,6 +576,19 @@ def _account_result(hass: HomeAssistant) -> dict:
         "last_synced": getattr(prices, "last_synced", None),
         "interval_minutes": getattr(prices, "update_interval_minutes", 30),
     }
+    # Resolve the price entity_ids so the panel can open their more-info dialog
+    # (robust against renames — looked up by unique_id, not a hardcoded id).
+    ent_reg = er.async_get(hass)
+
+    def _price_entity(key: str) -> str | None:
+        return ent_reg.async_get_entity_id("sensor", DOMAIN, f"{DOMAIN}_price_{key}")
+
+    result["entities"] = {
+        "electricity": _price_entity("electricity_price"),
+        "level": _price_entity("electricity_price_level"),
+        "feed_in": _price_entity("electricity_feed_in_price"),
+        "gas": _price_entity("gas_price"),
+    }
     if prices is not None and prices.status == "ok":
         result["current"] = {
             "electricity": prices.electricity_price(),
