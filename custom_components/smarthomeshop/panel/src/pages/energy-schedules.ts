@@ -167,7 +167,7 @@ export class EnergySchedules extends LitElement {
     const used = new Set(
       this._schedules.filter(s => s.id !== this._editId).map(s => s.target_entity)
     );
-    const out = [{ value: '', label: 'Select a device…' }];
+    const out = [{ value: '', label: 'Select a device...' }];
     for (const [entityId, st] of Object.entries(this.hass.states || {})) {
       const d = dom(entityId);
       if (d !== 'switch' && d !== 'input_boolean') continue;
@@ -209,7 +209,7 @@ export class EnergySchedules extends LitElement {
     if (!this._name.trim()) { this._error = 'Give the schedule a name.'; return; }
     if (!this._target) { this._error = 'Pick a device to run.'; return; }
     if (!/^([01]?\d|2[0-3]):[0-5]\d$/.test(this._readyBy)) { this._error = 'Enter a valid ready-by time.'; return; }
-    if (!Number.isFinite(hours) || hours < 1 || hours > 24) { this._error = 'Hours needed must be 1–24.'; return; }
+    if (!Number.isFinite(hours) || hours < 1 || hours > 24) { this._error = 'Hours needed must be 1-24.'; return; }
     this._busy = true;
     this._error = '';
     try {
@@ -244,7 +244,7 @@ export class EnergySchedules extends LitElement {
       }
       const guardObj = (guardOn && avail) ? { available: avail, loadPower: Math.max(1, Math.round(this._loadPower)) } : null;
       await this.hass.callApi('POST', `config/automation/config/${autoId(sched.id)}`,
-        scheduleAutomation(`${this.deviceName || 'Schedule'} – ${sched.name}`, flag, this._target, hours + 2, guardObj));
+        scheduleAutomation(`${this.deviceName || 'Schedule'} - ${sched.name}`, flag, this._target, hours + 2, guardObj));
       await this._loadSchedules();
       this._modal = false;
     } catch (err: any) {
@@ -256,7 +256,7 @@ export class EnergySchedules extends LitElement {
 
   private async _delete(s: Schedule): Promise<void> {
     if (!this.hass.user?.is_admin) return;
-    if (!window.confirm(`Delete “${s.name}” and its automation?`)) return;
+    if (!window.confirm(`Delete "${s.name}" and its automation?`)) return;
     try {
       await this.hass.callWS({ type: 'smarthomeshop/schedules/delete', id: s.id });
       // Remove the generated automation too, so it can't keep steering the load.
@@ -360,7 +360,7 @@ export class EnergySchedules extends LitElement {
               <label class="check">
                 <input type="checkbox" ?checked=${!this._interruptible}
                   @change=${(e: Event) => { this._interruptible = !(e.target as HTMLInputElement).checked; }} />
-                Run in one continuous block (for loads that can’t pause, e.g. a dishwasher)
+                Run in one continuous block (for loads that can't pause, e.g. a dishwasher)
               </label>
             </div>
             ${this._availableEntity() ? html`
@@ -368,7 +368,7 @@ export class EnergySchedules extends LitElement {
                 <label class="check">
                   <input type="checkbox" ?checked=${this._guard}
                     @change=${(e: Event) => { this._guard = (e.target as HTMLInputElement).checked; }} />
-                  Don’t start if it would overload my main fuse
+                  Don't start if it would overload my main fuse
                 </label>
               </div>
               ${this._guard ? html`
@@ -384,7 +384,7 @@ export class EnergySchedules extends LitElement {
           <div class="modal-foot">
             <button class="btn-ghost" @click=${() => { this._modal = false; }}>Cancel</button>
             <button class="create-btn" ?disabled=${this._busy} @click=${this._save}>
-              <ha-icon icon="mdi:check"></ha-icon> ${this._busy ? 'Saving…' : (this._editId ? 'Save schedule' : 'Create schedule')}
+              <ha-icon icon="mdi:check"></ha-icon> ${this._busy ? 'Saving...' : (this._editId ? 'Save schedule' : 'Create schedule')}
             </button>
           </div>
         </div>
@@ -400,7 +400,7 @@ export class EnergySchedules extends LitElement {
         ${isAdmin ? html`<button class="add-btn" @click=${() => this._openModal()}><ha-icon icon="mdi:plus"></ha-icon> Add schedule</button>` : nothing}
       </div>
       <div class="sub">
-        Have a load finished by a set time in the cheapest hours — e.g. “car ready by 07:00, needs 4 hours”.
+        Have a load finished by a set time in the cheapest hours - e.g. "car ready by 07:00, needs 4 hours".
         The deadline is met whenever the price feed is available (unless the optional fuse guard is waiting for free capacity).
       </div>
       ${this._schedules.length === 0

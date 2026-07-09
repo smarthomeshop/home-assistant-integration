@@ -8,7 +8,7 @@ import type { HomeAssistant } from '../types';
 // optional state-of-charge sensor and an optional PV-forecast sensor. From
 // that mapping we generate a safe "charge in the cheapest hours up to a target
 // SoC" automation (skipping grid-charge when solar is forecast to fill it),
-// and — if a mode select with a discharge option is mapped — a "cover the
+// and - if a mode select with a discharge option is mapped - a "cover the
 // evening peak down to a reserve SoC" automation.
 
 type ControlKind = 'switch' | 'number' | 'select';
@@ -183,7 +183,7 @@ export class EnergyBattery extends LitElement {
   }
 
   private _entityOptions(domains: string[], kind?: 'battery' | 'energy'): Array<{ value: string; label: string }> {
-    const out = [{ value: '', label: 'Select…' }];
+    const out = [{ value: '', label: 'Select...' }];
     for (const [entityId, st] of Object.entries(this.hass.states || {})) {
       if (!domains.includes(dom(entityId))) continue;
       const dc = st.attributes?.device_class;
@@ -227,7 +227,7 @@ export class EnergyBattery extends LitElement {
     if (f.control_kind === 'number' && !(numOr(f.charge_power, 0) > 0)) { this._error = 'Set the charge power.'; return; }
     if (f.control_kind === 'select' && (!f.charge_option || !f.idle_option)) { this._error = 'Pick the charge and idle options.'; return; }
     const target = numOr(f.target_soc, NaN), reserve = numOr(f.reserve_soc, NaN);
-    if (!Number.isFinite(target) || target < 10 || target > 100) { this._error = 'Target SoC must be 10–100%.'; return; }
+    if (!Number.isFinite(target) || target < 10 || target > 100) { this._error = 'Target SoC must be 10-100%.'; return; }
     if (!Number.isFinite(reserve) || reserve < 0 || reserve >= target) { this._error = 'Reserve SoC must be below the target.'; return; }
     this._busy = true; this._error = '';
     try {
@@ -238,7 +238,7 @@ export class EnergyBattery extends LitElement {
         f.off_min = 0;
       }
       // Build first and refuse to write a broken automation (price sensors not ready).
-      const config = batteryAutomation(f, this._px, `${this.deviceName || 'Battery'} – Battery arbitrage`);
+      const config = batteryAutomation(f, this._px, `${this.deviceName || 'Battery'} - Battery arbitrage`);
       if (JSON.stringify(config).includes('"entity_id":null')) {
         this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
         this._busy = false;
@@ -304,7 +304,7 @@ export class EnergyBattery extends LitElement {
                 <option value="number" ?selected=${kind === 'number'}>A charge-power number (Watt)</option>
                 <option value="select" ?selected=${kind === 'select'}>A battery-mode select (charge/idle/discharge)</option>
               </select>
-              <div class="help">Every inverter names these differently — pick your own entity. No universal battery control exists in Home Assistant.</div>
+              <div class="help">Every inverter names these differently - pick your own entity. No universal battery control exists in Home Assistant.</div>
             </div>
             <div class="field">
               <label class="f">Control entity</label>
@@ -317,28 +317,28 @@ export class EnergyBattery extends LitElement {
                 <label class="f">Charge power</label>
                 <input type="number" min="100" max="20000" step="100" .value=${String(f.charge_power ?? 2000)}
                   @input=${(e: Event) => this._set('charge_power', parseFloat((e.target as HTMLInputElement).value))} />
-                <span class="help">Watt to set while charging. Stops by setting the number’s own minimum.</span>
-                ${this._numberMin(f.control_entity) > 0 ? html`<div class="warn" style="margin-top:8px;">This number’s minimum is ${this._numberMin(f.control_entity)} W, so it can’t be set to 0 — the battery won’t fully stop charging. Map a grid-charge switch instead if you need a real off.</div>` : nothing}
+                <span class="help">Watt to set while charging. Stops by setting the number's own minimum.</span>
+                ${this._numberMin(f.control_entity) > 0 ? html`<div class="warn" style="margin-top:8px;">This number's minimum is ${this._numberMin(f.control_entity)} W, so it can't be set to 0 - the battery won't fully stop charging. Map a grid-charge switch instead if you need a real off.</div>` : nothing}
               </div>` : nothing}
             ${kind === 'select' ? html`
               <div class="two">
                 <div class="field">
                   <label class="f">Charge option</label>
                   <select @change=${(e: Event) => this._set('charge_option', (e.target as HTMLSelectElement).value)}>
-                    <option value="">Select…</option>
+                    <option value="">Select...</option>
                     ${opts.map(o => html`<option value=${o} ?selected=${o === f.charge_option}>${o}</option>`)}
                   </select>
                 </div>
                 <div class="field">
                   <label class="f">Idle / self-use option</label>
                   <select @change=${(e: Event) => this._set('idle_option', (e.target as HTMLSelectElement).value)}>
-                    <option value="">Select…</option>
+                    <option value="">Select...</option>
                     ${opts.map(o => html`<option value=${o} ?selected=${o === f.idle_option}>${o}</option>`)}
                   </select>
                 </div>
               </div>
               <div class="field">
-                <label class="f">Discharge option (optional — enables peak cover)</label>
+                <label class="f">Discharge option (optional - enables peak cover)</label>
                 <select @change=${(e: Event) => this._set('discharge_option', (e.target as HTMLSelectElement).value)}>
                   <option value="">None</option>
                   ${opts.map(o => html`<option value=${o} ?selected=${o === f.discharge_option}>${o}</option>`)}
@@ -385,7 +385,7 @@ export class EnergyBattery extends LitElement {
                 </select>
               </div>
             </div>
-            <div class="help" style="margin-top:-6px;">With both set, grid-charging is skipped when the forecast solar left today already covers what’s needed to reach the target (e.g. a Forecast.Solar / Solcast “remaining today” sensor).</div>
+            <div class="help" style="margin-top:-6px;">With both set, grid-charging is skipped when the forecast solar left today already covers what's needed to reach the target (e.g. a Forecast.Solar / Solcast "remaining today" sensor).</div>
 
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
           </div>
@@ -393,7 +393,7 @@ export class EnergyBattery extends LitElement {
             ${this._cfg.control_entity ? html`<button class="btn ghost" @click=${this._remove}>Remove</button>` : html`<span></span>`}
             <div class="right">
               <button class="btn ghost" @click=${() => { this._modal = false; }}>Cancel</button>
-              <button class="btn" ?disabled=${this._busy} @click=${this._save}><ha-icon icon="mdi:check"></ha-icon> ${this._busy ? 'Saving…' : 'Save'}</button>
+              <button class="btn" ?disabled=${this._busy} @click=${this._save}><ha-icon icon="mdi:check"></ha-icon> ${this._busy ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
         </div>
@@ -410,14 +410,14 @@ export class EnergyBattery extends LitElement {
       </div>
       <div class="sub">
         Charge your battery in the cheapest hours (and skip it when solar will fill it), so it covers the
-        expensive evening — using your inverter’s own control entities.
+        expensive evening - using your inverter's own control entities.
       </div>
       <div class="card">
         <div class="row">
           <div class="row-icon"><ha-icon icon="mdi:home-battery"></ha-icon></div>
           <div class="row-main">
             <div class="row-title">${configured ? 'Battery arbitrage active' : 'Not set up yet'}</div>
-            <div class="row-meta">${configured ? this._summary() : 'Map your inverter’s charge control to charge cheap and cover the peak.'}</div>
+            <div class="row-meta">${configured ? this._summary() : 'Map the inverter charge control to charge cheap and cover the peak.'}</div>
           </div>
           ${isAdmin ? html`<button class="btn ${configured ? 'ghost' : ''}" @click=${this._openModal}>
             <ha-icon icon=${configured ? 'mdi:cog-outline' : 'mdi:plus'}></ha-icon> ${configured ? 'Configure' : 'Set up'}

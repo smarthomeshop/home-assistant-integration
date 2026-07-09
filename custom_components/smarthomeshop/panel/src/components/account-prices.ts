@@ -119,7 +119,7 @@ export class AccountPrices extends LitElement {
       this._showKeyForm = false;
     } catch (err) {
       console.error('account save failed', err);
-      this._error = 'Could not save — please try again.';
+      this._error = 'Could not save - please try again.';
     }
     this._savingKey = false;
   }
@@ -181,7 +181,7 @@ export class AccountPrices extends LitElement {
       this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: null });
     } catch (err) {
       console.error('disconnect failed', err);
-      this._error = 'Could not disconnect — please try again.';
+      this._error = 'Could not disconnect - please try again.';
     }
     this._savingKey = false;
   }
@@ -191,8 +191,8 @@ export class AccountPrices extends LitElement {
     const status = a?.status || 'unconfigured';
     const cur = a?.current;
     const statusText: Record<string, string> = {
-      unconfigured: 'The integration works fully locally — no account needed. Connect a key only to pull live dynamic spot prices.',
-      ok: 'Connected — live prices are being fetched.',
+      unconfigured: 'The integration works fully locally - no account needed. Connect a key only to pull live dynamic spot prices.',
+      ok: 'Connected - live prices are being fetched.',
       unauthorized: 'That API key is invalid or was revoked.',
       forbidden: 'The price service rejected this key. Create a new API token in your account.',
       error: 'Could not reach the price service. Check your connection and try again.',
@@ -258,7 +258,7 @@ export class AccountPrices extends LitElement {
                   </span>
                 ` : nothing}
                 ${a.summary.cheapest_3h ? html`
-                  <span class="chip-tag">Cheapest 3h: ${this._hm(a.summary.cheapest_3h.start)}–${this._hm(a.summary.cheapest_3h.end)} · € ${Number(a.summary.cheapest_3h.average).toFixed(3)}</span>
+                  <span class="chip-tag">Cheapest 3h: ${this._hm(a.summary.cheapest_3h.start)}-${this._hm(a.summary.cheapest_3h.end)} · € ${Number(a.summary.cheapest_3h.average).toFixed(3)}</span>
                 ` : nothing}
                 ${a.summary.average != null ? html`<span class="chip-tag">Avg today € ${Number(a.summary.average).toFixed(3)}</span>` : nothing}
               </div>
@@ -267,8 +267,8 @@ export class AccountPrices extends LitElement {
               Point the Home Assistant Energy Dashboard at
               <code>sensor.smarthomeshop_energy_prices_electricity_price</code>
               ("use an entity with current price") for accurate dynamic cost tracking. There are
-              also sensors for the average/low/high price and the cheapest 1–6&nbsp;hour blocks,
-              plus a <code>binary_sensor…cheap_electricity_now</code> for easy automations.
+              also sensors for the average/low/high price and the cheapest 1-6&nbsp;hour blocks,
+              plus a <code>binary_sensor...cheap_electricity_now</code> for easy automations.
             </div>
           ` : nothing}
 
@@ -285,7 +285,7 @@ export class AccountPrices extends LitElement {
           ${a?.has_key && !this._showKeyForm ? html`
             <div class="actions">
               <button class="btn primary" ?disabled=${this._syncing} @click=${this._syncNow}>
-                <ha-icon icon="mdi:sync"></ha-icon> ${this._syncing ? 'Syncing…' : 'Sync now'}
+                <ha-icon icon="mdi:sync"></ha-icon> ${this._syncing ? 'Syncing...' : 'Sync now'}
               </button>
               <button class="btn ghost" @click=${() => { this._showKeyForm = true; }}>Replace key</button>
               <button class="btn ghost danger" ?disabled=${this._savingKey} @click=${this._disconnect}>Disconnect</button>
@@ -297,7 +297,7 @@ export class AccountPrices extends LitElement {
                 @input=${(e: Event) => { this._apiKeyInput = (e.target as HTMLInputElement).value; }}
                 @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && this._apiKeyInput.trim()) this._save(); }} />
               <button class="btn primary" ?disabled=${!this._apiKeyInput.trim() || this._savingKey} @click=${this._save}>
-                ${this._savingKey ? 'Connecting…' : 'Connect'}
+                ${this._savingKey ? 'Connecting...' : 'Connect'}
               </button>
             </div>
             <div class="hint">
@@ -314,7 +314,7 @@ export class AccountPrices extends LitElement {
                   .value=${this._baseUrlInput}
                   @input=${(e: Event) => { this._baseUrlInput = (e.target as HTMLInputElement).value; }} />
               </div>
-              <div class="hint">Server URL — leave empty for the default. Only change this for self-hosting or local testing.</div>
+              <div class="hint">Server URL - leave empty for the default. Only change this for self-hosting or local testing.</div>
             ` : nothing}
           `}
         </div>

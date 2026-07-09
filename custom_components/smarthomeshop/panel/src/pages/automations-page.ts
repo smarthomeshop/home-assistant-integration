@@ -41,7 +41,7 @@ const SCENARIOS: Scenario[] = [
   // ---- Climate ----
   {
     key: 'co2_high', group: 'climate', title: 'High CO₂', color: '#22c55e',
-    desc: 'Notify when CO₂ stays too high — time to ventilate.',
+    desc: 'Notify when CO₂ stays too high - time to ventilate.',
     icon: 'mdi:molecule-co2', match: { domain: 'sensor', suffix: ['co2'], excl: ['calibrat', 'manual', 'offset', 'target'] },
     kind: 'above', threshold: 1000, unit: 'ppm', forMin: 5,
     msgTitle: 'High CO₂ in {room}', msg: 'CO₂ is {value} ppm. Open a window to get some fresh air.',
@@ -90,7 +90,7 @@ const SCENARIOS: Scenario[] = [
   },
   {
     key: 'presence_on', group: 'climate', title: 'Motion detected', color: '#4361ee',
-    desc: 'Notify on presence — handy as an away alarm.',
+    desc: 'Notify on presence - handy as an away alarm.',
     icon: 'mdi:motion-sensor', match: { domain: 'binary_sensor', suffix: ['occupancy'], excl: ['zone'] },
     kind: 'to_on', msgTitle: 'Motion in {room}', msg: '{room} detected presence.',
   },
@@ -111,7 +111,7 @@ const SCENARIOS: Scenario[] = [
     key: 'hw_leak', group: 'water', title: 'Water leak sensor wet', color: '#dc2626',
     desc: 'Notify the moment the hardware leak sensor detects water.',
     icon: 'mdi:water', match: { domain: 'binary_sensor', suffix: ['water_leak_sensor', 'water_leak'] },
-    kind: 'to_on', msgTitle: '💧 Water detected!', msg: 'The water leak sensor is wet — check immediately.',
+    kind: 'to_on', msgTitle: '💧 Water detected!', msg: 'The water leak sensor is wet - check immediately.',
   },
   {
     key: 'night_usage', group: 'water', title: 'Night-time water usage', color: '#6366f1',
@@ -123,11 +123,11 @@ const SCENARIOS: Scenario[] = [
     key: 'continuous', group: 'water', title: 'Continuous water flow', color: '#f59e0b',
     desc: 'Notify when water flows non-stop (running tap or leak).',
     icon: 'mdi:water-pump', match: { domain: 'binary_sensor', suffix: ['continuous_flow_leak_cc', 'continuous_flow_cc'] },
-    kind: 'to_on', msgTitle: 'Continuous water flow ({room})', msg: 'Water has been flowing non-stop — possible leak or running tap.',
+    kind: 'to_on', msgTitle: 'Continuous water flow ({room})', msg: 'Water has been flowing non-stop - possible leak or running tap.',
   },
   {
     key: 'usage_high', group: 'water', title: 'High water usage today', color: '#0096c7',
-    desc: 'Notify when today’s water usage passes a limit.',
+    desc: 'Notify when the water usage today passes a limit.',
     icon: 'mdi:cup-water', match: { domain: 'sensor', suffix: ['usage_today_cc'] },
     kind: 'above', threshold: 500, unit: 'L',
     msgTitle: 'High water usage today ({room})', msg: 'You have used {value} L today.',
@@ -309,7 +309,7 @@ export class AutomationsPage extends LitElement {
     const action = { service: `${domain}.${service}`, data: { title: fill(s.msgTitle), message: fill(s.msg) } };
 
     return {
-      alias: `${room} – ${s.title}`,
+      alias: `${room} - ${s.title}`,
       description: `Created with the SmartHomeShop.io panel`,
       mode: 'single',
       trigger: [trigger],
@@ -373,7 +373,7 @@ export class AutomationsPage extends LitElement {
   private _scenarioAutomationId(s: Scenario): string | undefined {
     // An automation already exists for this scenario if one of the device's
     // related automations carries our exact alias.
-    const alias = `${this.deviceName || 'the room'} – ${s.title}`;
+    const alias = `${this.deviceName || 'the room'} - ${s.title}`;
     for (const entityId of this._related) {
       const st = this.hass.states[entityId];
       if (st && st.attributes?.friendly_name === alias) {
@@ -472,7 +472,7 @@ export class AutomationsPage extends LitElement {
             <button class="btn-ghost" @click=${this._closeModal}>Cancel</button>
             <button class="create-btn" ?disabled=${this._busy === s.key} @click=${this._confirmModal}>
               <ha-icon icon="mdi:plus"></ha-icon>
-              ${this._busy === s.key ? 'Creating…' : 'Create automation'}
+              ${this._busy === s.key ? 'Creating...' : 'Create automation'}
             </button>
           </div>
         </div>
@@ -495,7 +495,7 @@ export class AutomationsPage extends LitElement {
 
     return html`
       <div class="intro">
-        One-click automations for this device — pick the ones you want and choose where the
+        One-click automations for this device - pick the ones you want and choose where the
         notification goes. Each becomes a normal Home Assistant automation you can fine-tune
         later in the automation editor.
       </div>
