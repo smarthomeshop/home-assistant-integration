@@ -151,6 +151,11 @@ export class AccountPrices extends LitElement {
                   </option>`)}
               </select>
             </div>
+            <div class="hint">
+              ${!a?.contract_id
+                ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account, so prices update by themselves when you switch contracts there. Pick a specific contract above to pin it instead.`
+                : html`This device is pinned to a specific contract. Choose <b>Active contract (automatic)</b> to always follow the active contract in your account instead.`}
+            </div>
           ` : nothing}
 
           ${status === 'ok' && cur ? html`
