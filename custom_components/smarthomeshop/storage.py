@@ -33,6 +33,7 @@ class SmartHomeShopStore:
         self._data.setdefault("rooms", {})
         self._data.setdefault("account", {})
         self._data.setdefault("schedules", {})
+        self._data.setdefault("battery", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -113,3 +114,15 @@ class SmartHomeShopStore:
             await self.async_save()
             return True
         return False
+
+    # ---- Home-battery arbitrage mapping (account-wide) ----
+
+    def get_battery(self) -> dict[str, Any]:
+        """Return the home-battery control mapping."""
+        return dict(self._data.get("battery", {}))
+
+    async def async_set_battery(self, battery: dict[str, Any]) -> dict[str, Any]:
+        """Save the home-battery control mapping."""
+        self._data["battery"] = battery
+        await self.async_save()
+        return battery

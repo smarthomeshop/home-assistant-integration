@@ -67,6 +67,8 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_schedules)
     websocket_api.async_register_command(hass, ws_set_schedule)
     websocket_api.async_register_command(hass, ws_delete_schedule)
+    websocket_api.async_register_command(hass, ws_get_battery)
+    websocket_api.async_register_command(hass, ws_set_battery)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/config"})
@@ -757,6 +759,32 @@ async def ws_delete_schedule(hass: HomeAssistant, connection, msg: dict) -> None
     ok = await store.async_delete_schedule(msg["id"])
     async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
     connection.send_result(msg["id"], {"ok": ok})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/battery"})
+@callback
+def ws_get_battery(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the home-battery control mapping."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    connection.send_result(msg["id"], {"battery": store.get_battery() if store else {}})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/battery/set",
+    vol.Required("config"): dict,
+})
+@websocket_api.async_response
+async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Save the home-battery control mapping."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+    saved = await store.async_set_battery(msg["config"])
+    connection.send_result(msg["id"], {"battery": saved})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})
