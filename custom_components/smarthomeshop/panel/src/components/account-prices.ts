@@ -12,6 +12,8 @@ export class AccountPrices extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @state() private _account: any | null = null;
   @state() private _apiKeyInput = '';
+  @state() private _baseUrlInput = '';
+  @state() private _showAdvanced = false;
   @state() private _savingKey = false;
   @state() private _showKeyForm = false;
 
@@ -48,6 +50,8 @@ export class AccountPrices extends LitElement {
     .btn.ghost.danger { color: #ef4444; }
     .hint { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 12px; line-height: 1.5; }
     .hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+    .linkbtn { margin-top: 10px; background: none; border: none; padding: 0; color: var(--shs-primary); font-size: 12px; font-family: inherit; cursor: pointer; }
+    .linkbtn:hover { text-decoration: underline; }
   `;
 
   connectedCallback(): void {
@@ -58,6 +62,7 @@ export class AccountPrices extends LitElement {
   private async _load(): Promise<void> {
     try {
       this._account = await this.hass.callWS({ type: 'smarthomeshop/account' });
+      this._baseUrlInput = this._account?.base_url || '';
     } catch (err) { console.error('account load failed', err); }
   }
 
@@ -65,7 +70,11 @@ export class AccountPrices extends LitElement {
     if (this._savingKey) return;
     this._savingKey = true;
     try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: this._apiKeyInput.trim() });
+      this._account = await this.hass.callWS({
+        type: 'smarthomeshop/account/set',
+        api_key: this._apiKeyInput.trim(),
+        base_url: this._baseUrlInput.trim(),
+      });
       this._apiKeyInput = '';
       this._showKeyForm = false;
     } catch (err) { console.error('account save failed', err); }
@@ -143,6 +152,17 @@ export class AccountPrices extends LitElement {
               API key in your account at <b>smarthomeshop.io → Settings → API tokens</b>
               (free with any account) and paste it here.
             </div>
+            <button class="linkbtn" @click=${() => { this._showAdvanced = !this._showAdvanced; }}>
+              ${this._showAdvanced ? 'Hide advanced' : 'Advanced'}
+            </button>
+            ${this._showAdvanced ? html`
+              <div class="form" style="margin-top: 8px;">
+                <input type="text" placeholder="https://api.smarthomeshop.io" autocomplete="off"
+                  .value=${this._baseUrlInput}
+                  @input=${(e: Event) => { this._baseUrlInput = (e.target as HTMLInputElement).value; }} />
+              </div>
+              <div class="hint">Server URL — leave empty for the default. Only change this for self-hosting or local testing.</div>
+            ` : nothing}
           `}
         </div>
       </div>

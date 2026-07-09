@@ -53,6 +53,16 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def base_url(self) -> str:
         return (self._account().get("base_url") or DEFAULT_BASE_URL).rstrip("/")
 
+    def _ssl_option(self, url: str):
+        """Return an aiohttp ssl arg; disable verification for local dev hosts."""
+        lowered = url.lower()
+        if any(
+            token in lowered
+            for token in (".test/", "://localhost", "127.0.0.1", "host-gateway", ".local/")
+        ):
+            return False
+        return None  # default (verify)
+
     async def _async_update_data(self) -> dict[str, Any]:
         account = self._account()
         api_key = account.get("api_key")
@@ -67,7 +77,10 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         }
         try:
             async with self._session.get(
-                url, headers=headers, timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                ssl=self._ssl_option(url),
             ) as resp:
                 if resp.status == 401:
                     self.status = "unauthorized"
