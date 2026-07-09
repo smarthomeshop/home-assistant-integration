@@ -202,6 +202,7 @@ export class AccountPrices extends LitElement {
               ${cur.level ? html`<div class="chip"><div class="chip-label">Tariff level</div><div class="chip-value" style="text-transform: capitalize;">${String(cur.level).replace('_', ' ')}</div></div>` : nothing}
               ${cur.feed_in != null ? html`<div class="chip"><div class="chip-label">Feed-in now</div><div class="chip-value">€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span></div></div>` : nothing}
               ${cur.gas != null ? html`<div class="chip"><div class="chip-label">Gas now</div><div class="chip-value">€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span></div></div>` : nothing}
+              ${a?.contract?.tariffs?.water > 0 ? html`<div class="chip"><div class="chip-label">Water</div><div class="chip-value">€ ${Number(a.contract.tariffs.water).toFixed(4)} <span class="unit">/m³</span></div></div>` : nothing}
             </div>
             ${a?.summary ? html`
               <div class="summary-row">
