@@ -30,10 +30,6 @@ export class DashboardPage extends LitElement {
   @state() private _showMeterForm = false;
   @state() private _meterInput = '';
   @state() private _detailTab: 'overview' | 'automations' | 'settings' = 'overview';
-  @state() private _account: any | null = null;
-  @state() private _apiKeyInput = '';
-  @state() private _savingKey = false;
-  @state() private _showKeyForm = false;
   private _insightsTimer?: number;
 
   static styles = css`
@@ -247,25 +243,6 @@ export class DashboardPage extends LitElement {
       margin-bottom: 4px;
     }
 
-    /* Account / dynamic prices card */
-    .account-card { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: var(--ha-card-border-radius, 12px); padding: 16px; margin-bottom: 24px; }
-    .account-head { display: flex; align-items: center; gap: 14px; }
-    .account-icon { width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; background: rgba(148,163,184,0.15); color: var(--secondary-text-color); flex-shrink: 0; }
-    .account-icon.ok { background: rgba(34,197,94,0.15); color: #22c55e; }
-    .account-icon.alert { background: rgba(239,68,68,0.12); color: #ef4444; }
-    .account-icon ha-icon { --mdc-icon-size: 22px; }
-    .account-info { flex: 1; min-width: 0; }
-    .account-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--primary-text-color); }
-    .account-sub { font-size: 12.5px; color: var(--secondary-text-color); margin-top: 2px; line-height: 1.4; }
-    .account-form { display: flex; gap: 8px; margin-top: 14px; }
-    .account-form input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
-    .account-form input:focus { outline: none; border-color: var(--shs-primary); }
-    .account-actions { display: flex; gap: 10px; margin-top: 14px; }
-    .btn-ghost { padding: 8px 16px; border: 1px solid var(--divider-color); border-radius: 8px; background: transparent; color: var(--primary-text-color); font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; }
-    .btn-ghost:hover { border-color: var(--secondary-text-color); }
-    .btn-ghost.danger { color: #ef4444; }
-    .account-hint { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 12px; line-height: 1.5; }
-    .account-hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 
     /* Tools */
     .tools-list {
@@ -468,41 +445,6 @@ export class DashboardPage extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this._loadDevices();
-    this._loadAccount();
-  }
-
-  private async _loadAccount(): Promise<void> {
-    try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account' });
-    } catch (err) {
-      console.error('Failed to load account:', err);
-    }
-  }
-
-  private async _saveApiKey(): Promise<void> {
-    if (this._savingKey) return;
-    this._savingKey = true;
-    try {
-      this._account = await this.hass.callWS({
-        type: 'smarthomeshop/account/set',
-        api_key: this._apiKeyInput.trim(),
-      });
-      this._apiKeyInput = '';
-      this._showKeyForm = false;
-    } catch (err) {
-      console.error('Failed to save API key:', err);
-    }
-    this._savingKey = false;
-  }
-
-  private async _disconnectAccount(): Promise<void> {
-    this._savingKey = true;
-    try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: '' });
-    } catch (err) {
-      console.error('Failed to disconnect:', err);
-    }
-    this._savingKey = false;
   }
 
   private async _loadDevices(): Promise<void> {
@@ -1400,8 +1342,6 @@ export class DashboardPage extends LitElement {
         </div>
       `}
 
-      ${this._renderAccountCard()}
-
       <!-- Tools -->
       <div class="section-header">
         <h2 class="section-title">Tools</h2>
@@ -1419,73 +1359,4 @@ export class DashboardPage extends LitElement {
     `;
   }
 
-  private _renderAccountCard() {
-    const a = this._account;
-    const status = a?.status || 'unconfigured';
-    const cur = a?.current;
-    const statusText: Record<string, string> = {
-      unconfigured: 'Connect your SmartHomeShop.io account to pull live dynamic energy prices.',
-      ok: 'Connected — live prices are being fetched.',
-      unauthorized: 'That API key is invalid or was revoked.',
-      forbidden: 'Your account needs an API subscription to use dynamic prices.',
-      error: 'Could not reach the price service. Check your connection and try again.',
-    };
-    const statusClass = status === 'ok' ? 'ok' : status === 'unconfigured' ? '' : 'alert';
-
-    return html`
-      <div class="section-header">
-        <h2 class="section-title">Dynamic energy prices</h2>
-      </div>
-      <div class="account-card">
-        <div class="account-head">
-          <div class="account-icon ${statusClass}"><ha-icon icon="mdi:flash"></ha-icon></div>
-          <div class="account-info">
-            <div class="account-title">
-              SmartHomeShop.io account
-              ${a?.has_key ? html`<span class="insight-badge ${statusClass === 'ok' ? 'ok' : 'alert'}">${status === 'ok' ? 'Connected' : status}</span>` : nothing}
-            </div>
-            <div class="account-sub">${statusText[status] || statusText.error}</div>
-          </div>
-        </div>
-
-        ${status === 'ok' && cur ? html`
-          <div class="chips-row" style="margin-top: 14px;">
-            <div class="chip-card">
-              <div class="chip-label">Electricity now</div>
-              <div class="chip-value">€ ${(cur.electricity ?? 0).toFixed(3)} <span class="unit">/kWh</span></div>
-            </div>
-            ${cur.level ? html`<div class="chip-card"><div class="chip-label">Tariff level</div><div class="chip-value" style="text-transform: capitalize;">${String(cur.level).replace('_', ' ')}</div></div>` : nothing}
-            ${cur.feed_in != null ? html`<div class="chip-card"><div class="chip-label">Feed-in now</div><div class="chip-value">€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span></div></div>` : nothing}
-            ${cur.gas != null ? html`<div class="chip-card"><div class="chip-label">Gas now</div><div class="chip-value">€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span></div></div>` : nothing}
-          </div>
-          <div class="account-hint">
-            Point the Home Assistant Energy Dashboard at
-            <code>sensor.smarthomeshop_energy_prices_electricity_price</code>
-            (use an entity with current price) for accurate dynamic cost tracking.
-          </div>
-        ` : nothing}
-
-        ${a?.has_key && !this._showKeyForm ? html`
-          <div class="account-actions">
-            <button class="btn-ghost" @click=${() => { this._showKeyForm = true; }}>Replace key</button>
-            <button class="btn-ghost danger" ?disabled=${this._savingKey} @click=${this._disconnectAccount}>Disconnect</button>
-          </div>
-        ` : html`
-          <div class="account-form">
-            <input type="password" placeholder="Paste your API key" autocomplete="off"
-              .value=${this._apiKeyInput}
-              @input=${(e: Event) => { this._apiKeyInput = (e.target as HTMLInputElement).value; }}
-              @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter' && this._apiKeyInput.trim()) this._saveApiKey(); }} />
-            <button class="cfg-save" ?disabled=${!this._apiKeyInput.trim() || this._savingKey} @click=${this._saveApiKey}>
-              ${this._savingKey ? 'Connecting…' : 'Connect'}
-            </button>
-          </div>
-          <div class="account-hint">
-            Create an API key in your account at <b>smarthomeshop.io → Settings → API tokens</b>
-            (requires an API subscription), then paste it here.
-          </div>
-        `}
-      </div>
-    `;
-  }
 }

@@ -1,6 +1,9 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
+import '../components/account-prices';
+
+const ENERGY_PRODUCTS = ['waterp1meterkit', 'p1meterkit'];
 
 interface SettingGroup {
   key: string;
@@ -52,6 +55,7 @@ export class SettingsPage extends LitElement {
   @state() private _expandedGroups: Set<string> = new Set();
   @state() private _configFields: any[] = [];
   @state() private _configValues: Record<string, any> = {};
+  @state() private _productType = '';
   @state() private _savingConfig = false;
   @state() private _configSaved = false;
 
@@ -178,8 +182,9 @@ export class SettingsPage extends LitElement {
 
   private async _loadConfig(deviceId: string): Promise<void> {
     try {
-      const res = await this.hass.callWS<{ fields: any[] }>({ type: 'smarthomeshop/device/config', device_id: deviceId });
+      const res = await this.hass.callWS<{ fields: any[]; product_type?: string }>({ type: 'smarthomeshop/device/config', device_id: deviceId });
       this._configFields = res.fields || [];
+      this._productType = res.product_type || '';
       const values: Record<string, any> = {};
       for (const f of this._configFields) values[f.key] = f.value;
       this._configValues = values;
@@ -378,6 +383,9 @@ export class SettingsPage extends LitElement {
     if (this.embedded) {
       return html`
         ${this._renderConfigCard()}
+        ${ENERGY_PRODUCTS.includes(this._productType)
+          ? html`<shs-account-prices .hass=${this.hass}></shs-account-prices>`
+          : nothing}
         ${this._selectedDevice && grouped ? html`
           <input type="search" class="search-box" placeholder="Search settings..."
             .value=${this._filter}
