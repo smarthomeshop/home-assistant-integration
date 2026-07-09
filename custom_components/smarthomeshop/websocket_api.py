@@ -698,14 +698,18 @@ def ws_get_schedules(hass: HomeAssistant, connection, msg: dict) -> None:
     )
 
 
+_HHMM = vol.Match(r"^([01]?\d|2[0-3]):[0-5]\d$")
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/schedules/set",
     vol.Optional("id"): str,
-    vol.Required("name"): str,
+    vol.Required("name"): vol.All(str, vol.Length(min=1, max=80)),
     vol.Required("target_entity"): str,
     vol.Required("hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=24)),
-    vol.Required("ready_by"): str,
-    vol.Optional("earliest"): vol.Any(str, None),
+    vol.Required("ready_by"): _HHMM,
+    vol.Optional("earliest"): vol.Any(_HHMM, None),
+    vol.Optional("interruptible"): bool,
     vol.Optional("enabled"): bool,
 })
 @websocket_api.async_response

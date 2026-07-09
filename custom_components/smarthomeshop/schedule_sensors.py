@@ -44,7 +44,8 @@ class SmartHomeShopScheduleBinarySensor(
         """Apply new parameters from the store and refresh."""
         self._schedule = schedule
         self._attr_name = schedule.get("name") or "Smart schedule"
-        self.async_write_ha_state()
+        if self.hass is not None and self.entity_id:
+            self.async_write_ha_state()
 
     def _rows(self) -> list[dict[str, Any]]:
         return (self.coordinator.today() or []) + (self.coordinator.tomorrow() or [])
@@ -56,6 +57,7 @@ class SmartHomeShopScheduleBinarySensor(
             int(self._schedule.get("hours", 0) or 0),
             self._schedule.get("ready_by"),
             self._schedule.get("earliest"),
+            bool(self._schedule.get("interruptible", True)),
         )
 
     @property
@@ -66,7 +68,10 @@ class SmartHomeShopScheduleBinarySensor(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.status == "ok" and bool(self._rows())
+        # Stay available on any cached price data so a transient API hiccup does
+        # not flip the sensor to unavailable and drop the load mid-deadline;
+        # the coordinator keeps the last-known prices when a poll fails.
+        return bool(self._rows())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -80,6 +85,7 @@ class SmartHomeShopScheduleBinarySensor(
             "reason": plan.reason,
             "ready_by": self._schedule.get("ready_by"),
             "earliest": self._schedule.get("earliest"),
+            "interruptible": self._schedule.get("interruptible", True),
             "target_entity": self._schedule.get("target_entity"),
             "enabled": self._schedule.get("enabled", True),
         }

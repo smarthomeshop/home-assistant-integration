@@ -89,9 +89,9 @@ def _setup_schedule_sensors(
     store = hass.data.get(DOMAIN, {}).get("store")
     if store is None:
         return
-    known: dict[str, SmartHomeShopScheduleBinarySensor] = hass.data[DOMAIN].setdefault(
-        "schedule_entities", {}
-    )
+    # Local to this setup (NOT hass.data): a host-entry reload unloads these
+    # entities, so it must start from an empty registry and re-add them all.
+    known: dict[str, SmartHomeShopScheduleBinarySensor] = {}
 
     def _sync() -> None:
         schedules = {s["id"]: s for s in store.get_schedules()}

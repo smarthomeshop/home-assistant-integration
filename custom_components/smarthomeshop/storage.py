@@ -86,17 +86,25 @@ class SmartHomeShopStore:
         return list(self._data.get("schedules", {}).values())
 
     async def async_save_schedule(self, schedule: dict[str, Any]) -> dict[str, Any]:
-        """Create or update a deadline schedule."""
+        """Create or update a deadline schedule.
+
+        On update, merge over the stored entry so created_at and untouched
+        keys survive; an update to a missing id becomes a fresh create.
+        """
+        schedules = self._data.setdefault("schedules", {})
         schedule_id = schedule.get("id")
-        if not schedule_id:
-            schedule_id = str(uuid.uuid4())
-            schedule["id"] = schedule_id
-            schedule["created_at"] = datetime.now().isoformat()
-        schedule["updated_at"] = datetime.now().isoformat()
-        self._data.setdefault("schedules", {})[schedule_id] = schedule
+        existing = schedules.get(schedule_id) if schedule_id else None
+        merged = dict(existing) if existing else {}
+        merged.update(schedule)
+        if not schedule_id or existing is None:
+            schedule_id = schedule_id or str(uuid.uuid4())
+            merged["id"] = schedule_id
+            merged.setdefault("created_at", datetime.now().isoformat())
+        merged["updated_at"] = datetime.now().isoformat()
+        schedules[schedule_id] = merged
         await self.async_save()
-        LOGGER.info("Saved schedule: %s (%s)", schedule.get("name", "Unnamed"), schedule_id)
-        return schedule
+        LOGGER.info("Saved schedule: %s (%s)", merged.get("name", "Unnamed"), schedule_id)
+        return merged
 
     async def async_delete_schedule(self, schedule_id: str) -> bool:
         """Delete a deadline schedule."""
