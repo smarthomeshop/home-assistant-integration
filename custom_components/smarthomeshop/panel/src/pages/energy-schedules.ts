@@ -15,6 +15,8 @@ interface Schedule {
   ready_by: string;
   earliest?: string | null;
   interruptible?: boolean;
+  guard?: boolean;
+  load_power?: number | null;
   enabled?: boolean;
   entity_id?: string | null;
   active?: boolean;
@@ -22,6 +24,8 @@ interface Schedule {
   forced?: boolean;
   reason?: string;
 }
+
+interface Guard { available: string; loadPower: number; }
 
 const dom = (e: string): string => e.split('.')[0];
 const autoId = (id: string) => `shs_sched_${id.slice(0, 8)}`;
@@ -35,21 +39,37 @@ const turn = (target: string, on: boolean) => ({
 // - boot re-asserts the correct state on restart;
 // - there is no blanket default, so 'unavailable'/'unknown' (e.g. the price
 //   feed dropping out) holds the load's last state instead of cutting it.
-function scheduleAutomation(alias: string, flag: string, target: string, watchdogHours: number) {
+// With a fuse guard, the headroom check is START-ONLY: an already-running load
+// is kept on regardless of headroom (its own draw lowers the headroom), so it
+// never switches itself off; a load that is off only starts when there is room.
+function scheduleAutomation(alias: string, flag: string, target: string, watchdogHours: number, guard?: Guard | null) {
+  const trigger: Record<string, unknown>[] = [
+    { platform: 'state', entity_id: flag, to: 'on', id: 'edge_on' },
+    { platform: 'state', entity_id: flag, to: 'off', id: 'edge_off' },
+    { platform: 'homeassistant', event: 'start', id: 'boot' },
+    { platform: 'state', entity_id: target, to: 'on', for: { hours: watchdogHours }, id: 'watchdog' },
+  ];
+  const branches: Record<string, unknown>[] = [
+    { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [turn(target, false)] },
+    { conditions: [{ condition: 'state', entity_id: flag, state: 'off' }], sequence: [turn(target, false)] },
+  ];
+  if (guard) {
+    // Retry the start when headroom recovers.
+    trigger.push({ platform: 'numeric_state', entity_id: guard.available, above: guard.loadPower - 1, id: 'headroom' });
+    // Keep an already-running load on without re-checking headroom.
+    branches.push({ conditions: [{ condition: 'state', entity_id: flag, state: 'on' }, { condition: 'state', entity_id: target, state: 'on' }], sequence: [turn(target, true)] });
+    // Start only when the load is off and there is room for it.
+    branches.push({ conditions: [
+      { condition: 'state', entity_id: flag, state: 'on' },
+      { condition: 'state', entity_id: target, state: 'off' },
+      { condition: 'numeric_state', entity_id: guard.available, above: guard.loadPower - 1 },
+    ], sequence: [turn(target, true)] });
+  } else {
+    branches.push({ conditions: [{ condition: 'state', entity_id: flag, state: 'on' }], sequence: [turn(target, true)] });
+  }
   return {
     alias, description: 'Created with the SmartHomeShop.io panel · smart schedule', mode: 'restart',
-    trigger: [
-      { platform: 'state', entity_id: flag, to: 'on', id: 'edge_on' },
-      { platform: 'state', entity_id: flag, to: 'off', id: 'edge_off' },
-      { platform: 'homeassistant', event: 'start', id: 'boot' },
-      { platform: 'state', entity_id: target, to: 'on', for: { hours: watchdogHours }, id: 'watchdog' },
-    ],
-    condition: [],
-    action: [{ choose: [
-      { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [turn(target, false)] },
-      { conditions: [{ condition: 'state', entity_id: flag, state: 'on' }], sequence: [turn(target, true)] },
-      { conditions: [{ condition: 'state', entity_id: flag, state: 'off' }], sequence: [turn(target, false)] },
-    ] }],
+    trigger, condition: [], action: [{ choose: branches }],
   };
 }
 
@@ -73,6 +93,8 @@ export class EnergySchedules extends LitElement {
   @state() private _readyBy = '07:00';
   @state() private _earliest = '';
   @state() private _interruptible = true;
+  @state() private _guard = false;
+  @state() private _loadPower = 2000;
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; margin-top: 24px; }
@@ -112,6 +134,8 @@ export class EnergySchedules extends LitElement {
     .two > div { flex: 1; }
     .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--primary-text-color); }
     .check input { width: auto; }
+    .row { display: flex; align-items: center; gap: 8px; }
+    .row input { max-width: 140px; }
     .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--divider-color); }
     .btn-ghost { padding: 9px 16px; border: 1px solid var(--divider-color); border-radius: 8px; background: transparent; color: var(--primary-text-color); font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; }
     .create-btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border: none; border-radius: 8px; background: var(--shs-primary); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
@@ -161,7 +185,13 @@ export class EnergySchedules extends LitElement {
     this._readyBy = s?.ready_by || '07:00';
     this._earliest = s?.earliest || '';
     this._interruptible = s?.interruptible ?? true;
+    this._guard = s?.guard ?? false;
+    this._loadPower = s?.load_power ?? 2000;
     this._modal = true;
+  }
+
+  private _availableEntity(): string | undefined {
+    return Object.keys(this.hass.states || {}).find(e => e.includes('available_grid_power'));
   }
 
   private async _save(): Promise<void> {
@@ -175,6 +205,8 @@ export class EnergySchedules extends LitElement {
     this._busy = true;
     this._error = '';
     try {
+      const avail = this._availableEntity();
+      const guardOn = this._guard && !!avail;
       const res = await this.hass.callWS<{ schedule: Schedule }>({
         type: 'smarthomeshop/schedules/set',
         ...(this._editId ? { id: this._editId } : {}),
@@ -184,6 +216,8 @@ export class EnergySchedules extends LitElement {
         ready_by: this._readyBy,
         earliest: this._earliest || null,
         interruptible: this._interruptible,
+        guard: guardOn,
+        load_power: guardOn ? Math.max(1, Math.round(this._loadPower)) : null,
       });
       const sched = res.schedule;
       this._editId = sched.id; // so a retry updates instead of duplicating
@@ -200,8 +234,9 @@ export class EnergySchedules extends LitElement {
         this._busy = false;
         return;
       }
+      const guardObj = (guardOn && avail) ? { available: avail, loadPower: Math.max(1, Math.round(this._loadPower)) } : null;
       await this.hass.callApi('POST', `config/automation/config/${autoId(sched.id)}`,
-        scheduleAutomation(`${this.deviceName || 'Schedule'} – ${sched.name}`, flag, this._target, hours + 2));
+        scheduleAutomation(`${this.deviceName || 'Schedule'} – ${sched.name}`, flag, this._target, hours + 2, guardObj));
       await this._loadSchedules();
       this._modal = false;
     } catch (err: any) {
@@ -258,7 +293,7 @@ export class EnergySchedules extends LitElement {
         <div class="item-icon"><ha-icon icon="mdi:calendar-clock"></ha-icon></div>
         <div class="item-main">
           <div class="item-name">${s.name}</div>
-          <div class="item-meta">${this._targetName(s.target_entity)} · ${s.hours}h · ready by ${s.ready_by}${s.earliest ? ` · from ${s.earliest}` : ''}${s.interruptible === false ? ' · one block' : ''}</div>
+          <div class="item-meta">${this._targetName(s.target_entity)} · ${s.hours}h · ready by ${s.ready_by}${s.earliest ? ` · from ${s.earliest}` : ''}${s.interruptible === false ? ' · one block' : ''}${s.guard ? ' · fuse-safe' : ''}</div>
         </div>
         ${badge}
         ${isAdmin ? html`
@@ -316,6 +351,22 @@ export class EnergySchedules extends LitElement {
                 Run in one continuous block (for loads that can’t pause, e.g. a dishwasher)
               </label>
             </div>
+            ${this._availableEntity() ? html`
+              <div class="field">
+                <label class="check">
+                  <input type="checkbox" ?checked=${this._guard}
+                    @change=${(e: Event) => { this._guard = (e.target as HTMLInputElement).checked; }} />
+                  Don’t start if it would overload my main fuse
+                </label>
+              </div>
+              ${this._guard ? html`
+                <div class="field">
+                  <label class="f">This load draws about</label>
+                  <div class="row"><input type="number" min="100" max="25000" step="100" .value=${String(this._loadPower)}
+                    @input=${(e: Event) => { this._loadPower = parseFloat((e.target as HTMLInputElement).value); }} /><span style="font-size:12px;color:var(--secondary-text-color);">W</span></div>
+                  <div class="help">The schedule waits for enough free capacity on your P1 connection before switching this on. A load that is already running is never cut off.</div>
+                </div>` : nothing}
+            ` : nothing}
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
           </div>
           <div class="modal-foot">

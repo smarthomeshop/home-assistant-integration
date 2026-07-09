@@ -712,6 +712,8 @@ _HHMM = vol.Match(r"^([01]?\d|2[0-3]):[0-5]\d$")
     vol.Required("ready_by"): _HHMM,
     vol.Optional("earliest"): vol.Any(_HHMM, None),
     vol.Optional("interruptible"): bool,
+    vol.Optional("guard"): bool,
+    vol.Optional("load_power"): vol.Any(None, vol.All(vol.Coerce(float), vol.Range(min=0, max=25000))),
     vol.Optional("enabled"): bool,
 })
 @websocket_api.async_response
@@ -730,7 +732,8 @@ async def ws_set_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
         return
     schedule = {
         k: msg[k]
-        for k in ("id", "name", "target_entity", "hours", "ready_by", "earliest", "enabled")
+        for k in ("id", "name", "target_entity", "hours", "ready_by", "earliest",
+                  "interruptible", "guard", "load_power", "enabled")
         if k in msg
     }
     saved = await store.async_save_schedule(schedule)
