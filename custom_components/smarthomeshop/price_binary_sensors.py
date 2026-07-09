@@ -130,10 +130,16 @@ class SmartHomeShopCheapestWindowNowBinarySensor(
         block = self.coordinator.cheapest_block(self._hours)
         if not block or not block.get("start") or not block.get("end"):
             return None
-        start = dt_util.parse_datetime(block["start"])
-        end = dt_util.parse_datetime(block["end"])
+        start = dt_util.parse_datetime(str(block["start"]))
+        end = dt_util.parse_datetime(str(block["end"]))
         if start is None or end is None:
             return None
+        # Guard against a naive timestamp (would raise when compared to an
+        # aware now()): assume Home Assistant's local timezone.
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=dt_util.get_default_time_zone())
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=dt_util.get_default_time_zone())
         return start, end
 
     @property

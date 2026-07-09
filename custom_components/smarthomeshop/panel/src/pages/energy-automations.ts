@@ -2,14 +2,22 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 
-// Control-action scenarios for p1/waterp1 with a connected dynamic contract.
-// These turn Home Assistant into an active steerer: run loads in the cheapest
-// hours, on solar surplus, or pause them at price peaks — as normal, editable
-// HA automations with safety (a max-runtime watchdog, hysteresis + dwell, and
-// a contract-connected condition) baked into every generated automation.
+// Control-action scenarios for p1/waterp1 with a connected dynamic contract
+// (solar-surplus scenarios also work with only solar). These turn Home
+// Assistant into an active steerer: run loads in the cheapest hours, on solar
+// surplus, or pause them at price peaks — as normal, editable HA automations.
+//
+// Safety is baked into every generated automation:
+//  - the OFF/stop path is NEVER gated by the contract or by price availability,
+//    so a load can always be turned off (only the ON/start path is gated);
+//  - a Home Assistant "start" trigger re-asserts the correct state on restart,
+//    so a window-end missed while HA was down can't leave a load stuck on;
+//  - switch loads get a max-runtime watchdog that force-offs them;
+//  - number targets stop at their own minimum value (not a hardcoded 0);
+//  - solar surplus uses hysteresis + dwell so devices don't flap.
 
-type Domain = 'switch' | 'input_boolean' | 'climate' | 'number' | 'select' | 'water_heater';
-type Requires = 'contract' | 'solar' | 'contract+solar';
+type Domain = 'switch' | 'input_boolean' | 'climate' | 'number' | 'water_heater';
+type Requires = 'contract' | 'solar';
 
 interface EParam {
   key: string;
@@ -26,7 +34,8 @@ interface BuildArgs {
   target: string;
   p: Record<string, number>;
   px: Record<string, string | null>;
-  net?: string;
+  net?: string | null;
+  min: number;
   deviceName: string;
 }
 
@@ -39,14 +48,17 @@ interface EnergyScenario {
   requires: Requires;
   targetDomains: Domain[];
   targetLabel: string;
+  aliasStem: string;
   params: EParam[];
   note?: string;
   build: (a: BuildArgs) => Record<string, unknown>;
 }
 
 const DESCRIPTION = 'Created with the SmartHomeShop.io panel · smart energy';
+const BOOT = { platform: 'homeassistant', event: 'start', id: 'boot' };
 
 const dom = (entityId: string): string => entityId.split('.')[0];
+const isSwitch = (target: string) => dom(target) === 'switch' || dom(target) === 'input_boolean';
 const turn = (target: string, on: boolean) => ({
   service: `${dom(target)}.${on ? 'turn_on' : 'turn_off'}`,
   target: { entity_id: target },
@@ -60,7 +72,37 @@ const setVal = (target: string, value: number) => {
 const contractCond = (px: Record<string, string | null>) => ({
   condition: 'state', entity_id: px.contract_active, state: 'on',
 });
-const isSwitch = (target: string) => dom(target) === 'switch' || dom(target) === 'input_boolean';
+
+// On/off actions for a target that is either a switch or a control number.
+// onValue = the number value to drive when starting; number targets stop at
+// their own minimum (min) rather than a hardcoded 0 (which many reject).
+function acts(target: string, onValue: number, min: number) {
+  if (isSwitch(target)) return { startAct: turn(target, true), stopAct: turn(target, false), switchTarget: true };
+  return { startAct: setVal(target, onValue), stopAct: setVal(target, min), switchTarget: false };
+}
+
+// Steer a target while a binary "flag" entity is on. The ON branch is gated by
+// the contract; the OFF branch (default) and the watchdog never are. A boot
+// trigger re-asserts the right state after a restart.
+function steerOnFlag(o: {
+  alias: string; flag: string | null; target: string;
+  startAct: unknown; stopAct: unknown; contract: unknown; watchdogHours?: number;
+}) {
+  const trigger: Record<string, unknown>[] = [
+    { platform: 'state', entity_id: o.flag, to: 'on', id: 'edge' },
+    { platform: 'state', entity_id: o.flag, to: ['off', 'unavailable'], id: 'edge' },
+    BOOT,
+  ];
+  if (o.watchdogHours) trigger.push({ platform: 'state', entity_id: o.target, to: 'on', for: { hours: o.watchdogHours }, id: 'watchdog' });
+  return {
+    alias: o.alias, description: DESCRIPTION, mode: 'restart',
+    trigger, condition: [],
+    action: [{ choose: [
+      { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [o.stopAct] },
+      { conditions: [{ condition: 'state', entity_id: o.flag, state: 'on' }, o.contract], sequence: [o.startAct] },
+    ], default: [o.stopAct] }],
+  };
+}
 
 const SCENARIOS: EnergyScenario[] = [
   {
@@ -69,23 +111,15 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'Switch a deferrable load (boiler, pump, ventilation) on during the cheapest contiguous block of the day and off when it ends.',
     icon: 'mdi:clock-star-four-points-outline', color: '#22c55e',
     requires: 'contract', targetDomains: ['switch', 'input_boolean'], targetLabel: 'Device to run',
+    aliasStem: 'Run in cheapest',
     params: [{ key: 'hours', label: 'Block length', default: 3, min: 1, max: 6, step: 1, unit: 'h' }],
-    build: ({ target, p, px, deviceName }) => {
+    build: ({ target, p, px, min, deviceName }) => {
       const N = p.hours;
-      const win = px[`cheapest_${N}h_window_now`];
-      return {
-        alias: `${deviceName} – Run in cheapest ${N}h`, description: DESCRIPTION, mode: 'restart',
-        trigger: [
-          { platform: 'state', entity_id: win, to: 'on', id: 'start' },
-          { platform: 'state', entity_id: win, to: 'off', id: 'stop' },
-          { platform: 'state', entity_id: target, to: 'on', for: { hours: N + 1 }, id: 'watchdog' },
-        ],
-        condition: [],
-        action: [{ choose: [
-          { conditions: [{ condition: 'trigger', id: 'start' }, contractCond(px)], sequence: [turn(target, true)] },
-          { conditions: [{ condition: 'trigger', id: ['stop', 'watchdog'] }], sequence: [turn(target, false)] },
-        ] }],
-      };
+      const a = acts(target, 0, min);
+      return steerOnFlag({
+        alias: `${deviceName} – Run in cheapest ${N}h`, flag: px[`cheapest_${N}h_window_now`] ?? null,
+        target, startAct: a.startAct, stopAct: a.stopAct, contract: contractCond(px), watchdogHours: N + 1,
+      });
     },
   },
   {
@@ -94,39 +128,37 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'Run an opportunistic load whenever the price is at/below today’s average, and stop it when it rises above.',
     icon: 'mdi:cash-clock', color: '#16a34a',
     requires: 'contract', targetDomains: ['switch', 'input_boolean'], targetLabel: 'Device to run',
+    aliasStem: 'Run while cheap',
     params: [{ key: 'max_runtime', label: 'Safety max runtime', default: 6, min: 1, max: 24, step: 1, unit: 'h', help: 'Forces the load off after this long, even if something goes wrong.' }],
     note: '“Cheap” here means below today’s average price — not the single cheapest window. Use “Run in the cheapest hours” for that.',
-    build: ({ target, p, px, deviceName }) => ({
-      alias: `${deviceName} – Run while cheap`, description: DESCRIPTION, mode: 'restart',
-      trigger: [
-        { platform: 'state', entity_id: px.cheap_now, to: 'on', id: 'start' },
-        { platform: 'state', entity_id: px.cheap_now, to: 'off', id: 'stop' },
-        { platform: 'state', entity_id: target, to: 'on', for: { hours: p.max_runtime }, id: 'watchdog' },
-      ],
-      condition: [],
-      action: [{ choose: [
-        { conditions: [{ condition: 'trigger', id: 'start' }, contractCond(px)], sequence: [turn(target, true)] },
-        { conditions: [{ condition: 'trigger', id: ['stop', 'watchdog'] }], sequence: [turn(target, false)] },
-      ] }],
-    }),
+    build: ({ target, p, px, min, deviceName }) => {
+      const a = acts(target, 0, min);
+      return steerOnFlag({
+        alias: `${deviceName} – Run while cheap`, flag: px.cheap_now ?? null,
+        target, startAct: a.startAct, stopAct: a.stopAct, contract: contractCond(px), watchdogHours: p.max_runtime,
+      });
+    },
   },
   {
     key: 'pause_on_price_peak',
     title: 'Pause during price peaks',
     desc: 'Switch a load off when the price level hits its daily peak and back on when it drops. Trims the most expensive hours.',
     icon: 'mdi:transmission-tower-off', color: '#e11d48',
-    requires: 'contract', targetDomains: ['switch', 'input_boolean', 'water_heater'], targetLabel: 'Device to pause',
+    requires: 'contract', targetDomains: ['switch', 'input_boolean'], targetLabel: 'Device to pause',
+    aliasStem: 'Pause on price peak',
     params: [],
+    note: 'This automation fully controls the chosen device: it forces it off at price peaks and back on afterwards.',
     build: ({ target, px, deviceName }) => ({
       alias: `${deviceName} – Pause on price peak`, description: DESCRIPTION, mode: 'restart',
       trigger: [
         { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'pause' },
-        { platform: 'state', entity_id: px.price_level, from: 'peak', id: 'resume' },
+        { platform: 'state', entity_id: px.price_level, to: ['very_low', 'low', 'medium', 'high'], id: 'resume' },
       ],
-      condition: [contractCond(px)],
+      condition: [],
       action: [{ choose: [
-        { conditions: [{ condition: 'trigger', id: 'pause' }], sequence: [turn(target, false)] },
-      ], default: [turn(target, true)] }],
+        { conditions: [{ condition: 'trigger', id: 'pause' }, contractCond(px)], sequence: [turn(target, false)] },
+        { conditions: [{ condition: 'trigger', id: 'resume' }], sequence: [turn(target, true)] },
+      ] }],
     }),
   },
   {
@@ -135,26 +167,24 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'Raise a thermostat setpoint during the cheapest block to store comfort, then lower it during the price peak. Uses the home as thermal storage.',
     icon: 'mdi:home-thermometer', color: '#f59e0b',
     requires: 'contract', targetDomains: ['climate'], targetLabel: 'Thermostat',
+    aliasStem: 'Pre-heat cheap',
     params: [
       { key: 'hours', label: 'Cheap block', default: 2, min: 1, max: 6, step: 1, unit: 'h' },
       { key: 'comfort', label: 'Comfort temp', default: 21, min: 5, max: 30, step: 0.5, unit: '°C' },
       { key: 'eco', label: 'Eco temp (peak)', default: 18, min: 5, max: 30, step: 0.5, unit: '°C' },
     ],
-    build: ({ target, p, px, deviceName }) => {
-      const win = px[`cheapest_${p.hours}h_window_now`];
-      return {
-        alias: `${deviceName} – Pre-heat cheap, ease at peak`, description: DESCRIPTION, mode: 'restart',
-        trigger: [
-          { platform: 'state', entity_id: win, to: 'on', id: 'cheap' },
-          { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'peak' },
-        ],
-        condition: [contractCond(px)],
-        action: [{ choose: [
-          { conditions: [{ condition: 'trigger', id: 'cheap' }], sequence: [setVal(target, p.comfort)] },
-          { conditions: [{ condition: 'trigger', id: 'peak' }], sequence: [setVal(target, p.eco)] },
-        ] }],
-      };
-    },
+    build: ({ target, p, px, deviceName }) => ({
+      alias: `${deviceName} – Pre-heat cheap, ease at peak`, description: DESCRIPTION, mode: 'restart',
+      trigger: [
+        { platform: 'state', entity_id: px[`cheapest_${p.hours}h_window_now`] ?? null, to: 'on', id: 'cheap' },
+        { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'peak' },
+      ],
+      condition: [],
+      action: [{ choose: [
+        { conditions: [{ condition: 'trigger', id: 'cheap' }, contractCond(px)], sequence: [setVal(target, p.comfort)] },
+        { conditions: [{ condition: 'trigger', id: 'peak' }], sequence: [setVal(target, p.eco)] },
+      ] }],
+    }),
   },
   {
     key: 'solar_surplus_switch',
@@ -162,6 +192,7 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'Switch a load on when the house exports more than it needs, and off when you would start importing — with hysteresis + dwell so it does not flap.',
     icon: 'mdi:solar-power-variant', color: '#eab308',
     requires: 'solar', targetDomains: ['switch', 'input_boolean'], targetLabel: 'Device to run on surplus',
+    aliasStem: 'Solar surplus',
     params: [
       { key: 'device_power', label: 'Device power', default: 1400, min: 100, max: 11000, step: 50, unit: 'W', help: 'On when export exceeds this. Its own draw creates the off-hysteresis.' },
       { key: 'on_delay', label: 'On after', default: 5, min: 1, max: 30, step: 1, unit: 'min' },
@@ -171,8 +202,8 @@ const SCENARIOS: EnergyScenario[] = [
     build: ({ target, p, net, deviceName }) => ({
       alias: `${deviceName} – Solar surplus`, description: DESCRIPTION, mode: 'restart',
       trigger: [
-        { platform: 'numeric_state', entity_id: net, below: -p.device_power, for: { minutes: p.on_delay }, id: 'on' },
-        { platform: 'numeric_state', entity_id: net, above: 50, for: { minutes: p.off_delay }, id: 'off' },
+        { platform: 'numeric_state', entity_id: net ?? null, below: -p.device_power, for: { minutes: p.on_delay }, id: 'on' },
+        { platform: 'numeric_state', entity_id: net ?? null, above: 50, for: { minutes: p.off_delay }, id: 'off' },
         { platform: 'state', entity_id: target, to: 'on', for: { hours: p.max_runtime }, id: 'watchdog' },
       ],
       condition: [],
@@ -188,6 +219,7 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'On real solar surplus, raise a water-heater/heat-pump setpoint (or a charge-current number) to self-consume instead of exporting; revert when surplus fades.',
     icon: 'mdi:water-boiler', color: '#f97316',
     requires: 'solar', targetDomains: ['climate', 'water_heater', 'number'], targetLabel: 'Device to boost',
+    aliasStem: 'Heat on solar surplus',
     params: [
       { key: 'device_power', label: 'Surplus needed', default: 1500, min: 100, max: 11000, step: 50, unit: 'W' },
       { key: 'boost', label: 'Boost value', default: 55, min: 0, max: 80, step: 1, unit: '°C / value' },
@@ -198,8 +230,8 @@ const SCENARIOS: EnergyScenario[] = [
     build: ({ target, p, net, deviceName }) => ({
       alias: `${deviceName} – Heat on solar surplus`, description: DESCRIPTION, mode: 'restart',
       trigger: [
-        { platform: 'numeric_state', entity_id: net, below: -p.device_power, for: { minutes: p.on_delay }, id: 'boost' },
-        { platform: 'numeric_state', entity_id: net, above: 50, for: { minutes: p.off_delay }, id: 'normal' },
+        { platform: 'numeric_state', entity_id: net ?? null, below: -p.device_power, for: { minutes: p.on_delay }, id: 'boost' },
+        { platform: 'numeric_state', entity_id: net ?? null, above: 50, for: { minutes: p.off_delay }, id: 'normal' },
       ],
       condition: [],
       action: [{ choose: [
@@ -214,16 +246,18 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'When the feed-in price goes negative (you would pay to export), switch on a diversion load to self-consume instead. Off again when feed-in is positive.',
     icon: 'mdi:transmission-tower-import', color: '#8b5cf6',
     requires: 'contract', targetDomains: ['switch', 'input_boolean'], targetLabel: 'Diversion load',
+    aliasStem: 'Self-consume on negative feed-in',
     params: [],
     build: ({ target, px, deviceName }) => ({
       alias: `${deviceName} – Self-consume on negative feed-in`, description: DESCRIPTION, mode: 'restart',
       trigger: [
         { platform: 'numeric_state', entity_id: px.feed_in_price, below: 0, id: 'on' },
         { platform: 'numeric_state', entity_id: px.feed_in_price, above: 0, id: 'off' },
+        BOOT,
       ],
-      condition: [contractCond(px)],
+      condition: [],
       action: [{ choose: [
-        { conditions: [{ condition: 'trigger', id: 'on' }], sequence: [turn(target, true)] },
+        { conditions: [{ condition: 'numeric_state', entity_id: px.feed_in_price, below: 0 }, contractCond(px)], sequence: [turn(target, true)] },
       ], default: [turn(target, false)] }],
     }),
   },
@@ -233,57 +267,42 @@ const SCENARIOS: EnergyScenario[] = [
     desc: 'Start EV charging at the beginning of the cheapest block and stop at the end.',
     icon: 'mdi:car-electric', color: '#0ea5e9',
     requires: 'contract', targetDomains: ['switch', 'number'], targetLabel: 'Charger switch or charge-current',
+    aliasStem: 'Charge EV cheapest',
     params: [
       { key: 'hours', label: 'Charge window', default: 4, min: 1, max: 6, step: 1, unit: 'h' },
       { key: 'current', label: 'Charge current (for a number target)', default: 16, min: 6, max: 32, step: 1, unit: 'A' },
     ],
     note: 'This does NOT guarantee a “ready by” time yet — it simply charges during the cheapest block. A deadline scheduler is planned.',
-    build: ({ target, p, px, deviceName }) => {
-      const win = px[`cheapest_${p.hours}h_window_now`];
-      const startAct = isSwitch(target) ? turn(target, true) : setVal(target, p.current);
-      const stopAct = isSwitch(target) ? turn(target, false) : setVal(target, 0);
-      const trigger: Record<string, unknown>[] = [
-        { platform: 'state', entity_id: win, to: 'on', id: 'start' },
-        { platform: 'state', entity_id: win, to: 'off', id: 'stop' },
-      ];
-      if (isSwitch(target)) trigger.push({ platform: 'state', entity_id: target, to: 'on', for: { hours: p.hours + 1 }, id: 'watchdog' });
-      return {
-        alias: `${deviceName} – Charge EV cheapest ${p.hours}h`, description: DESCRIPTION, mode: 'restart',
-        trigger, condition: [],
-        action: [{ choose: [
-          { conditions: [{ condition: 'trigger', id: 'start' }, contractCond(px)], sequence: [startAct] },
-          { conditions: [{ condition: 'trigger', id: isSwitch(target) ? ['stop', 'watchdog'] : ['stop'] }], sequence: [stopAct] },
-        ] }],
-      };
+    build: ({ target, p, px, min, deviceName }) => {
+      const N = p.hours;
+      const a = acts(target, p.current, min);
+      return steerOnFlag({
+        alias: `${deviceName} – Charge EV cheapest ${N}h`, flag: px[`cheapest_${N}h_window_now`] ?? null,
+        target, startAct: a.startAct, stopAct: a.stopAct, contract: contractCond(px),
+        watchdogHours: a.switchTarget ? N + 1 : undefined,
+      });
     },
   },
   {
     key: 'battery_charge_cheap_hold_peak',
-    title: 'Battery: charge cheap, hold for the peak',
-    desc: 'Coarse arbitrage without a forecast: charge the battery during the cheapest block and stop/hold at the price peak. A preview of the battery tier.',
+    title: 'Charge the battery in the cheapest hours',
+    desc: 'Coarse arbitrage without a forecast: charge the battery during the cheapest block and stop when it ends, so it is full for the expensive hours. A preview of the battery tier.',
     icon: 'mdi:battery-charging-high', color: '#10b981',
     requires: 'contract', targetDomains: ['switch', 'number'], targetLabel: 'Grid-charge switch or power (number)',
+    aliasStem: 'Battery charge cheap',
     params: [
       { key: 'hours', label: 'Charge block', default: 2, min: 1, max: 6, step: 1, unit: 'h' },
       { key: 'power', label: 'Charge power (for a number target)', default: 2000, min: 100, max: 10000, step: 100, unit: 'W' },
     ],
     note: 'Battery brands differ — pick your inverter’s grid-charge switch or charge-power number. Fine-tune the created automation for your model.',
-    build: ({ target, p, px, deviceName }) => {
-      const win = px[`cheapest_${p.hours}h_window_now`];
-      const chargeAct = isSwitch(target) ? turn(target, true) : setVal(target, p.power);
-      const stopAct = isSwitch(target) ? turn(target, false) : setVal(target, 0);
-      return {
-        alias: `${deviceName} – Battery charge cheap, hold peak`, description: DESCRIPTION, mode: 'restart',
-        trigger: [
-          { platform: 'state', entity_id: win, to: 'on', id: 'charge' },
-          { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'discharge' },
-        ],
-        condition: [contractCond(px)],
-        action: [{ choose: [
-          { conditions: [{ condition: 'trigger', id: 'charge' }], sequence: [chargeAct] },
-          { conditions: [{ condition: 'trigger', id: 'discharge' }], sequence: [stopAct] },
-        ] }],
-      };
+    build: ({ target, p, px, min, deviceName }) => {
+      const N = p.hours;
+      const a = acts(target, p.power, min);
+      return steerOnFlag({
+        alias: `${deviceName} – Battery charge cheap ${N}h`, flag: px[`cheapest_${N}h_window_now`] ?? null,
+        target, startAct: a.startAct, stopAct: a.stopAct, contract: contractCond(px),
+        watchdogHours: a.switchTarget ? N + 1 : undefined,
+      });
     },
   },
 ];
@@ -298,7 +317,7 @@ export class EnergyAutomations extends LitElement {
   @state() private _priceEntities: Record<string, string | null> = {};
   @state() private _contractActive = false;
   @state() private _loaded = false;
-  @state() private _related: string[] = [];
+  @state() private _created: Record<string, string> = {};
   @state() private _modal: EnergyScenario | null = null;
   @state() private _target = '';
   @state() private _params: Record<string, number> = {};
@@ -356,34 +375,25 @@ export class EnergyAutomations extends LitElement {
   }
 
   private async _load(): Promise<void> {
+    if (!this.hass) return;
     try {
       const px = await this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' });
       this._priceEntities = px.entities || {};
       const cfg = await this.hass.callWS<{ contract_active?: boolean }>({ type: 'smarthomeshop/device/config', device_id: this.deviceId });
       this._contractActive = !!cfg.contract_active;
     } catch (err) { console.error('energy-automations: load failed', err); }
-    await this._loadRelated();
     this._loaded = true;
   }
 
-  private async _loadRelated(): Promise<void> {
-    try {
-      const res = await this.hass.callWS<Record<string, string[]>>({ type: 'search/related', item_type: 'device', item_id: this.deviceId });
-      this._related = res.automation || [];
-    } catch { this._related = []; }
-  }
-
   private _netEntity(): string | undefined {
-    const net = this.deviceEntities.find(e => e.entity_id.includes('net_grid_power'));
-    if (net) return net.entity_id;
-    return this.deviceEntities.find(e => e.entity_id.endsWith('_power_produced'))?.entity_id;
+    // Signed net grid power only (+import/-export). A raw export/production
+    // sensor is not a valid substitute for the surplus triggers.
+    return this.deviceEntities.find(e => e.entity_id.includes('net_grid_power'))?.entity_id;
   }
 
   private _available(s: EnergyScenario): boolean {
-    const needsContract = s.requires.includes('contract');
-    const needsSolar = s.requires.includes('solar');
-    if (needsContract && !this._contractActive) return false;
-    if (needsSolar && !this._netEntity()) return false;
+    if (s.requires === 'contract') return this._contractActive;
+    if (s.requires === 'solar') return !!this._netEntity();
     return true;
   }
 
@@ -397,31 +407,18 @@ export class EnergyAutomations extends LitElement {
   }
 
   private _createdId(s: EnergyScenario): string | undefined {
+    if (this._created[s.key]) return this._created[s.key];
+    // These automations trigger on the price device, not this device, so
+    // search/related can't see them — scan all automations by alias stem.
     const prefix = `${this.deviceName || 'the device'} – `;
-    for (const entityId of this._related) {
-      const st = this.hass.states[entityId];
-      const name = st?.attributes?.friendly_name as string | undefined;
-      if (name && name.startsWith(prefix) && this._aliasMatches(s, name)) {
-        return (st.attributes?.id as string | undefined) || undefined;
+    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
+      if (!entityId.startsWith('automation.')) continue;
+      const name = st.attributes?.friendly_name as string | undefined;
+      if (name && name.startsWith(prefix) && name.includes(s.aliasStem)) {
+        return (st.attributes?.id as string | undefined) || 'existing';
       }
     }
     return undefined;
-  }
-
-  private _aliasMatches(s: EnergyScenario, friendly: string): boolean {
-    // Match the stable stem of each scenario's alias (block length varies).
-    const stems: Record<string, string> = {
-      run_cheapest_block: 'Run in cheapest',
-      run_while_cheap_now: 'Run while cheap',
-      pause_on_price_peak: 'Pause on price peak',
-      precharge_climate_before_peak: 'Pre-heat cheap',
-      solar_surplus_switch: 'Solar surplus',
-      solar_surplus_heat_boost: 'Heat on solar surplus',
-      dump_load_on_negative_feed_in: 'Self-consume on negative feed-in',
-      ev_charge_cheapest_block: 'Charge EV cheapest',
-      battery_charge_cheap_hold_peak: 'Battery charge cheap',
-    };
-    return friendly.includes(stems[s.key] || s.title);
   }
 
   private _openModal(s: EnergyScenario): void {
@@ -435,6 +432,25 @@ export class EnergyAutomations extends LitElement {
 
   private _closeModal(): void { this._modal = null; }
 
+  private _sanitized(s: EnergyScenario): { params: Record<string, number>; min: number } {
+    const params: Record<string, number> = {};
+    for (const param of s.params) {
+      let v = this._params[param.key];
+      if (typeof v !== 'number' || Number.isNaN(v)) v = param.default;
+      if (param.min != null && v < param.min) v = param.min;
+      if (param.max != null && v > param.max) v = param.max;
+      if (param.key === 'hours') v = Math.max(1, Math.min(6, Math.round(v)));
+      params[param.key] = v;
+    }
+    let min = 0;
+    const st = this.hass.states[this._target];
+    if (st && dom(this._target) === 'number') {
+      const m = Number(st.attributes?.min);
+      if (!Number.isNaN(m)) min = m;
+    }
+    return { params, min };
+  }
+
   private async _create(): Promise<void> {
     const s = this._modal;
     if (!s || !this._target || this._busy) return;
@@ -442,16 +458,19 @@ export class EnergyAutomations extends LitElement {
     this._busy = true;
     this._error = '';
     try {
+      const { params, min } = this._sanitized(s);
       const config = s.build({
-        target: this._target,
-        p: this._params,
-        px: this._priceEntities,
-        net: this._netEntity(),
-        deviceName: this.deviceName || 'the device',
+        target: this._target, p: params, px: this._priceEntities,
+        net: this._netEntity(), min, deviceName: this.deviceName || 'the device',
       });
+      if (JSON.stringify(config).includes('"entity_id":null')) {
+        this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
+        this._busy = false;
+        return;
+      }
       const id = `shs_${this.deviceId.slice(0, 6)}_${s.key}_${Date.now()}`;
       await this.hass.callApi('POST', `config/automation/config/${id}`, config);
-      window.setTimeout(() => this._loadRelated(), 1200);
+      this._created = { ...this._created, [s.key]: id };
       this._closeModal();
     } catch (err: any) {
       console.error('energy-automations: create failed', err);
@@ -470,12 +489,12 @@ export class EnergyAutomations extends LitElement {
           <div>
             <div class="card-title">${s.title}</div>
             <div class="card-desc">${s.desc}</div>
-            ${s.requires.includes('solar') ? html`<span class="tag solar">Needs solar</span>` : nothing}
+            ${s.requires === 'solar' ? html`<span class="tag solar">Needs solar</span>` : nothing}
           </div>
         </div>
         <div class="card-foot">
           ${createdId ? html`
-            <span class="created"><ha-icon icon="mdi:check-circle" style="--mdc-icon-size:15px;"></ha-icon> Created · <a href="/config/automation/edit/${createdId}">Edit</a></span>
+            <span class="created"><ha-icon icon="mdi:check-circle" style="--mdc-icon-size:15px;"></ha-icon> Created${createdId !== 'existing' ? html` · <a href="/config/automation/edit/${createdId}">Edit</a>` : nothing}</span>
           ` : html`
             <button class="create-btn" ?disabled=${!isAdmin} @click=${() => this._openModal(s)}><ha-icon icon="mdi:plus"></ha-icon> Set up</button>
           `}
@@ -536,14 +555,14 @@ export class EnergyAutomations extends LitElement {
 
   protected render() {
     if (!this._loaded) return nothing;
-    if (!this._contractActive) return nothing; // group only makes sense with a dynamic contract
+    if (!this._contractActive && !this._netEntity()) return nothing;
 
     const scenarios = SCENARIOS.filter(s => this._available(s));
     if (scenarios.length === 0) return nothing;
 
     return html`
       <div class="head">
-        <div class="head-title">Smart energy · dynamic contract</div>
+        <div class="head-title">Smart energy</div>
         <div class="head-sub">
           Let Home Assistant steer a device to save money: run it in the cheapest hours, on your solar
           surplus, or pause it at price peaks. Each becomes a normal HA automation with a safety max-runtime

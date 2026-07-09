@@ -35,7 +35,7 @@ async def async_setup_entry(
     coordinator = config_entry.runtime_data
     product_type = config_entry.data.get(CONF_PRODUCT_TYPE)
 
-    entities: list[SmartHomeShopWaterBinarySensor] = []
+    entities: list[BinarySensorEntity] = []
 
     # Water product binary sensors (shared between WaterP1MeterKit, WaterMeterKit)
     # WaterFlowKit uses ESPHome sensors directly + utility meters
