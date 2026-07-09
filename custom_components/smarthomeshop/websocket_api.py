@@ -570,6 +570,7 @@ async def ws_get_contracts(hass: HomeAssistant, connection, msg: dict) -> None:
     vol.Required("type"): "smarthomeshop/account/set",
     vol.Optional("api_key"): vol.Any(str, None),
     vol.Optional("base_url"): vol.Any(str, None),
+    vol.Optional("contract_id"): vol.Any(str, int, None),
 })
 @websocket_api.async_response
 async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
