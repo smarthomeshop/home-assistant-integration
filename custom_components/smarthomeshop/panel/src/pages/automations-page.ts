@@ -1,6 +1,9 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
+import './energy-automations';
+
+const ENERGY_PRODUCTS = ['p1meterkit', 'waterp1meterkit'];
 
 type TriggerKind = 'above' | 'below' | 'to_on' | 'to_off';
 type Group = 'climate' | 'water' | 'energy';
@@ -499,6 +502,15 @@ export class AutomationsPage extends LitElement {
         <div class="warn">You need an administrator account to create automations.</div>
       ` : nothing}
       ${this._error && !this._modalScenario ? html`<div class="warn">${this._error}</div>` : nothing}
+
+      ${ENERGY_PRODUCTS.includes(this.productType) ? html`
+        <shs-energy-automations
+          .hass=${this.hass}
+          .deviceId=${this.deviceId}
+          .deviceName=${this.deviceName}
+          .deviceEntities=${this._entities}
+        ></shs-energy-automations>
+      ` : nothing}
 
       ${!anyScenario ? html`
         <div class="empty">No quick automations available for this device type yet.</div>

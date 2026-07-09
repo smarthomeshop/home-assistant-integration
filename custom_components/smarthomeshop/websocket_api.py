@@ -62,6 +62,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
     websocket_api.async_register_command(hass, ws_refresh_account)
+    websocket_api.async_register_command(hass, ws_get_price_entities)
     websocket_api.async_register_command(hass, ws_get_contracts)
 
 
@@ -638,6 +639,32 @@ async def ws_refresh_account(hass: HomeAssistant, connection, msg: dict) -> None
     if prices is not None:
         await prices.async_refresh()
     connection.send_result(msg["id"], _account_result(hass))
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/prices/entities"})
+@callback
+def ws_get_price_entities(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Resolve the energy-price entity_ids so automations trigger on the right
+    entities (looked up by unique_id, robust against user renames)."""
+    ent_reg = er.async_get(hass)
+
+    def eid(platform: str, key: str) -> str | None:
+        return ent_reg.async_get_entity_id(platform, DOMAIN, f"{DOMAIN}_price_{key}")
+
+    entities: dict[str, str | None] = {
+        "electricity_price": eid("sensor", "electricity_price"),
+        "price_level": eid("sensor", "electricity_price_level"),
+        "feed_in_price": eid("sensor", "electricity_feed_in_price"),
+        "cheap_now": eid("binary_sensor", "cheap_now"),
+        "contract_active": eid("binary_sensor", "contract_active"),
+        "tomorrow_available": eid("binary_sensor", "tomorrow_available"),
+    }
+    for hours in range(1, 7):
+        entities[f"cheapest_{hours}h_start"] = eid("sensor", f"cheapest_{hours}h_start")
+        entities[f"cheapest_{hours}h_window_now"] = eid(
+            "binary_sensor", f"cheapest_{hours}h_window_now"
+        )
+    connection.send_result(msg["id"], {"entities": entities})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})
