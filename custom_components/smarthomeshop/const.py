@@ -11,6 +11,10 @@ DOMAIN: Final = "smarthomeshop"
 VERSION: Final = "0.0.8"
 MANUFACTURER: Final = "SmartHomeShop.io"
 
+# Dispatcher signal fired when the smart-energy deadline schedules change, so
+# the binary_sensor platform can add/update/remove schedule entities live.
+SIGNAL_SCHEDULES_CHANGED: Final = f"{DOMAIN}_schedules_changed"
+
 # Product types
 PRODUCT_WATERP1METERKIT: Final = "waterp1meterkit"
 PRODUCT_WATERMETERKIT: Final = "watermeterkit"

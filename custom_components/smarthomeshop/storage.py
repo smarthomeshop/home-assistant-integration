@@ -32,6 +32,7 @@ class SmartHomeShopStore:
             self._data = {"rooms": {}}
         self._data.setdefault("rooms", {})
         self._data.setdefault("account", {})
+        self._data.setdefault("schedules", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -74,6 +75,33 @@ class SmartHomeShopStore:
         """Delete a room configuration."""
         if room_id in self._data.get("rooms", {}):
             del self._data["rooms"][room_id]
+            await self.async_save()
+            return True
+        return False
+
+    # ---- Smart-energy deadline schedules ----
+
+    def get_schedules(self) -> list[dict[str, Any]]:
+        """Return all deadline schedules."""
+        return list(self._data.get("schedules", {}).values())
+
+    async def async_save_schedule(self, schedule: dict[str, Any]) -> dict[str, Any]:
+        """Create or update a deadline schedule."""
+        schedule_id = schedule.get("id")
+        if not schedule_id:
+            schedule_id = str(uuid.uuid4())
+            schedule["id"] = schedule_id
+            schedule["created_at"] = datetime.now().isoformat()
+        schedule["updated_at"] = datetime.now().isoformat()
+        self._data.setdefault("schedules", {})[schedule_id] = schedule
+        await self.async_save()
+        LOGGER.info("Saved schedule: %s (%s)", schedule.get("name", "Unnamed"), schedule_id)
+        return schedule
+
+    async def async_delete_schedule(self, schedule_id: str) -> bool:
+        """Delete a deadline schedule."""
+        if schedule_id in self._data.get("schedules", {}):
+            del self._data["schedules"][schedule_id]
             await self.async_save()
             return True
         return False

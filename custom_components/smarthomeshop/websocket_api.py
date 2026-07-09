@@ -64,6 +64,9 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_refresh_account)
     websocket_api.async_register_command(hass, ws_get_price_entities)
     websocket_api.async_register_command(hass, ws_get_contracts)
+    websocket_api.async_register_command(hass, ws_get_schedules)
+    websocket_api.async_register_command(hass, ws_set_schedule)
+    websocket_api.async_register_command(hass, ws_delete_schedule)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/config"})
@@ -665,6 +668,91 @@ def ws_get_price_entities(hass: HomeAssistant, connection, msg: dict) -> None:
             "binary_sensor", f"cheapest_{hours}h_window_now"
         )
     connection.send_result(msg["id"], {"entities": entities})
+
+
+def _schedule_payload(hass: HomeAssistant, schedule: dict) -> dict:
+    """A schedule plus its resolved entity_id and live plan state."""
+    ent_reg = er.async_get(hass)
+    eid = ent_reg.async_get_entity_id(
+        "binary_sensor", DOMAIN, f"{DOMAIN}_schedule_{schedule['id']}"
+    )
+    item = dict(schedule)
+    item["entity_id"] = eid
+    state = hass.states.get(eid) if eid else None
+    if state is not None:
+        item["active"] = state.state == "on"
+        item["next_start"] = state.attributes.get("next_start")
+        item["forced"] = state.attributes.get("forced")
+        item["reason"] = state.attributes.get("reason")
+    return item
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/schedules"})
+@callback
+def ws_get_schedules(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the smart-energy deadline schedules with their live plan."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    schedules = store.get_schedules() if store else []
+    connection.send_result(
+        msg["id"], {"schedules": [_schedule_payload(hass, s) for s in schedules]}
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/schedules/set",
+    vol.Optional("id"): str,
+    vol.Required("name"): str,
+    vol.Required("target_entity"): str,
+    vol.Required("hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=24)),
+    vol.Required("ready_by"): str,
+    vol.Optional("earliest"): vol.Any(str, None),
+    vol.Optional("enabled"): bool,
+})
+@websocket_api.async_response
+async def ws_set_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Create or update a deadline schedule and refresh its sensor."""
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    from .const import SIGNAL_SCHEDULES_CHANGED
+
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+    schedule = {
+        k: msg[k]
+        for k in ("id", "name", "target_entity", "hours", "ready_by", "earliest", "enabled")
+        if k in msg
+    }
+    saved = await store.async_save_schedule(schedule)
+    async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
+    connection.send_result(msg["id"], {"schedule": _schedule_payload(hass, saved)})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/schedules/delete",
+    vol.Required("id"): str,
+})
+@websocket_api.async_response
+async def ws_delete_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Delete a deadline schedule and remove its sensor."""
+    from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+    from .const import SIGNAL_SCHEDULES_CHANGED
+
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+    ok = await store.async_delete_schedule(msg["id"])
+    async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
+    connection.send_result(msg["id"], {"ok": ok})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})

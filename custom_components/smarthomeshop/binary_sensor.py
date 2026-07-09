@@ -69,7 +69,57 @@ async def async_setup_entry(
                 for hours in range(1, 7)
             )
 
+            _setup_schedule_sensors(hass, config_entry, prices, async_add_entities)
+
     async_add_entities(entities)
+
+
+def _setup_schedule_sensors(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    prices: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add deadline-schedule sensors and keep them in sync with the store."""
+    from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+    from .const import SIGNAL_SCHEDULES_CHANGED
+    from .schedule_sensors import SmartHomeShopScheduleBinarySensor
+
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        return
+    known: dict[str, SmartHomeShopScheduleBinarySensor] = hass.data[DOMAIN].setdefault(
+        "schedule_entities", {}
+    )
+
+    def _sync() -> None:
+        schedules = {s["id"]: s for s in store.get_schedules()}
+        new: list[SmartHomeShopScheduleBinarySensor] = []
+        for sid, schedule in schedules.items():
+            if sid in known:
+                known[sid].update_schedule(schedule)
+            else:
+                entity = SmartHomeShopScheduleBinarySensor(prices, schedule)
+                known[sid] = entity
+                new.append(entity)
+        if new:
+            async_add_entities(new)
+        for sid in list(known):
+            if sid not in schedules:
+                entity = known.pop(sid)
+                hass.async_create_task(entity.async_remove(force_remove=True))
+
+    # Add the schedules that already exist, then keep in sync on every change.
+    for schedule in store.get_schedules():
+        if schedule["id"] not in known:
+            entity = SmartHomeShopScheduleBinarySensor(prices, schedule)
+            known[schedule["id"]] = entity
+            async_add_entities([entity])
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SCHEDULES_CHANGED, _sync)
+    )
 
 
 class SmartHomeShopWaterBinarySensor(
