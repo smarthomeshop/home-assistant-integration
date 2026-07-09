@@ -48,15 +48,26 @@ async def async_setup_entry(
             for description in WATER_BINARY_SENSORS
         )
 
-    # Account-wide "cheap electricity now" — hosted by a single entry, only
-    # when an API key is set (mirrors the price sensors).
+    # Account-wide price binary sensors — hosted by a single entry, only when
+    # an API key is set (mirrors the price sensors).
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and getattr(prices, "has_key", False):
         entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
         if entry_ids and config_entry.entry_id == min(entry_ids):
-            from .price_binary_sensors import SmartHomeShopCheapNowBinarySensor
+            from .price_binary_sensors import (
+                SmartHomeShopCheapestWindowNowBinarySensor,
+                SmartHomeShopCheapNowBinarySensor,
+                SmartHomeShopContractActiveBinarySensor,
+                SmartHomeShopTomorrowPricesBinarySensor,
+            )
 
             entities.append(SmartHomeShopCheapNowBinarySensor(prices))
+            entities.append(SmartHomeShopContractActiveBinarySensor(prices))
+            entities.append(SmartHomeShopTomorrowPricesBinarySensor(prices))
+            entities.extend(
+                SmartHomeShopCheapestWindowNowBinarySensor(prices, hours)
+                for hours in range(1, 7)
+            )
 
     async_add_entities(entities)
 

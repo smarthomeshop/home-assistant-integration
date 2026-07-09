@@ -86,4 +86,16 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         value_fn=lambda data: data.phase_max_load_pct,
         attr_fn=lambda data: dict(data.phase_currents) if data.phase_currents else None,
     ),
+    # Signed net grid power (+import / -export). Always in W, so solar-surplus
+    # automations have one unambiguous trigger regardless of the raw meter unit.
+    P1SensorDescription(
+        key="net_power",
+        name="Net grid power (CC)",
+        icon="mdi:transmission-tower",
+        native_unit_of_measurement="W",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.net_power_w,
+    ),
 )
