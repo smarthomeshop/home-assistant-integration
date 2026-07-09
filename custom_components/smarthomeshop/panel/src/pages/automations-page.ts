@@ -516,6 +516,7 @@ export class AutomationsPage extends LitElement {
           .hass=${this.hass}
           .deviceId=${this.deviceId}
           .deviceName=${this.deviceName}
+          .deviceEntities=${this._entities}
         ></shs-energy-schedules>
         <shs-energy-battery
           .hass=${this.hass}

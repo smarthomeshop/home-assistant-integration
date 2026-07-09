@@ -103,6 +103,13 @@ class EnergyTracker:
         self._window_min: float | None = None
         self._window_day = ""
 
+        # Fuse-headroom tracking: remember how many phases normally report and
+        # the last trustworthy headroom, so a momentarily missing phase current
+        # cannot inflate the available-grid-power reading (which would let the
+        # fuse guard start a load onto an already-loaded, unreported phase).
+        self._phase_count = 0
+        self._last_available_w: float | None = None
+
         # Best-effort defaults from the HA Energy Dashboard (loaded once)
         self._ha_prices: dict[str, float] = {}
         self._ha_prices_loaded = False
@@ -240,7 +247,15 @@ class EnergyTracker:
             data.phase_max_load_pct = round(max_current / fuse * 100, 1)
             # Headroom in watts before the main fuse on the tightest phase, so
             # automations can avoid switching on a big load that would trip it.
-            data.available_grid_w = round(max(0.0, fuse - max_current) * 230, 0)
+            self._phase_count = max(self._phase_count, len(currents))
+            if len(currents) >= self._phase_count:
+                # All known phases reporting → trust the tightest-phase headroom.
+                data.available_grid_w = round(max(0.0, fuse - max_current) * 230, 0)
+                self._last_available_w = data.available_grid_w
+            else:
+                # A phase current dropped out: never inflate the headroom on a
+                # partial reading — hold the last trustworthy value instead.
+                data.available_grid_w = self._last_available_w
 
         # ---- Month peak (quarter-hour average power) ----
         avg_demand = self._value_watts("current_average_demand")

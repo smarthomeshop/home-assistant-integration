@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import type { HomeAssistant } from '../types';
+import type { HomeAssistant, DeviceEntity } from '../types';
 
 // Deadline schedules (smart-energy Phase 2): "have this load done by <time>,
 // it needs <N> hours" → the integration computes a binary sensor that is on
@@ -78,6 +78,7 @@ export class EnergySchedules extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceId = '';
   @property() public deviceName = '';
+  @property({ attribute: false }) public deviceEntities: DeviceEntity[] = [];
 
   @state() private _pricesOk = false;
   @state() private _loaded = false;
@@ -191,7 +192,14 @@ export class EnergySchedules extends LitElement {
   }
 
   private _availableEntity(): string | undefined {
-    return Object.keys(this.hass.states || {}).find(e => e.includes('available_grid_power'));
+    // Prefer this device's own meter, fall back to any P1 meter; only usable
+    // when it currently has a numeric reading (a non-numeric state would block
+    // guarded starts with no basis).
+    const ent = this.deviceEntities.find(e => e.entity_id.includes('available_grid_power'))?.entity_id
+      || Object.keys(this.hass.states || {}).find(e => e.includes('available_grid_power'));
+    if (!ent) return undefined;
+    const st = this.hass.states[ent];
+    return st && Number.isFinite(Number(st.state)) ? ent : undefined;
   }
 
   private async _save(): Promise<void> {
@@ -285,9 +293,13 @@ export class EnergySchedules extends LitElement {
 
   private _renderItem(s: Schedule, isAdmin: boolean) {
     const live = this._live(s);
-    const badge = live.active
-      ? (live.forced ? html`<span class="badge forced">Running (deadline)</span>` : html`<span class="badge on">Running now</span>`)
-      : html`<span class="badge off">${live.next_start ? `Next ${this._hm(live.next_start)}` : 'Waiting'}</span>`;
+    const targetOn = this.hass.states[s.target_entity]?.state === 'on';
+    const blocked = !!s.guard && live.active && !targetOn;
+    const badge = blocked
+      ? html`<span class="badge forced">Waiting for capacity</span>`
+      : live.active
+        ? (live.forced ? html`<span class="badge forced">Running (deadline)</span>` : html`<span class="badge on">Running now</span>`)
+        : html`<span class="badge off">${live.next_start ? `Next ${this._hm(live.next_start)}` : 'Waiting'}</span>`;
     return html`
       <div class="item">
         <div class="item-icon"><ha-icon icon="mdi:calendar-clock"></ha-icon></div>
@@ -364,7 +376,7 @@ export class EnergySchedules extends LitElement {
                   <label class="f">This load draws about</label>
                   <div class="row"><input type="number" min="100" max="25000" step="100" .value=${String(this._loadPower)}
                     @input=${(e: Event) => { this._loadPower = parseFloat((e.target as HTMLInputElement).value); }} /><span style="font-size:12px;color:var(--secondary-text-color);">W</span></div>
-                  <div class="help">The schedule waits for enough free capacity on your P1 connection before switching this on. A load that is already running is never cut off.</div>
+                  <div class="help">The schedule waits for enough free capacity on your P1 connection before switching this on. A load that is already running is never cut off. Note: if there is never enough capacity, fuse safety wins and the deadline can be delayed or missed.</div>
                 </div>` : nothing}
             ` : nothing}
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
@@ -389,7 +401,7 @@ export class EnergySchedules extends LitElement {
       </div>
       <div class="sub">
         Have a load finished by a set time in the cheapest hours — e.g. “car ready by 07:00, needs 4 hours”.
-        The deadline is met whenever the price feed is available.
+        The deadline is met whenever the price feed is available (unless the optional fuse guard is waiting for free capacity).
       </div>
       ${this._schedules.length === 0
         ? html`<div class="empty">No schedules yet. Add one to charge or run a device by a deadline in the cheapest hours.</div>`
