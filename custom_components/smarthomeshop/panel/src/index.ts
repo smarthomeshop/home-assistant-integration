@@ -4,6 +4,7 @@ import type { HomeAssistant, PanelConfig, PageType } from './types';
 import './pages/dashboard-page';
 import './pages/zones-page';
 import './pages/settings-page';
+import './pages/energy-hub';
 
 // @ts-ignore - VERSION is replaced by rollup at build time
 const VERSION = '__VERSION__';
@@ -194,6 +195,9 @@ export class SmartHomeShopPanel extends LitElement {
           <button class="nav-tab ${this._currentPage === 'zones' || this._currentPage === 'room-builder' ? 'active' : ''}" @click=${() => this._navigateTo('zones')}>
             <ha-icon icon="mdi:floor-plan"></ha-icon>Room Designer
           </button>
+          <button class="nav-tab ${this._currentPage === 'energy' ? 'active' : ''}" @click=${() => this._navigateTo('energy')}>
+            <ha-icon icon="mdi:lightning-bolt"></ha-icon>Energy
+          </button>
         </nav>
         <div class="header-right">
           <span class="version">v${VERSION}</span>
@@ -218,6 +222,8 @@ export class SmartHomeShopPanel extends LitElement {
           .hass=${this.hass}
           .selectedDeviceId=${this._selectedDeviceId}
         ></shs-zones-page>`;
+      case 'energy':
+        return html`<shs-energy-hub .hass=${this.hass}></shs-energy-hub>`;
       case 'settings':
         // Device settings moved to the device page (Settings tab)
         return html`<shs-dashboard-page

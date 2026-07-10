@@ -135,7 +135,7 @@ export interface FurnitureType {
   defaultHeight: number;
 }
 
-export type PageType = 'dashboard' | 'room-builder' | 'zones' | 'settings';
+export type PageType = 'dashboard' | 'room-builder' | 'zones' | 'settings' | 'energy';
 
 // Aliases for backwards compatibility
 export interface Wall {
