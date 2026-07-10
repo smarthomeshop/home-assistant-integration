@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 import './energy-automations';
 import './energy-schedules';
+import './energy-sources';
 import './energy-battery';
 
 const ENERGY_PRODUCTS = ['p1meterkit', 'waterp1meterkit'];
@@ -518,6 +519,9 @@ export class AutomationsPage extends LitElement {
           .deviceName=${this.deviceName}
           .deviceEntities=${this._entities}
         ></shs-energy-schedules>
+        <shs-energy-sources
+          .hass=${this.hass}
+        ></shs-energy-sources>
         <shs-energy-battery
           .hass=${this.hass}
           .deviceName=${this.deviceName}

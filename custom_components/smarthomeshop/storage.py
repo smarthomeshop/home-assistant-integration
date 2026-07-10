@@ -34,6 +34,7 @@ class SmartHomeShopStore:
         self._data.setdefault("account", {})
         self._data.setdefault("schedules", {})
         self._data.setdefault("battery", {})
+        self._data.setdefault("energy_sources", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -126,3 +127,15 @@ class SmartHomeShopStore:
         self._data["battery"] = battery
         await self.async_save()
         return battery
+
+    # ---- Energy-source entity mapping (solar / battery measurement) ----
+
+    def get_energy_sources(self) -> dict[str, Any]:
+        """Return the mapped solar/battery measurement entities."""
+        return dict(self._data.get("energy_sources", {}))
+
+    async def async_set_energy_sources(self, sources: dict[str, Any]) -> dict[str, Any]:
+        """Save the solar/battery measurement entity mapping."""
+        self._data["energy_sources"] = sources
+        await self.async_save()
+        return sources

@@ -69,6 +69,8 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_delete_schedule)
     websocket_api.async_register_command(hass, ws_get_battery)
     websocket_api.async_register_command(hass, ws_set_battery)
+    websocket_api.async_register_command(hass, ws_get_energy_sources)
+    websocket_api.async_register_command(hass, ws_set_energy_sources)
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/config"})
@@ -811,6 +813,50 @@ async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
         return
     saved = await store.async_set_battery(config)
     connection.send_result(msg["id"], {"battery": saved})
+
+
+_ENERGY_SOURCES_SCHEMA = vol.Schema({
+    vol.Optional("solar_power"): vol.Any(None, str),
+    vol.Optional("solar_invert"): bool,
+    vol.Optional("battery_power"): vol.Any(None, str),
+    vol.Optional("battery_invert"): bool,
+    vol.Optional("battery_soc"): vol.Any(None, str),
+    vol.Optional("battery_capacity_kwh"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("pv_forecast"): vol.Any(None, str),
+}, extra=vol.REMOVE_EXTRA)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/energy_sources"})
+@callback
+def ws_get_energy_sources(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the mapped solar/battery measurement entities."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    connection.send_result(
+        msg["id"], {"sources": store.get_energy_sources() if store else {}}
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/energy_sources/set",
+    vol.Required("config"): dict,
+})
+@websocket_api.async_response
+async def ws_set_energy_sources(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Save the solar/battery measurement entity mapping (validated)."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+    try:
+        config = _ENERGY_SOURCES_SCHEMA(msg["config"])
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    saved = await store.async_set_energy_sources(config)
+    connection.send_result(msg["id"], {"sources": saved})
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})

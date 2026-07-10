@@ -126,6 +126,7 @@ export class EnergyBattery extends LitElement {
   @state() private _busy = false;
   @state() private _error = '';
   @state() private _form: BatteryConfig = {};
+  @state() private _sources: Record<string, any> = {};
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; margin-top: 24px; }
@@ -177,6 +178,8 @@ export class EnergyBattery extends LitElement {
         this._px = px.entities || {};
         const b = await this.hass.callWS<{ battery: BatteryConfig }>({ type: 'smarthomeshop/battery' });
         this._cfg = b.battery || {};
+        const s = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
+        this._sources = s.sources || {};
       }
     } catch (err) { console.error('energy-battery: load failed', err); }
     this._loaded = true;
@@ -208,8 +211,15 @@ export class EnergyBattery extends LitElement {
 
   private _openModal(): void {
     this._error = '';
+    // Prefill SoC / forecast / capacity from the connected Solar & battery
+    // entities, so battery arbitrage self-configures instead of the user
+    // hunting for the right sensors.
+    const s = this._sources || {};
     this._form = {
       control_kind: 'switch', target_soc: 100, reserve_soc: 10, charge_hours: 3,
+      soc_sensor: s.battery_soc || undefined,
+      pv_forecast_sensor: s.pv_forecast || undefined,
+      capacity_kwh: s.battery_capacity_kwh ?? undefined,
       ...this._cfg,
     };
     this._modal = true;

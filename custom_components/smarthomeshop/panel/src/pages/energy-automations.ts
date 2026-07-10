@@ -37,6 +37,34 @@ interface BuildArgs {
   net?: string | null;
   min: number;
   deviceName: string;
+  sources?: Record<string, any>;
+}
+
+// True PV surplus (W) available to divert to a new load: -net - battery_signed.
+// Without the grid meter the battery masks surplus while it charges; adding the
+// signed battery power (HA convention + discharge / - charge) uncovers it.
+function surplusExpr(net: string, sources?: Record<string, any>): string {
+  const netExpr = `(states('${net}')|float(0)) * -1`;
+  const bp = sources?.battery_power;
+  if (!bp) return netExpr;
+  const bsign = sources?.battery_invert ? -1 : 1;
+  return `${netExpr} - ${bsign} * (states('${bp}')|float(0))`;
+}
+
+// Surplus on/off triggers: a template on the true-surplus expression when a
+// battery is mapped, otherwise the plain grid-export triggers.
+function surplusTriggers(net: string, sources: Record<string, any> | undefined, needW: number, onDelay: number, offDelay: number) {
+  if (sources?.battery_power) {
+    const expr = surplusExpr(net, sources);
+    return [
+      { platform: 'template', value_template: `{{ (${expr}) >= ${needW} }}`, for: { minutes: onDelay }, id: 'on' },
+      { platform: 'template', value_template: `{{ (${expr}) < -50 }}`, for: { minutes: offDelay }, id: 'off' },
+    ];
+  }
+  return [
+    { platform: 'numeric_state', entity_id: net, below: -needW, for: { minutes: onDelay }, id: 'on' },
+    { platform: 'numeric_state', entity_id: net, above: 50, for: { minutes: offDelay }, id: 'off' },
+  ];
 }
 
 interface EnergyScenario {
@@ -199,11 +227,10 @@ const SCENARIOS: EnergyScenario[] = [
       { key: 'off_delay', label: 'Off after', default: 3, min: 1, max: 30, step: 1, unit: 'min' },
       { key: 'max_runtime', label: 'Safety max runtime', default: 6, min: 1, max: 24, step: 1, unit: 'h' },
     ],
-    build: ({ target, p, net, deviceName }) => ({
+    build: ({ target, p, net, deviceName, sources }) => ({
       alias: `${deviceName} - Solar surplus`, description: DESCRIPTION, mode: 'restart',
       trigger: [
-        { platform: 'numeric_state', entity_id: net ?? null, below: -p.device_power, for: { minutes: p.on_delay }, id: 'on' },
-        { platform: 'numeric_state', entity_id: net ?? null, above: 50, for: { minutes: p.off_delay }, id: 'off' },
+        ...surplusTriggers(net ?? '', sources, p.device_power, p.on_delay, p.off_delay),
         { platform: 'state', entity_id: target, to: 'on', for: { hours: p.max_runtime }, id: 'watchdog' },
       ],
       condition: [],
@@ -227,18 +254,18 @@ const SCENARIOS: EnergyScenario[] = [
       { key: 'on_delay', label: 'On after', default: 5, min: 1, max: 30, step: 1, unit: 'min' },
       { key: 'off_delay', label: 'Off after', default: 5, min: 1, max: 30, step: 1, unit: 'min' },
     ],
-    build: ({ target, p, net, deviceName }) => ({
-      alias: `${deviceName} - Heat on solar surplus`, description: DESCRIPTION, mode: 'restart',
-      trigger: [
-        { platform: 'numeric_state', entity_id: net ?? null, below: -p.device_power, for: { minutes: p.on_delay }, id: 'boost' },
-        { platform: 'numeric_state', entity_id: net ?? null, above: 50, for: { minutes: p.off_delay }, id: 'normal' },
-      ],
-      condition: [],
-      action: [{ choose: [
-        { conditions: [{ condition: 'trigger', id: 'boost' }], sequence: [setVal(target, p.boost)] },
-        { conditions: [{ condition: 'trigger', id: 'normal' }], sequence: [setVal(target, p.normal)] },
-      ] }],
-    }),
+    build: ({ target, p, net, deviceName, sources }) => {
+      const [on, off] = surplusTriggers(net ?? '', sources, p.device_power, p.on_delay, p.off_delay);
+      return {
+        alias: `${deviceName} - Heat on solar surplus`, description: DESCRIPTION, mode: 'restart',
+        trigger: [{ ...on, id: 'boost' }, { ...off, id: 'normal' }],
+        condition: [],
+        action: [{ choose: [
+          { conditions: [{ condition: 'trigger', id: 'boost' }], sequence: [setVal(target, p.boost)] },
+          { conditions: [{ condition: 'trigger', id: 'normal' }], sequence: [setVal(target, p.normal)] },
+        ] }],
+      };
+    },
   },
   {
     key: 'dump_load_on_negative_feed_in',
@@ -316,6 +343,7 @@ export class EnergyAutomations extends LitElement {
 
   @state() private _priceEntities: Record<string, string | null> = {};
   @state() private _contractActive = false;
+  @state() private _sources: Record<string, any> = {};
   @state() private _loaded = false;
   @state() private _created: Record<string, string> = {};
   @state() private _modal: EnergyScenario | null = null;
@@ -381,6 +409,8 @@ export class EnergyAutomations extends LitElement {
       this._priceEntities = px.entities || {};
       const cfg = await this.hass.callWS<{ contract_active?: boolean }>({ type: 'smarthomeshop/device/config', device_id: this.deviceId });
       this._contractActive = !!cfg.contract_active;
+      const s = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
+      this._sources = s.sources || {};
     } catch (err) { console.error('energy-automations: load failed', err); }
     this._loaded = true;
   }
@@ -462,6 +492,7 @@ export class EnergyAutomations extends LitElement {
       const config = s.build({
         target: this._target, p: params, px: this._priceEntities,
         net: this._netEntity(), min, deviceName: this.deviceName || 'the device',
+        sources: this._sources,
       });
       if (JSON.stringify(config).includes('"entity_id":null')) {
         this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
