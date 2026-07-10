@@ -26,6 +26,9 @@ export class EnergyHub extends LitElement {
   @state() private _priceEntity?: string;
   @state() private _priceTab: 'today' | 'tomorrow' = 'today';
   @state() private _history: Record<string, Array<{ t: number; v: number }>> = {};
+  @state() private _hoverBar = -1;
+
+  private static readonly APP_STATS_URL = 'https://app.smarthomeshop.io/energy-prices';
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; padding: 20px; max-width: 960px; margin: 0 auto; box-sizing: border-box; }
@@ -73,8 +76,17 @@ export class EnergyHub extends LitElement {
     .seg button.on { background: var(--shs-primary); color: #fff; }
     .chart svg { width: 100%; height: auto; display: block; }
     .chart text { fill: var(--secondary-text-color); font-size: 10px; }
-    .chart .zero { stroke: var(--divider-color); stroke-width: 1; }
+    .chart .zero, .chart .grid { stroke: var(--divider-color); stroke-width: 1; }
+    .chart .grid { opacity: 0.5; }
+    .chart .axis { stroke: var(--divider-color); stroke-width: 1; }
     .chart .nowline { stroke: var(--shs-primary); stroke-width: 1.5; stroke-dasharray: 3 3; }
+    .chart .hit { fill: transparent; cursor: pointer; }
+    .chart .tip-bg { fill: var(--card-background-color); stroke: var(--divider-color); }
+    .chart .tip-h { fill: var(--primary-text-color); font-weight: 700; }
+    .chart .tip-p { fill: var(--secondary-text-color); }
+    .chart-link { margin-left: auto; font-size: 12px; color: var(--shs-primary); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+    .chart-link:hover { text-decoration: underline; }
+    .chart-link ha-icon { --mdc-icon-size: 14px; }
   `;
 
   private _loadStarted = false;
@@ -193,10 +205,11 @@ export class EnergyHub extends LitElement {
     return Array.isArray(arr) ? arr.filter((r: any) => r && typeof r.consumer === 'number') : [];
   }
 
-  // A day-ahead hourly price bar chart, cheapest hours green, most expensive
-  // red, with a dashed marker on the current hour.
+  // A day-ahead hourly price bar chart: cheapest hours green, most expensive
+  // red, a dashed marker on the current hour, a left axis, and a hover tooltip
+  // per bar showing the hour and its price.
   private _priceChart(rows: Array<{ start: string; consumer: number }>) {
-    const W = 720, H = 176, x0 = 8, x1 = 712, y0 = 12, yb = 148;
+    const W = 720, H = 178, x0 = 42, x1 = 712, y0 = 12, yb = 150;
     const n = rows.length;
     const vals = rows.map(r => r.consumer);
     const min = Math.min(...vals), max = Math.max(...vals);
@@ -214,19 +227,39 @@ export class EnergyHub extends LitElement {
       const p = max === min ? 0.5 : (v - min) / (max - min);
       return p <= 0.34 ? '#22c55e' : p <= 0.67 ? '#f59e0b' : '#ef4444';
     };
+    const ticks = yMin < 0 ? [yMax, 0, yMin] : [yMax, yMax / 2, 0];
+    const hov = this._hoverBar >= 0 && this._hoverBar < n ? this._hoverBar : -1;
+
     return html`
-      <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Hourly electricity price">
-        <line class="zero" x1=${x0} y1=${zeroY} x2=${x1} y2=${zeroY}></line>
+      <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Hourly electricity price"
+          @mouseleave=${() => { this._hoverBar = -1; }}>
+        <line class="axis" x1=${x0} y1=${y0} x2=${x0} y2=${yb}></line>
+        ${ticks.map(t => svg`
+          <line class="grid" x1=${x0} y1=${sY(t)} x2=${x1} y2=${sY(t)}></line>
+          <text x=${x0 - 5} y=${sY(t) + 3} text-anchor="end">${t.toFixed(2)}</text>`)}
         ${rows.map((r, i) => {
           const top = sY(r.consumer);
           const ry = Math.min(zeroY, top);
           const rh = Math.max(1.5, Math.abs(top - zeroY));
-          return svg`<rect x=${x0 + i * barW + 1} y=${ry} width=${Math.max(1, barW - 2)} height=${rh} rx="1.5" fill=${tier(r.consumer)} opacity=${i === nowIdx ? 1 : 0.5}></rect>`;
+          return svg`<rect x=${x0 + i * barW + 1} y=${ry} width=${Math.max(1, barW - 2)} height=${rh} rx="1.5" fill=${tier(r.consumer)} opacity=${i === nowIdx || i === hov ? 1 : 0.5}></rect>`;
         })}
         ${nowIdx >= 0 ? svg`<line class="nowline" x1=${x0 + nowIdx * barW + barW / 2} y1=${y0} x2=${x0 + nowIdx * barW + barW / 2} y2=${yb}></line>` : nothing}
         ${[0, 6, 12, 18].map(h => svg`<text x=${x0 + h * barW + barW / 2} y=${H - 4} text-anchor="middle">${String(h).padStart(2, '0')}:00</text>`)}
-        <text x=${x0 + 2} y=${y0 + 4} text-anchor="start">€ ${yMax.toFixed(2)}</text>
+        ${rows.map((r, i) => svg`<rect class="hit" x=${x0 + i * barW} y=${y0} width=${barW} height=${yb - y0}
+          @mouseenter=${() => { this._hoverBar = i; }}><title>${r.start.slice(11, 16)}  EUR ${r.consumer.toFixed(3)}</title></rect>`)}
+        ${hov >= 0 ? this._priceTip(rows[hov], x0 + hov * barW + barW / 2, x0, x1, y0) : nothing}
       </svg></div>`;
+  }
+
+  private _priceTip(row: { start: string; consumer: number }, cx: number, x0: number, x1: number, y0: number) {
+    const tw = 74, th = 30;
+    const tx = Math.max(x0 + tw / 2, Math.min(x1 - tw / 2, cx));
+    return svg`
+      <g pointer-events="none">
+        <rect class="tip-bg" x=${tx - tw / 2} y=${y0} width=${tw} height=${th} rx="4"></rect>
+        <text class="tip-h" x=${tx} y=${y0 + 12} text-anchor="middle">${row.start.slice(11, 16)}</text>
+        <text class="tip-p" x=${tx} y=${y0 + 24} text-anchor="middle">EUR ${row.consumer.toFixed(3)}</text>
+      </g>`;
   }
 
   private _renderPriceChart() {
@@ -243,11 +276,16 @@ export class EnergyHub extends LitElement {
           <div class="chart-legend"><span><i style="background:#22c55e"></i>cheap</span><span><i style="background:#ef4444"></i>expensive</span></div>
         </div>
         ${this._priceChart(rows)}
-        ${tomorrow.length ? html`
-          <div class="seg" style="margin-top:10px;">
-            <button class=${this._priceTab === 'today' ? 'on' : ''} @click=${() => { this._priceTab = 'today'; }}>Today</button>
-            <button class=${this._priceTab === 'tomorrow' ? 'on' : ''} @click=${() => { this._priceTab = 'tomorrow'; }}>Tomorrow</button>
-          </div>` : nothing}
+        <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;">
+          ${tomorrow.length ? html`
+            <div class="seg">
+              <button class=${this._priceTab === 'today' ? 'on' : ''} @click=${() => { this._priceTab = 'today'; this._hoverBar = -1; }}>Today</button>
+              <button class=${this._priceTab === 'tomorrow' ? 'on' : ''} @click=${() => { this._priceTab = 'tomorrow'; this._hoverBar = -1; }}>Tomorrow</button>
+            </div>` : nothing}
+          <a class="chart-link" href=${EnergyHub.APP_STATS_URL} target="_blank" rel="noopener">
+            More statistics <ha-icon icon="mdi:open-in-new"></ha-icon>
+          </a>
+        </div>
       </div>`;
   }
 
