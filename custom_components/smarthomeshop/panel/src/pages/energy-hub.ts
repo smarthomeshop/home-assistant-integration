@@ -60,9 +60,28 @@ export class EnergyHub extends LitElement {
     .empty b { color: var(--primary-text-color); }
   `;
 
+  private _loadStarted = false;
+  private _timer?: number;
+
   connectedCallback(): void {
     super.connectedCallback();
-    this._load();
+    // Refresh the price/schedule/battery snapshot periodically so it doesn't
+    // freeze on an always-on dashboard (the live power is already reactive).
+    this._timer = window.setInterval(() => this._load(), 60000);
+  }
+
+  disconnectedCallback(): void {
+    if (this._timer) { window.clearInterval(this._timer); this._timer = undefined; }
+    super.disconnectedCallback();
+  }
+
+  protected willUpdate(): void {
+    // Fire the one-shot load as soon as hass is available (connectedCallback
+    // may run before the hass property is set).
+    if (this.hass && !this._loadStarted) {
+      this._loadStarted = true;
+      this._load();
+    }
   }
 
   private async _load(): Promise<void> {
@@ -78,12 +97,13 @@ export class EnergyHub extends LitElement {
   }
 
   private _netEntity(): string | undefined {
-    return Object.keys(this.hass.states || {}).find(e => e.includes('net_grid_power'));
+    return Object.keys(this.hass.states || {})
+      .find(e => e.startsWith('sensor.') && e.includes('_net_grid_power'));
   }
 
   private _scale(entityId?: string): number {
     const u = String((entityId && this.hass.states[entityId]?.attributes?.unit_of_measurement) || '');
-    return /kw/i.test(u) ? 1000 : 1;
+    return /^kw$/i.test(u) ? 1000 : 1;  // kW -> W (do not match kWh)
   }
 
   private _num(entityId?: string, invert = false): number | null {
@@ -131,13 +151,23 @@ export class EnergyHub extends LitElement {
     const grid = this._num(net);                                   // + import / - export
     const solar = s.solar_power ? Math.max(0, this._num(s.solar_power, s.solar_invert) ?? 0) : null;
     const batt = s.battery_power ? this._num(s.battery_power, s.battery_invert) : null; // + discharge / - charge
-    const house = grid !== null ? (grid + (solar ?? 0) + (batt ?? 0)) : null;
     const soc = this._num(s.battery_soc);
+    // Home consumption = solar + net grid + signed battery. Only trustworthy
+    // when the grid and every mapped contributor is available; a dead sensor
+    // must not silently count as 0, and it can never be negative.
+    const contributorDead = this._isDead(net)
+      || (!!s.solar_power && this._isDead(s.solar_power))
+      || (!!s.battery_power && this._isDead(s.battery_power));
+    const house = (grid !== null && !contributorDead)
+      ? Math.max(0, grid + (solar ?? 0) + (batt ?? 0))
+      : null;
 
     const cur = this._account?.current;
     const sum = this._account?.summary;
     const priceOk = this._account?.status === 'ok';
-    const activeSchedules = this._schedules.filter(x => x.active).length;
+    // Read the live schedule sensor state so the count updates without a refetch.
+    const activeSchedules = this._schedules.filter(x =>
+      x.entity_id ? this.hass.states[x.entity_id]?.state === 'on' : x.active).length;
     const battOn = !!this._battery?.control_entity;
 
     return html`
@@ -148,6 +178,7 @@ export class EnergyHub extends LitElement {
       <div class="flow">
         ${this._node({
           label: 'Home', icon: 'mdi:home', color: '#4361ee', value: house,
+          dead: house === null && contributorDead,
           dir: house !== null ? { text: 'consumption', cls: 'idle' } : undefined,
         })}
         ${this._node({
