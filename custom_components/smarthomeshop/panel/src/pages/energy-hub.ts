@@ -25,6 +25,7 @@ export class EnergyHub extends LitElement {
   @state() private _battery: any = {};
   @state() private _priceEntity?: string;
   @state() private _priceTab: 'today' | 'tomorrow' = 'today';
+  @state() private _history: Record<string, Array<{ t: number; v: number }>> = {};
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; padding: 20px; max-width: 960px; margin: 0 auto; box-sizing: border-box; }
@@ -110,7 +111,33 @@ export class EnergyHub extends LitElement {
     try { const p = await this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' }); this._priceEntity = p.entities?.electricity_price || undefined; } catch { /* none */ }
     try { const r = await this.hass.callWS<{ schedules: any[] }>({ type: 'smarthomeshop/schedules' }); this._schedules = r.schedules || []; } catch { /* none */ }
     try { const b = await this.hass.callWS<{ battery: any }>({ type: 'smarthomeshop/battery' }); this._battery = b.battery || {}; } catch { /* none */ }
+    await this._loadHistory();
     this._loaded = true;
+  }
+
+  // Last 2 hours of grid (and solar/battery, if mapped) power for the trend
+  // chart. Signs and kW->W scale match the live tiles.
+  private async _loadHistory(): Promise<void> {
+    const ids = [this._netEntity(), this._sources.solar_power, this._sources.battery_power].filter(Boolean) as string[];
+    if (!ids.length) { this._history = {}; return; }
+    try {
+      const start = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      const res = await this.hass.callWS<Record<string, any[]>>({
+        type: 'history/history_during_period', start_time: start,
+        entity_ids: ids, minimal_response: true, no_attributes: true,
+      });
+      const out: Record<string, Array<{ t: number; v: number }>> = {};
+      for (const id of ids) {
+        const invert = id === this._sources.solar_power ? !!this._sources.solar_invert
+          : id === this._sources.battery_power ? !!this._sources.battery_invert : false;
+        const scale = this._scale(id);
+        out[id] = (res[id] || []).map((p: any) => ({
+          t: Math.round((p.lu ?? p.lc ?? p.last_updated ?? 0) * 1000),
+          v: (invert ? -1 : 1) * scale * Number(p.s ?? p.state),
+        })).filter(p => Number.isFinite(p.v) && p.t > 0);
+      }
+      this._history = out;
+    } catch { /* history unavailable */ }
   }
 
   private _netEntity(): string | undefined {
@@ -224,6 +251,45 @@ export class EnergyHub extends LitElement {
       </div>`;
   }
 
+  private _renderPowerChart() {
+    const net = this._netEntity();
+    const series = [
+      { id: net, label: 'Grid', color: '#4361ee' },
+      { id: this._sources.solar_power, label: 'Solar', color: '#eab308' },
+      { id: this._sources.battery_power, label: 'Battery', color: '#10b981' },
+    ].filter(x => x.id && (this._history[x.id]?.length ?? 0) > 1) as Array<{ id: string; label: string; color: string }>;
+    if (!series.length) return nothing;
+
+    const W = 720, H = 176, x0 = 44, x1 = 712, y0 = 12, y1 = 150;
+    const pts = series.flatMap(s => this._history[s.id]);
+    const tMin = Math.min(...pts.map(p => p.t)), tMax = Math.max(...pts.map(p => p.t));
+    const vMax = Math.max(0, ...pts.map(p => p.v)) * 1.08 || 1;
+    const vMin = Math.min(0, ...pts.map(p => p.v)) * 1.08;
+    const sX = (t: number) => tMax === tMin ? x1 : x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+    const sY = (v: number) => y0 + (vMax - v) / (vMax - vMin) * (y1 - y0);
+    const zeroY = sY(0);
+    const fmtY = (v: number) => Math.abs(v) >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
+
+    return html`
+      <div class="section-label">Power - last 2 hours</div>
+      <div class="chart-card">
+        <div class="chart-head">
+          <span class="chart-title">Live power (W)</span>
+          <div class="chart-legend">${series.map(s => html`<span><i style="background:${s.color}"></i>${s.label}</span>`)}</div>
+        </div>
+        <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Power over the last 2 hours">
+          <line class="zero" x1=${x0} y1=${zeroY} x2=${x1} y2=${zeroY}></line>
+          <text x=${x0 - 6} y=${y0 + 4} text-anchor="end">${fmtY(vMax)}</text>
+          <text x=${x0 - 6} y=${zeroY + 3} text-anchor="end">0</text>
+          ${vMin < 0 ? svg`<text x=${x0 - 6} y=${y1} text-anchor="end">${fmtY(vMin)}</text>` : nothing}
+          ${series.map(s => {
+            const d = this._history[s.id].map((p, i) => `${i === 0 ? 'M' : 'L'}${sX(p.t).toFixed(1)},${sY(p.v).toFixed(1)}`).join(' ');
+            return svg`<path d=${d} fill="none" stroke=${s.color} stroke-width="2" stroke-linejoin="round"></path>`;
+          })}
+        </svg></div>
+      </div>`;
+  }
+
   protected render() {
     if (!this._loaded) return nothing;
     const net = this._netEntity();
@@ -296,6 +362,8 @@ export class EnergyHub extends LitElement {
         </div>` : nothing}
 
       ${priceOk ? this._renderPriceChart() : nothing}
+
+      ${this._renderPowerChart()}
 
       <div class="section-label">Smart energy</div>
       <div class="status-row">
