@@ -92,7 +92,7 @@ export class EnergySourcesCard extends LitElement {
       if (dom(entityId) !== 'sensor') continue;
       const dc = st.attributes?.device_class;
       const unit = String(st.attributes?.unit_of_measurement || '');
-      if (kind === 'power' && dc !== 'power' && !/^k?W$/.test(unit)) continue;
+      if (kind === 'power' && dc !== 'power' && !/^k?W$/i.test(unit)) continue;
       if (kind === 'battery' && dc !== 'battery' && unit !== '%') continue;
       if (kind === 'energy' && dc !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
       out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
@@ -187,7 +187,7 @@ export class EnergySourcesCard extends LitElement {
           <div class="modal-body">
             <div class="section">Solar</div>
             ${this._picker('Solar production power (W)', 'solar_power', 'power', 'solar_invert',
-              'Live PV power from your inverter. Lets us see real solar surplus even while the battery is charging.')}
+              'Live PV power from your inverter, shown in the energy overview. (The true-surplus calculation uses the battery power below.)')}
             ${this._picker('Solar forecast today (kWh left)', 'pv_forecast', 'energy', undefined,
               'A Forecast.Solar / Solcast "remaining today" sensor. Used to skip grid-charging when the sun will fill the battery.')}
 
@@ -218,7 +218,7 @@ export class EnergySourcesCard extends LitElement {
   protected render() {
     if (!this._loaded) return nothing;
     const isAdmin = !!this.hass.user?.is_admin;
-    const configured = !!(this._cfg.solar_power || this._cfg.battery_power || this._cfg.battery_soc);
+    const configured = !!(this._cfg.solar_power || this._cfg.battery_power || this._cfg.battery_soc || this._cfg.pv_forecast);
     return html`
       <div class="head">
         <span class="head-title">Solar &amp; battery</span>

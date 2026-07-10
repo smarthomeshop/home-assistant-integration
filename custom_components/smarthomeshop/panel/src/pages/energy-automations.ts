@@ -43,22 +43,31 @@ interface BuildArgs {
 // True PV surplus (W) available to divert to a new load: -net - battery_signed.
 // Without the grid meter the battery masks surplus while it charges; adding the
 // signed battery power (HA convention + discharge / - charge) uncovers it.
+// battery_scale converts a kW sensor to W; the value is set by the caller.
 function surplusExpr(net: string, sources?: Record<string, any>): string {
   const netExpr = `(states('${net}')|float(0)) * -1`;
   const bp = sources?.battery_power;
   if (!bp) return netExpr;
   const bsign = sources?.battery_invert ? -1 : 1;
-  return `${netExpr} - ${bsign} * (states('${bp}')|float(0))`;
+  const scale = sources?.battery_scale || 1;
+  return `${netExpr} - ${bsign * scale} * (states('${bp}')|float(0))`;
 }
 
-// Surplus on/off triggers: a template on the true-surplus expression when a
-// battery is mapped, otherwise the plain grid-export triggers.
+// Surplus on/off triggers. With a battery mapped, a template on the true-surplus
+// expression, guarded so a missing sensor can never fabricate surplus and so we
+// never start a load while actually importing (charge-prioritising inverters):
+//   ON  = both sensors valid AND surplus >= need AND not importing
+//   OFF = a sensor is missing OR surplus gone OR we are importing (self-correct)
+// Without a battery it stays the plain grid-export numeric triggers.
 function surplusTriggers(net: string, sources: Record<string, any> | undefined, needW: number, onDelay: number, offDelay: number) {
-  if (sources?.battery_power) {
+  const bp = sources?.battery_power;
+  if (bp) {
     const expr = surplusExpr(net, sources);
+    const netV = `states('${net}')|float(0)`;
+    const avail = `has_value('${net}') and has_value('${bp}')`;
     return [
-      { platform: 'template', value_template: `{{ (${expr}) >= ${needW} }}`, for: { minutes: onDelay }, id: 'on' },
-      { platform: 'template', value_template: `{{ (${expr}) < -50 }}`, for: { minutes: offDelay }, id: 'off' },
+      { platform: 'template', value_template: `{{ ${avail} and (${expr}) >= ${needW} and (${netV}) <= 50 }}`, for: { minutes: onDelay }, id: 'on' },
+      { platform: 'template', value_template: `{{ not has_value('${net}') or (${expr}) < -50 or (${netV}) > 100 }}`, for: { minutes: offDelay }, id: 'off' },
     ];
   }
   return [
@@ -232,11 +241,13 @@ const SCENARIOS: EnergyScenario[] = [
       trigger: [
         ...surplusTriggers(net ?? '', sources, p.device_power, p.on_delay, p.off_delay),
         { platform: 'state', entity_id: target, to: 'on', for: { hours: p.max_runtime }, id: 'watchdog' },
+        BOOT,
       ],
       condition: [],
       action: [{ choose: [
         { conditions: [{ condition: 'trigger', id: 'on' }], sequence: [turn(target, true)] },
-        { conditions: [{ condition: 'trigger', id: ['off', 'watchdog'] }], sequence: [turn(target, false)] },
+        // off / watchdog / restart -> switch off; surplus re-engages on the next rise.
+        { conditions: [{ condition: 'trigger', id: ['off', 'watchdog', 'boot'] }], sequence: [turn(target, false)] },
       ] }],
     }),
   },
@@ -258,11 +269,12 @@ const SCENARIOS: EnergyScenario[] = [
       const [on, off] = surplusTriggers(net ?? '', sources, p.device_power, p.on_delay, p.off_delay);
       return {
         alias: `${deviceName} - Heat on solar surplus`, description: DESCRIPTION, mode: 'restart',
-        trigger: [{ ...on, id: 'boost' }, { ...off, id: 'normal' }],
+        trigger: [{ ...on, id: 'boost' }, { ...off, id: 'normal' }, BOOT],
         condition: [],
         action: [{ choose: [
           { conditions: [{ condition: 'trigger', id: 'boost' }], sequence: [setVal(target, p.boost)] },
-          { conditions: [{ condition: 'trigger', id: 'normal' }], sequence: [setVal(target, p.normal)] },
+          // normal / restart -> revert to the normal setpoint.
+          { conditions: [{ condition: 'trigger', id: ['normal', 'boot'] }], sequence: [setVal(target, p.normal)] },
         ] }],
       };
     },
@@ -421,6 +433,22 @@ export class EnergyAutomations extends LitElement {
     return this.deviceEntities.find(e => e.entity_id.includes('net_grid_power'))?.entity_id;
   }
 
+  // Fetch the latest solar/battery mapping and resolve the battery power unit
+  // to a kW->W scale, so a freshly-edited mapping is always used.
+  private async _freshSources(): Promise<Record<string, any>> {
+    let sources = this._sources;
+    try {
+      const s = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
+      sources = s.sources || {};
+      this._sources = sources;
+    } catch { /* keep last */ }
+    if (sources.battery_power) {
+      const unit = String(this.hass.states[sources.battery_power]?.attributes?.unit_of_measurement || '');
+      sources = { ...sources, battery_scale: /kw/i.test(unit) ? 1000 : 1 };
+    }
+    return sources;
+  }
+
   private _available(s: EnergyScenario): boolean {
     if (s.requires === 'contract') return this._contractActive;
     if (s.requires === 'solar') return !!this._netEntity();
@@ -492,7 +520,7 @@ export class EnergyAutomations extends LitElement {
       const config = s.build({
         target: this._target, p: params, px: this._priceEntities,
         net: this._netEntity(), min, deviceName: this.deviceName || 'the device',
-        sources: this._sources,
+        sources: await this._freshSources(),
       });
       if (JSON.stringify(config).includes('"entity_id":null')) {
         this._error = 'The energy price sensors are not ready yet. Try again in a moment.';

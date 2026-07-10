@@ -209,11 +209,15 @@ export class EnergyBattery extends LitElement {
     return Number.isFinite(min) ? min : 0;
   }
 
-  private _openModal(): void {
+  private async _openModal(): Promise<void> {
     this._error = '';
-    // Prefill SoC / forecast / capacity from the connected Solar & battery
-    // entities, so battery arbitrage self-configures instead of the user
-    // hunting for the right sensors.
+    // Re-fetch the latest Solar & battery mapping so a just-edited mapping is
+    // reflected, then prefill SoC / forecast / capacity so battery arbitrage
+    // self-configures instead of the user hunting for the right sensors.
+    try {
+      const r = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
+      this._sources = r.sources || {};
+    } catch { /* keep last */ }
     const s = this._sources || {};
     this._form = {
       control_kind: 'switch', target_soc: 100, reserve_soc: 10, charge_hours: 3,
@@ -279,6 +283,15 @@ export class EnergyBattery extends LitElement {
       }
       this._modal = false;
     } catch (err) { console.error('energy-battery: remove failed', err); }
+  }
+
+  private _hasDead(): boolean {
+    const c = this._cfg;
+    return [c.control_entity, c.soc_sensor, c.pv_forecast_sensor].some(id => {
+      if (!id) return false;
+      const st = this.hass.states[id];
+      return !st || st.state === 'unavailable' || st.state === 'unknown';
+    });
   }
 
   private _summary(): string {
@@ -426,7 +439,7 @@ export class EnergyBattery extends LitElement {
         <div class="row">
           <div class="row-icon"><ha-icon icon="mdi:home-battery"></ha-icon></div>
           <div class="row-main">
-            <div class="row-title">${configured ? 'Battery arbitrage active' : 'Not set up yet'}</div>
+            <div class="row-title">${configured ? (this._hasDead() ? 'Some entities are unavailable' : 'Battery arbitrage active') : 'Not set up yet'}</div>
             <div class="row-meta">${configured ? this._summary() : 'Map the inverter charge control to charge cheap and cover the peak.'}</div>
           </div>
           ${isAdmin ? html`<button class="btn ${configured ? 'ghost' : ''}" @click=${this._openModal}>
