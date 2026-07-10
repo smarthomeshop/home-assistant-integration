@@ -1,4 +1,4 @@
-import { LitElement, html, css, nothing } from 'lit';
+import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 
@@ -23,6 +23,8 @@ export class EnergyHub extends LitElement {
   @state() private _account: any = null;
   @state() private _schedules: any[] = [];
   @state() private _battery: any = {};
+  @state() private _priceEntity?: string;
+  @state() private _priceTab: 'today' | 'tomorrow' = 'today';
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; padding: 20px; max-width: 960px; margin: 0 auto; box-sizing: border-box; }
@@ -58,6 +60,20 @@ export class EnergyHub extends LitElement {
 
     .empty { background: var(--card-background-color); border: 1px dashed var(--divider-color); border-radius: 14px; padding: 16px; font-size: 13px; color: var(--secondary-text-color); line-height: 1.5; }
     .empty b { color: var(--primary-text-color); }
+
+    .chart-card { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 14px; padding: 16px; }
+    .chart-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .chart-title { font-size: 13px; font-weight: 600; color: var(--primary-text-color); }
+    .chart-legend { margin-left: auto; display: flex; gap: 12px; font-size: 11px; color: var(--secondary-text-color); }
+    .chart-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .chart-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+    .seg { display: inline-flex; border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden; }
+    .seg button { border: none; background: transparent; color: var(--secondary-text-color); font-size: 12px; font-weight: 600; font-family: inherit; padding: 5px 12px; cursor: pointer; }
+    .seg button.on { background: var(--shs-primary); color: #fff; }
+    .chart svg { width: 100%; height: auto; display: block; }
+    .chart text { fill: var(--secondary-text-color); font-size: 10px; }
+    .chart .zero { stroke: var(--divider-color); stroke-width: 1; }
+    .chart .nowline { stroke: var(--shs-primary); stroke-width: 1.5; stroke-dasharray: 3 3; }
   `;
 
   private _loadStarted = false;
@@ -91,6 +107,7 @@ export class EnergyHub extends LitElement {
       this._sources = s.sources || {};
     } catch { /* none */ }
     try { this._account = await this.hass.callWS({ type: 'smarthomeshop/account' }); } catch { /* none */ }
+    try { const p = await this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' }); this._priceEntity = p.entities?.electricity_price || undefined; } catch { /* none */ }
     try { const r = await this.hass.callWS<{ schedules: any[] }>({ type: 'smarthomeshop/schedules' }); this._schedules = r.schedules || []; } catch { /* none */ }
     try { const b = await this.hass.callWS<{ battery: any }>({ type: 'smarthomeshop/battery' }); this._battery = b.battery || {}; } catch { /* none */ }
     this._loaded = true;
@@ -122,7 +139,7 @@ export class EnergyHub extends LitElement {
   }
 
   private _fmt(w: number | null): { v: string; u: string } {
-    if (w === null) return { v: '—', u: '' };
+    if (w === null) return { v: '-', u: '' };
     const a = Math.abs(w);
     if (a >= 1000) return { v: (w / 1000).toFixed(2), u: 'kW' };
     return { v: String(Math.round(w)), u: 'W' };
@@ -140,6 +157,70 @@ export class EnergyHub extends LitElement {
         ${o.dead ? html`<div class="dead">sensor unavailable</div>`
           : o.dir ? html`<div class="node-dir ${o.dir.cls}">${o.dir.text}</div>` : nothing}
         ${o.extra ?? nothing}
+      </div>`;
+  }
+
+  private _priceRows(which: 'today' | 'tomorrow'): Array<{ start: string; consumer: number }> {
+    const attrs = this._priceEntity ? this.hass.states[this._priceEntity]?.attributes : undefined;
+    const arr = which === 'today' ? attrs?.prices_today : attrs?.prices_tomorrow;
+    return Array.isArray(arr) ? arr.filter((r: any) => r && typeof r.consumer === 'number') : [];
+  }
+
+  // A day-ahead hourly price bar chart, cheapest hours green, most expensive
+  // red, with a dashed marker on the current hour.
+  private _priceChart(rows: Array<{ start: string; consumer: number }>) {
+    const W = 720, H = 176, x0 = 8, x1 = 712, y0 = 12, yb = 148;
+    const n = rows.length;
+    const vals = rows.map(r => r.consumer);
+    const min = Math.min(...vals), max = Math.max(...vals);
+    const yMax = (max <= 0 ? 0.01 : max) * 1.06;
+    const yMin = Math.min(0, min) * 1.06;
+    const sY = (v: number) => y0 + (yMax - v) / (yMax - yMin) * (yb - y0);
+    const zeroY = sY(0);
+    const barW = (x1 - x0) / n;
+    const now = new Date();
+    const nowIdx = rows.findIndex(r => {
+      const s = new Date(r.start).getTime();
+      return s <= now.getTime() && s + 3600000 > now.getTime();
+    });
+    const tier = (v: number) => {
+      const p = max === min ? 0.5 : (v - min) / (max - min);
+      return p <= 0.34 ? '#22c55e' : p <= 0.67 ? '#f59e0b' : '#ef4444';
+    };
+    return html`
+      <div class="chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Hourly electricity price">
+        <line class="zero" x1=${x0} y1=${zeroY} x2=${x1} y2=${zeroY}></line>
+        ${rows.map((r, i) => {
+          const top = sY(r.consumer);
+          const ry = Math.min(zeroY, top);
+          const rh = Math.max(1.5, Math.abs(top - zeroY));
+          return svg`<rect x=${x0 + i * barW + 1} y=${ry} width=${Math.max(1, barW - 2)} height=${rh} rx="1.5" fill=${tier(r.consumer)} opacity=${i === nowIdx ? 1 : 0.5}></rect>`;
+        })}
+        ${nowIdx >= 0 ? svg`<line class="nowline" x1=${x0 + nowIdx * barW + barW / 2} y1=${y0} x2=${x0 + nowIdx * barW + barW / 2} y2=${yb}></line>` : nothing}
+        ${[0, 6, 12, 18].map(h => svg`<text x=${x0 + h * barW + barW / 2} y=${H - 4} text-anchor="middle">${String(h).padStart(2, '0')}:00</text>`)}
+        <text x=${x0 + 2} y=${y0 + 4} text-anchor="start">€ ${yMax.toFixed(2)}</text>
+      </svg></div>`;
+  }
+
+  private _renderPriceChart() {
+    const today = this._priceRows('today');
+    const tomorrow = this._priceRows('tomorrow');
+    if (!today.length && !tomorrow.length) return nothing;
+    const rows = this._priceTab === 'tomorrow' && tomorrow.length ? tomorrow : today;
+    if (!rows.length) return nothing;
+    return html`
+      <div class="section-label">Price ${this._priceTab === 'tomorrow' ? 'tomorrow' : 'today'}</div>
+      <div class="chart-card">
+        <div class="chart-head">
+          <span class="chart-title">Electricity price per hour (EUR/kWh)</span>
+          <div class="chart-legend"><span><i style="background:#22c55e"></i>cheap</span><span><i style="background:#ef4444"></i>expensive</span></div>
+        </div>
+        ${this._priceChart(rows)}
+        ${tomorrow.length ? html`
+          <div class="seg" style="margin-top:10px;">
+            <button class=${this._priceTab === 'today' ? 'on' : ''} @click=${() => { this._priceTab = 'today'; }}>Today</button>
+            <button class=${this._priceTab === 'tomorrow' ? 'on' : ''} @click=${() => { this._priceTab = 'tomorrow'; }}>Tomorrow</button>
+          </div>` : nothing}
       </div>`;
   }
 
@@ -172,7 +253,7 @@ export class EnergyHub extends LitElement {
 
     return html`
       <div class="title">Energy</div>
-      <div class="subtitle">Your whole home at a glance — grid, solar and battery, with your dynamic price.</div>
+      <div class="subtitle">Your whole home at a glance - grid, solar and battery, with your dynamic price.</div>
 
       <div class="section-label">Live now</div>
       <div class="flow">
@@ -213,6 +294,8 @@ export class EnergyHub extends LitElement {
           ${cur.feed_in != null ? html`<div class="chip"><div class="chip-label">Feed-in</div><div class="chip-value">€ ${cur.feed_in.toFixed(3)}</div></div>` : nothing}
           ${sum?.average != null ? html`<div class="chip"><div class="chip-label">Avg today</div><div class="chip-value">€ ${Number(sum.average).toFixed(3)}</div></div>` : nothing}
         </div>` : nothing}
+
+      ${priceOk ? this._renderPriceChart() : nothing}
 
       <div class="section-label">Smart energy</div>
       <div class="status-row">
