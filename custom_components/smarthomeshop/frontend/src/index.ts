@@ -83,6 +83,41 @@ customElementRegistrations.forEach(([tagName, elementClass]) => {
   registerCustomElement(tagName, elementClass);
 });
 
+/**
+ * Home Assistant may create card-picker previews before this module finishes
+ * loading. Those previews are temporary hui-error-card elements inside one or
+ * more open shadow roots. Rebuild them after registration so the picker does
+ * not remain stuck on a spinner until the page is refreshed.
+ */
+function rebuildPendingLovelaceCards(): void {
+  const roots: Array<Document | ShadowRoot> = [document];
+
+  for (let index = 0; index < roots.length; index += 1) {
+    const root = roots[index];
+
+    root.querySelectorAll('*').forEach((element) => {
+      if (element.shadowRoot) {
+        roots.push(element.shadowRoot);
+      }
+
+      if (element.localName === 'hui-error-card') {
+        element.dispatchEvent(
+          new CustomEvent('ll-rebuild', {
+            bubbles: true,
+            composed: true,
+          }),
+        );
+      }
+    });
+  }
+}
+
+// The picker can be inserted a frame after the module is evaluated. A few
+// short passes cover both the initial render and dialogs opened immediately.
+[0, 100, 500, 1500].forEach((delay) => {
+  window.setTimeout(rebuildPendingLovelaceCards, delay);
+});
+
 // Register custom cards in card picker
 window.customCards = window.customCards || [];
 
