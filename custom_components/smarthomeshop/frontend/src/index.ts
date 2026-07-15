@@ -13,12 +13,18 @@
 import { SmartHomeShopWaterCard } from './components/water-card';
 import { SmartHomeShopWaterP1Card } from './components/waterp1-card';
 import { SmartHomeShopWaterFlowKitCard, SmartHomeShopWaterFlowKitCardEditor } from './components/waterflowkit-card';
-import { SmartHomeShopUltimateSensorCard } from './components/ultimatesensor-card';
+import {
+  SmartHomeShopUltimateSensorCard,
+  SmartHomeShopUltimateSensorCardEditor,
+} from './components/ultimatesensor-card';
 import { SmartHomeShopP1MeterKitCard, SmartHomeShopP1MeterKitCardEditor } from './components/p1meterkit-card';
 import { SmartHomeShopCeilSenseCard, SmartHomeShopCeilSenseCardEditor } from './components/ceilsense-card';
 import { SmartHomeShopSensorSettings } from './components/sensor-settings';
 import { SmartHomeShopZoneEditor } from './components/zone-editor';
-import './components/card-editors';
+import {
+  SmartHomeShopWaterCardEditor,
+  SmartHomeShopWaterP1CardEditor,
+} from './components/card-editors';
 
 // @ts-ignore - VERSION is replaced by rollup at build time
 const VERSION = '__VERSION__';
@@ -41,6 +47,41 @@ declare global {
     }>;
   }
 }
+
+/**
+ * Lit's @customElement decorator normally performs this registration for us.
+ * Home Assistant can load decorator/polyfill runtimes that take a different
+ * path, so keep an explicit idempotent fallback at the bundle boundary.
+ */
+function registerCustomElement(
+  tagName: string,
+  elementClass: CustomElementConstructor,
+): void {
+  if (!customElements.get(tagName)) {
+    customElements.define(tagName, elementClass);
+  }
+}
+
+const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
+  ['smarthomeshop-water-card', SmartHomeShopWaterCard],
+  ['smarthomeshop-waterp1-card', SmartHomeShopWaterP1Card],
+  ['smarthomeshop-waterflowkit-card', SmartHomeShopWaterFlowKitCard],
+  ['smarthomeshop-ultimatesensor-card', SmartHomeShopUltimateSensorCard],
+  ['smarthomeshop-p1meterkit-card', SmartHomeShopP1MeterKitCard],
+  ['smarthomeshop-ceilsense-card', SmartHomeShopCeilSenseCard],
+  ['smarthomeshop-water-card-editor', SmartHomeShopWaterCardEditor],
+  ['smarthomeshop-waterp1-card-editor', SmartHomeShopWaterP1CardEditor],
+  ['smarthomeshop-waterflowkit-card-editor', SmartHomeShopWaterFlowKitCardEditor],
+  ['smarthomeshop-ultimatesensor-card-editor', SmartHomeShopUltimateSensorCardEditor],
+  ['smarthomeshop-p1meterkit-card-editor', SmartHomeShopP1MeterKitCardEditor],
+  ['smarthomeshop-ceilsense-card-editor', SmartHomeShopCeilSenseCardEditor],
+  ['smarthomeshop-sensor-settings', SmartHomeShopSensorSettings],
+  ['smarthomeshop-zone-editor', SmartHomeShopZoneEditor],
+];
+
+customElementRegistrations.forEach(([tagName, elementClass]) => {
+  registerCustomElement(tagName, elementClass);
+});
 
 // Register custom cards in card picker
 window.customCards = window.customCards || [];
