@@ -26,6 +26,18 @@ export const baseStyles = css`
 
   :host {
     display: block;
+    container-type: inline-size;
+    --shs-surface: color-mix(
+      in srgb,
+      var(--secondary-background-color) 78%,
+      var(--card-background-color)
+    );
+    --shs-surface-hover: color-mix(
+      in srgb,
+      var(--primary-color) 6%,
+      var(--shs-surface)
+    );
+    --shs-outline: color-mix(in srgb, var(--divider-color) 88%, transparent);
   }
 
   ha-card {
@@ -42,29 +54,32 @@ export const baseStyles = css`
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 16px;
+    gap: 12px;
+    margin-bottom: 14px;
   }
 
   .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    min-width: 0;
   }
 
   .header-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: color-mix(in srgb, var(--primary-color) 15%, transparent);
     color: var(--primary-color);
-    transition: all 0.3s ease;
+    transition: transform 180ms ease-out, background-color 180ms ease-out;
   }
 
   .header-icon ha-icon {
-    --mdc-icon-size: 28px;
+    --mdc-icon-size: 24px;
   }
 
   .header-icon svg {
@@ -85,8 +100,8 @@ export const baseStyles = css`
   }
 
   .header-title {
-    font-size: 1.1rem;
-    font-weight: 500;
+    font-size: 1rem;
+    font-weight: 600;
     color: var(--primary-text-color);
     margin: 0;
     line-height: 1.2;
@@ -103,11 +118,12 @@ export const baseStyles = css`
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    flex: 0 0 auto;
+    padding: 6px 10px;
     border-radius: 20px;
     font-size: 0.75rem;
     font-weight: 500;
-    transition: all 0.2s ease;
+    transition: background-color 180ms ease-out, color 180ms ease-out;
   }
 
   .status-badge ha-icon {
@@ -135,117 +151,129 @@ export const baseStyles = css`
     50% { opacity: 0.6; }
   }
 
-  /* Meter reading counter - classic meter look (shared by water cards) */
+  /* Compact meter calibration (shared by water cards) */
   .meter-counter-section {
-    background: linear-gradient(180deg, #1a1a1a 0%, #0d0d0d 100%);
+    background: var(--shs-surface);
     border-radius: 12px;
-    padding: 16px;
-    margin-top: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 10px;
+    margin-top: 12px;
+    border: 1px solid var(--shs-outline);
   }
-  .meter-counter-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-  .meter-counter-title {
+
+  .meter-counter-main {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
-    color: var(--secondary-text-color);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    cursor: pointer;
   }
-  .meter-counter-title ha-icon {
-    --mdc-icon-size: 18px;
-    color: var(--info-color);
-  }
-  .meter-counter-calibrate {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--info-color);
-    cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.2s;
-  }
-  .meter-counter-calibrate:hover { opacity: 1; }
-  .meter-counter-calibrate ha-icon { --mdc-icon-size: 14px; }
 
-  .meter-counter-display {
+  .meter-counter-upgrade {
     display: flex;
-    justify-content: center;
     align-items: center;
-    gap: 3px;
-    padding: 12px 0;
+    gap: 10px;
+    background: color-mix(in srgb, var(--warning-color) 8%, var(--shs-surface));
+    border-color: color-mix(in srgb, var(--warning-color) 35%, var(--shs-outline));
+  }
+
+  .meter-counter-upgrade .meter-counter-icon {
+    background: color-mix(in srgb, var(--warning-color) 14%, transparent);
+    color: var(--warning-color);
+  }
+
+  .meter-counter-reading {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px;
+    text-align: left;
     cursor: pointer;
   }
-  .meter-digit {
-    width: 32px;
-    height: 48px;
-    background: linear-gradient(180deg, #2a2a2a 0%, #1a1a1a 50%, #2a2a2a 100%);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 6px;
+
+  .meter-counter-icon {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--info-color) 13%, transparent);
+    color: var(--info-color);
+  }
+
+  .meter-counter-icon ha-icon { --mdc-icon-size: 20px; }
+
+  .meter-counter-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .meter-counter-title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--primary-text-color);
+  }
+
+  .meter-counter-subtitle {
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--secondary-text-color);
+  }
+
+  .meter-counter-value {
+    margin-left: auto;
+    white-space: nowrap;
+    font-size: 16px;
+    font-weight: 650;
+    color: var(--primary-text-color);
+  }
+
+  .meter-counter-value span {
+    margin-left: 3px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--secondary-text-color);
+  }
+
+  .meter-counter-calibrate {
+    appearance: none;
+    border: 1px solid var(--shs-outline);
+    background: var(--card-background-color);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-family: 'Courier New', monospace;
-    font-size: 28px;
-    font-weight: 700;
-    color: #fff;
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,0.1),
-      inset 0 -1px 0 rgba(0,0,0,0.3),
-      0 2px 4px rgba(0,0,0,0.3);
-    position: relative;
-    overflow: hidden;
+    gap: 4px;
+    min-height: 36px;
+    padding: 0 10px;
+    border-radius: 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--info-color);
+    cursor: pointer;
+    transition: background-color 180ms ease-out, border-color 180ms ease-out;
   }
-  .meter-digit::before {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 0;
-    right: 0;
-    height: 1px;
-    background: rgba(0, 0, 0, 0.4);
+
+  .meter-counter-calibrate:hover,
+  .meter-counter-calibrate[aria-expanded='true'] {
+    border-color: color-mix(in srgb, var(--info-color) 45%, var(--divider-color));
+    background: color-mix(in srgb, var(--info-color) 9%, var(--card-background-color));
   }
-  .meter-digit::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 50%;
-    background: linear-gradient(180deg, rgba(255,255,255,0.08) 0%, transparent 100%);
-  }
-  .meter-digit.decimal {
-    color: #ff6b6b;
-    background: linear-gradient(180deg, #3a2020 0%, #2a1515 50%, #3a2020 100%);
-    border-color: rgba(255, 107, 107, 0.3);
-  }
-  .meter-separator {
-    font-size: 32px;
-    font-weight: 700;
-    color: rgba(255, 255, 255, 0.4);
-    margin: 0 2px;
-  }
-  .meter-unit {
-    font-size: 14px;
-    color: var(--secondary-text-color);
-    margin-left: 8px;
-    align-self: flex-end;
-    padding-bottom: 8px;
-  }
+
+  .meter-counter-calibrate ha-icon { --mdc-icon-size: 16px; }
 
   /* Inline "set meter reading" form */
   .meter-form {
     margin-top: 12px;
     padding-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid var(--shs-outline);
   }
   .meter-form-help {
     font-size: 12px;
@@ -293,19 +321,20 @@ export const baseStyles = css`
 
   /* Value display - main metric */
   .value-display {
-    background: var(--secondary-background-color);
-    border-radius: 16px;
-    padding: 20px;
+    background: var(--shs-surface);
+    border: 1px solid var(--shs-outline);
+    border-radius: 12px;
+    padding: 16px;
     margin-bottom: 12px;
     position: relative;
     overflow: hidden;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color 180ms ease-out, border-color 180ms ease-out;
   }
 
   .value-display:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    background: var(--shs-surface-hover);
+    border-color: color-mix(in srgb, var(--primary-color) 28%, var(--divider-color));
   }
 
   .value-display::before {
@@ -324,7 +353,7 @@ export const baseStyles = css`
   }
 
   .value-big {
-    font-size: 2.5rem;
+    font-size: 2rem;
     font-weight: 600;
     color: var(--primary-text-color);
     line-height: 1;
@@ -342,30 +371,31 @@ export const baseStyles = css`
     color: var(--secondary-text-color);
     margin-top: 8px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0;
     font-weight: 500;
   }
 
   /* Stats grid */
   .stats-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
     gap: 8px;
     margin-bottom: 12px;
   }
 
   .stat-item {
-    background: var(--secondary-background-color);
+    background: var(--shs-surface);
+    border: 1px solid var(--shs-outline);
     border-radius: 12px;
     padding: 12px 8px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color 180ms ease-out, border-color 180ms ease-out;
   }
 
   .stat-item:hover {
-    background: color-mix(in srgb, var(--primary-color) 10%, var(--secondary-background-color));
-    transform: translateY(-2px);
+    background: var(--shs-surface-hover);
+    border-color: color-mix(in srgb, var(--primary-color) 25%, var(--divider-color));
   }
 
   .stat-value {
@@ -385,12 +415,13 @@ export const baseStyles = css`
     color: var(--secondary-text-color);
     margin-top: 4px;
     text-transform: uppercase;
-    letter-spacing: 0.3px;
+    letter-spacing: 0;
   }
 
   /* Graph section */
   .graph-section {
-    background: var(--secondary-background-color);
+    background: var(--shs-surface);
+    border: 1px solid var(--shs-outline);
     border-radius: 12px;
     padding: 12px;
     margin-bottom: 12px;
@@ -399,7 +430,7 @@ export const baseStyles = css`
   }
 
   .graph-section:hover {
-    background: color-mix(in srgb, var(--primary-color) 5%, var(--secondary-background-color));
+    background: var(--shs-surface-hover);
   }
 
   .graph-header {
@@ -455,7 +486,8 @@ export const baseStyles = css`
     display: flex;
     align-items: center;
     justify-content: space-between;
-    background: var(--secondary-background-color);
+    background: var(--shs-surface);
+    border: 1px solid var(--shs-outline);
     border-radius: 12px;
     padding: 12px 14px;
     cursor: pointer;
@@ -463,7 +495,7 @@ export const baseStyles = css`
   }
 
   .info-bar:hover {
-    background: color-mix(in srgb, var(--primary-color) 5%, var(--secondary-background-color));
+    background: var(--shs-surface-hover);
   }
 
   .info-bar.alert {
@@ -517,6 +549,11 @@ export const baseStyles = css`
     cursor: pointer;
   }
 
+  .info-right ha-icon {
+    --mdc-icon-size: 20px;
+    color: var(--secondary-text-color);
+  }
+
   .info-value {
     font-size: 0.95rem;
     font-weight: 600;
@@ -545,6 +582,7 @@ export const baseStyles = css`
     font-size: 0.85rem;
     font-weight: 600;
     color: var(--secondary-text-color);
+    letter-spacing: 0;
   }
 
   .section-header ha-icon {
@@ -586,5 +624,59 @@ export const baseStyles = css`
 
   .success-accent {
     --domain-color: var(--success-color);
+  }
+
+  @container (max-width: 430px) {
+    .card-content {
+      padding: 14px;
+    }
+
+    .header {
+      align-items: flex-start;
+    }
+
+    .header-icon {
+      width: 40px;
+      height: 40px;
+      flex-basis: 40px;
+    }
+
+    .status-badge {
+      padding: 6px 8px;
+    }
+
+    .stats-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .meter-counter-main {
+      align-items: stretch;
+      flex-wrap: wrap;
+    }
+
+    .meter-counter-reading {
+      flex-basis: calc(100% - 48px);
+    }
+
+    .meter-counter-calibrate {
+      width: 40px;
+      padding: 0;
+    }
+
+    .meter-counter-calibrate span {
+      display: none;
+    }
+
+    .meter-form-row {
+      flex-wrap: wrap;
+    }
+
+    .meter-form-row input {
+      flex-basis: calc(100% - 42px);
+    }
+
+    .meter-form-save {
+      width: 100%;
+    }
   }
 `;

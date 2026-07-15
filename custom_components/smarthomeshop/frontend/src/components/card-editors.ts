@@ -51,6 +51,34 @@ const editorStyles = css`
     margin-bottom: 0;
     cursor: pointer;
   }
+  .option-group {
+    padding: 12px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: 10px;
+    background: color-mix(
+      in srgb,
+      var(--secondary-background-color) 72%,
+      var(--card-background-color)
+    );
+    margin-bottom: 10px;
+  }
+  .option-group .checkbox-row:last-child {
+    margin-bottom: 0;
+  }
+  .nested-options {
+    margin: 8px 0 0 25px;
+    padding: 8px 0 0 12px;
+    border-left: 2px solid var(--divider-color, #e0e0e0);
+  }
+  .nested-options .checkbox-row {
+    margin-bottom: 7px;
+  }
+  .option-description {
+    margin: -2px 0 9px 26px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--secondary-text-color);
+  }
   .info {
     font-size: 12px;
     color: var(--secondary-text-color);
@@ -193,21 +221,74 @@ export class SmartHomeShopWaterCardEditor extends LitElement {
       <div class="divider"></div>
 
       <div class="form-row">
-        <label>Options</label>
-        <div class="checkbox-row">
-          <input
-            type="checkbox"
-            id="show_graph"
-            .checked=${this._config.show_graph !== false}
-            @change=${(e: Event) =>
-              this._valueChanged('show_graph', (e.target as HTMLInputElement).checked)}
-          />
-          <label for="show_graph">Show 24-hour graph</label>
+        <div class="section-title">Visible content</div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_header"
+              .checked=${this._config.show_header !== false}
+              @change=${(e: Event) => this._valueChanged('show_header', (e.target as HTMLInputElement).checked)} />
+            <label for="show_header">Header</label>
+          </div>
+          ${this._config.show_header !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_status"
+                  .checked=${this._config.show_status !== false}
+                  @change=${(e: Event) => this._valueChanged('show_status', (e.target as HTMLInputElement).checked)} />
+                <label for="show_status">Status badge</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
-        <div class="info">
-          If no device is selected, entities are automatically detected.
-          Click on the graph to open full Home Assistant history.
+
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_water_current"
+              .checked=${this._config.show_water_current !== false}
+              @change=${(e: Event) => this._valueChanged('show_water_current', (e.target as HTMLInputElement).checked)} />
+            <label for="show_water_current">Current water usage</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_water_totals"
+              .checked=${this._config.show_water_totals !== false}
+              @change=${(e: Event) => this._valueChanged('show_water_totals', (e.target as HTMLInputElement).checked)} />
+            <label for="show_water_totals">Period totals</label>
+          </div>
+          ${this._config.show_water_totals !== false ? html`
+            <div class="nested-options">
+              ${(['today', 'week', 'month', 'year'] as const).map((period) => html`
+                <div class="checkbox-row">
+                  <input type="checkbox" id=${`show_${period}`}
+                    .checked=${this._config[`show_${period}`] !== false}
+                    @change=${(e: Event) => this._valueChanged(`show_${period}`, (e.target as HTMLInputElement).checked)} />
+                  <label for=${`show_${period}`}>${period[0].toUpperCase()}${period.slice(1)}</label>
+                </div>
+              `)}
+            </div>
+          ` : nothing}
         </div>
+
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_graph"
+              .checked=${this._config.show_graph !== false}
+              @change=${(e: Event) => this._valueChanged('show_graph', (e.target as HTMLInputElement).checked)} />
+            <label for="show_graph">24-hour usage graph</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_meter_reading"
+              .checked=${this._config.show_meter_reading !== false}
+              @change=${(e: Event) => this._valueChanged('show_meter_reading', (e.target as HTMLInputElement).checked)} />
+            <label for="show_meter_reading">Total meter reading</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_leak_detection"
+              .checked=${this._config.show_leak_detection !== false}
+              @change=${(e: Event) => this._valueChanged('show_leak_detection', (e.target as HTMLInputElement).checked)} />
+            <label for="show_leak_detection">Leak detection</label>
+          </div>
+        </div>
+        <div class="info">If no device is selected, entities are automatically detected.</div>
       </div>
     `;
   }
@@ -279,65 +360,140 @@ export class SmartHomeShopWaterP1CardEditor extends LitElement {
       <div class="divider"></div>
 
       <div class="form-row">
-        <div class="section-title">Sections</div>
-        <div class="checkbox-row">
-          <input
-            type="checkbox"
-            id="show_water"
-            .checked=${this._config.show_water !== false}
-            @change=${(e: Event) =>
-              this._valueChanged('show_water', (e.target as HTMLInputElement).checked)}
-          />
-          <label for="show_water">Show water section</label>
+        <div class="section-title">Card</div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_header"
+              .checked=${this._config.show_header !== false}
+              @change=${(e: Event) => this._valueChanged('show_header', (e.target as HTMLInputElement).checked)} />
+            <label for="show_header">Header</label>
+          </div>
+          ${this._config.show_header !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_status"
+                  .checked=${this._config.show_status !== false}
+                  @change=${(e: Event) => this._valueChanged('show_status', (e.target as HTMLInputElement).checked)} />
+                <label for="show_status">Status badge</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
-        <div class="checkbox-row">
-          <input
-            type="checkbox"
-            id="show_energy"
-            .checked=${this._config.show_energy !== false}
-            @change=${(e: Event) =>
-              this._valueChanged('show_energy', (e.target as HTMLInputElement).checked)}
-          />
-          <label for="show_energy">Show energy section</label>
+      </div>
+
+      <div class="form-row">
+        <div class="section-title">Water</div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_water"
+              .checked=${this._config.show_water !== false}
+              @change=${(e: Event) => this._valueChanged('show_water', (e.target as HTMLInputElement).checked)} />
+            <label for="show_water">Water section</label>
+          </div>
+          ${this._config.show_water !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_water_current"
+                  .checked=${this._config.show_water_current !== false}
+                  @change=${(e: Event) => this._valueChanged('show_water_current', (e.target as HTMLInputElement).checked)} />
+                <label for="show_water_current">Current water usage</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_water_totals"
+                  .checked=${this._config.show_water_totals !== false}
+                  @change=${(e: Event) => this._valueChanged('show_water_totals', (e.target as HTMLInputElement).checked)} />
+                <label for="show_water_totals">Period totals</label>
+              </div>
+              ${this._config.show_water_totals !== false ? html`
+                <div class="nested-options">
+                  ${(['today', 'week', 'month', 'year'] as const).map((period) => html`
+                    <div class="checkbox-row">
+                      <input type="checkbox" id=${`waterp1_show_${period}`}
+                        .checked=${this._config[`show_${period}`] !== false}
+                        @change=${(e: Event) => this._valueChanged(`show_${period}`, (e.target as HTMLInputElement).checked)} />
+                      <label for=${`waterp1_show_${period}`}>${period[0].toUpperCase()}${period.slice(1)}</label>
+                    </div>
+                  `)}
+                </div>
+              ` : nothing}
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_graph"
+                  .checked=${this._config.show_graph !== false}
+                  @change=${(e: Event) => this._valueChanged('show_graph', (e.target as HTMLInputElement).checked)} />
+                <label for="show_graph">24-hour usage graph</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_meter_reading"
+                  .checked=${this._config.show_meter_reading !== false}
+                  @change=${(e: Event) => this._valueChanged('show_meter_reading', (e.target as HTMLInputElement).checked)} />
+                <label for="show_meter_reading">Total meter reading</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_leak_detection"
+                  .checked=${this._config.show_leak_detection !== false}
+                  @change=${(e: Event) => this._valueChanged('show_leak_detection', (e.target as HTMLInputElement).checked)} />
+                <label for="show_leak_detection">Leak detection</label>
+              </div>
+            </div>
+          ` : nothing}
+        </div>
+      </div>
+
+      <div class="form-row">
+        <div class="section-title">Energy</div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_energy"
+              .checked=${this._config.show_energy !== false}
+              @change=${(e: Event) => this._valueChanged('show_energy', (e.target as HTMLInputElement).checked)} />
+            <label for="show_energy">Energy section</label>
+          </div>
+          ${this._config.show_energy !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_energy_current"
+                  .checked=${this._config.show_energy_current !== false}
+                  @change=${(e: Event) => this._valueChanged('show_energy_current', (e.target as HTMLInputElement).checked)} />
+                <label for="show_energy_current">Current power usage</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_energy_today"
+                  .checked=${this._config.show_energy_today !== false}
+                  @change=${(e: Event) => this._valueChanged('show_energy_today', (e.target as HTMLInputElement).checked)} />
+                <label for="show_energy_today">Electricity today</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_energy_returned"
+                  .checked=${this._config.show_energy_returned !== false}
+                  @change=${(e: Event) => this._valueChanged('show_energy_returned', (e.target as HTMLInputElement).checked)} />
+                <label for="show_energy_returned">Returned energy</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_gas_today"
+                  .checked=${this._config.show_gas_today !== false}
+                  @change=${(e: Event) => this._valueChanged('show_gas_today', (e.target as HTMLInputElement).checked)} />
+                <label for="show_gas_today">Gas today</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
       </div>
 
       <div class="divider"></div>
 
       <div class="form-row">
-        <div class="section-title">Options</div>
-        <div class="checkbox-row">
-          <input
-            type="checkbox"
-            id="show_graph"
-            .checked=${this._config.show_graph !== false}
-            @change=${(e: Event) =>
-              this._valueChanged('show_graph', (e.target as HTMLInputElement).checked)}
-          />
-          <label for="show_graph">Show 24-hour graph</label>
-        </div>
-        <div class="info">
-          Click on the graph to open full Home Assistant history.
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="form-row">
-        <div class="section-title">Hardware Features (V3)</div>
-        <div class="checkbox-row">
-          <input
-            type="checkbox"
-            id="has_water_leak_sensor"
-            .checked=${this._config.has_water_leak_sensor === true}
-            @change=${(e: Event) =>
-              this._valueChanged('has_water_leak_sensor', (e.target as HTMLInputElement).checked)}
-          />
-          <label for="has_water_leak_sensor">I have a water leak sensor connected</label>
+        <div class="section-title">Hardware features (V3)</div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="has_water_leak_sensor"
+              .checked=${this._config.has_water_leak_sensor === true}
+              @change=${(e: Event) => this._valueChanged('has_water_leak_sensor', (e.target as HTMLInputElement).checked)} />
+            <label for="has_water_leak_sensor">Optional water leak sensor connected</label>
+          </div>
         </div>
         <div class="feature-info">
           Enable this if you have connected the optional water leak sensor to your WaterP1MeterKit V3.
-          When enabled, the card will show the sensor status and flash a red alert when water is detected.
+          Critical leak alerts remain visible even when other content is hidden.
         </div>
       </div>
     `;

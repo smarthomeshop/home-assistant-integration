@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-cards",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "SmartHomeShop.io Lovelace Cards for Home Assistant",
   "main": "dist/smarthomeshop-cards.js",
   "type": "module",
@@ -37,7 +37,6 @@
     "lit": "^3.2.0"
   }
 }
-
 
 
 

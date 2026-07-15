@@ -155,17 +155,30 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
         flow_sensor: str | None = None
 
         for entity in er.async_entries_for_device(entity_registry, device_id):
-            if entity.domain != "sensor":
+            if entity.domain != "sensor" or entity.disabled_by is not None:
                 continue
 
             entity_id = entity.entity_id.lower()
+            entity_identity = re.sub(
+                r"[^a-z0-9]+",
+                "_",
+                " ".join(
+                    value or ""
+                    for value in (
+                        entity.entity_id,
+                        entity.unique_id,
+                        entity.name,
+                        entity.original_name,
+                    )
+                ).lower(),
+            )
 
             # Water total: prefer the firmware's calibrated "Water Meter Total"
             # (persisted on-device via "Water Meter Initial Value") over the raw
             # pulse counter "Water Total Consumption".
-            if "water_meter_total" in entity_id:
+            if "water_meter_total" in entity_identity:
                 water_meter_total = entity.entity_id
-            elif "water_total_consumption" in entity_id:
+            elif "water_total_consumption" in entity_identity:
                 water_total_consumption = entity.entity_id
             elif entity.original_device_class == "water" and (
                 "total" in entity_id or "consumption" in entity_id
@@ -580,7 +593,6 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
 
         # Default: no options
         return self.async_create_entry(title="", data={})
-
 
 
 

@@ -38,7 +38,6 @@ export class SmartHomeShopSensorSettings extends LitElement {
   @state() private _zones: ZoneConfig[] = [];
   @state() private _activeTab: 'mmwave' | 'zones' | 'calibration' = 'mmwave';
   @state() private _showZoneEditor: boolean = false;
-  @state() private _loading: boolean = false;
   @state() private _saving: boolean = false;
   @state() private _pendingChanges: Map<string, number> = new Map();
 
@@ -313,8 +312,6 @@ export class SmartHomeShopSensorSettings extends LitElement {
 
   private _loadSettings(): void {
     if (!this.hass || !this.entityPrefix) return;
-    this._loading = true;
-
     const settings: SettingEntity[] = [];
     const prefix = this.entityPrefix;
 
@@ -365,7 +362,6 @@ export class SmartHomeShopSensorSettings extends LitElement {
 
     this._settings = settings;
     this._zones = zones;
-    this._loading = false;
   }
 
   private _getNum(suffix: string): number {

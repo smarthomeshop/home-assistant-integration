@@ -26,6 +26,10 @@ interface StatisticsResult {
 interface WaterP1Config extends CardConfig {
   show_water?: boolean;
   show_energy?: boolean;
+  show_energy_current?: boolean;
+  show_energy_today?: boolean;
+  show_energy_returned?: boolean;
+  show_gas_today?: boolean;
   has_water_leak_sensor?: boolean;
   power_entity?: string;
   power_returned_entity?: string;
@@ -84,7 +88,7 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
       /* Dual power display (consumption + return) */
       .dual-power {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
         gap: 12px;
         margin-bottom: 16px;
       }
@@ -95,24 +99,24 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
         font-size: 28px;
       }
       .dual-power .value-display.solar {
-        background: linear-gradient(135deg, rgba(255, 193, 7, 0.08) 0%, rgba(255, 152, 0, 0.04) 100%);
-        border: 1px solid rgba(255, 193, 7, 0.15);
+        background: color-mix(in srgb, var(--warning-color) 8%, var(--shs-surface));
+        border-color: color-mix(in srgb, var(--warning-color) 28%, var(--divider-color));
       }
       .dual-power .value-display.solar::before {
         background: var(--warning-color);
       }
       .dual-power .value-display.solar .value-big,
       .dual-power .value-display.solar .value-unit {
-        color: #ffc107;
+        color: var(--warning-color);
       }
 
       /* Solar stat item styling */
       .stat-item.solar {
-        background: linear-gradient(135deg, rgba(255, 193, 7, 0.08) 0%, rgba(255, 152, 0, 0.04) 100%);
-        border: 1px solid rgba(255, 193, 7, 0.15);
+        background: color-mix(in srgb, var(--warning-color) 8%, var(--shs-surface));
+        border-color: color-mix(in srgb, var(--warning-color) 28%, var(--divider-color));
       }
       .stat-item.solar .stat-value {
-        color: #ffc107;
+        color: var(--warning-color);
       }
 
       /* Dual stats (simple view without solar) */
@@ -150,48 +154,36 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
       }
 
       .hardware-leak-alert {
-        background: linear-gradient(135deg, #ff4444 0%, #cc0000 100%);
+        background: color-mix(in srgb, var(--error-color) 14%, var(--card-background-color));
         border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 16px;
+        padding: 14px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
         gap: 12px;
-        animation: pulse-alert 1s ease-in-out infinite;
         cursor: pointer;
-        box-shadow: 0 4px 20px rgba(255, 0, 0, 0.4);
-      }
-
-      @keyframes pulse-alert {
-        0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 4px 20px rgba(255, 0, 0, 0.4); }
-        50% { opacity: 0.85; transform: scale(1.01); box-shadow: 0 4px 30px rgba(255, 0, 0, 0.7); }
+        border: 1px solid color-mix(in srgb, var(--error-color) 45%, var(--divider-color));
       }
 
       .hardware-leak-alert .alert-icon {
-        width: 48px;
-        height: 48px;
-        background: rgba(255, 255, 255, 0.2);
-        border-radius: 50%;
+        width: 40px;
+        height: 40px;
+        flex: 0 0 40px;
+        background: color-mix(in srgb, var(--error-color) 18%, transparent);
+        border-radius: 10px;
         display: flex;
         align-items: center;
         justify-content: center;
-        animation: shake 0.5s ease-in-out infinite;
       }
 
-      @keyframes shake {
-        0%, 100% { transform: translateX(0); }
-        25% { transform: translateX(-3px); }
-        75% { transform: translateX(3px); }
-      }
-
-      .hardware-leak-alert .alert-icon ha-icon { --mdc-icon-size: 28px; color: white; }
+      .hardware-leak-alert .alert-icon ha-icon { --mdc-icon-size: 24px; color: var(--error-color); }
       .hardware-leak-alert .alert-content { flex: 1; }
-      .hardware-leak-alert .alert-title { font-size: 16px; font-weight: 700; color: white; margin-bottom: 4px; text-transform: uppercase; }
-      .hardware-leak-alert .alert-message { font-size: 13px; color: rgba(255, 255, 255, 0.9); }
-      .hardware-leak-alert .alert-badge { background: white; color: #cc0000; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+      .hardware-leak-alert .alert-title { font-size: 14px; font-weight: 700; color: var(--error-color); margin-bottom: 3px; }
+      .hardware-leak-alert .alert-message { font-size: 12px; color: var(--primary-text-color); }
+      .hardware-leak-alert .alert-badge { background: var(--error-color); color: var(--text-primary-color); padding: 5px 9px; border-radius: 12px; font-size: 11px; font-weight: 700; }
 
       .leak-panel {
-        background: var(--card-background-color, #1a1a1a);
+        background: var(--card-background-color);
         border-radius: 12px;
         margin-top: 12px;
         overflow: hidden;
@@ -228,6 +220,10 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
       .leak-panel-header .header-right { text-align: right; }
       .leak-panel-header .meter-value { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
       .leak-panel-header .meter-label { font-size: 10px; color: var(--secondary-text-color); text-transform: uppercase; }
+      .leak-panel-header .expand-icon {
+        --mdc-icon-size: 20px;
+        color: var(--secondary-text-color);
+      }
 
       .leak-details { padding: 0 14px 14px; border-top: 1px solid var(--divider-color, rgba(255,255,255,0.08)); }
 
@@ -267,6 +263,24 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
 
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
+      @container (max-width: 430px) {
+        .dual-power {
+          gap: 8px;
+        }
+
+        .dual-power .value-display {
+          padding: 14px 10px;
+        }
+
+        .dual-power .value-display .value-big {
+          font-size: 24px;
+        }
+
+        .hardware-leak-alert {
+          align-items: flex-start;
+        }
+      }
+
     `,
   ];
 
@@ -274,14 +288,45 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
   @state() private _leakPanelExpanded = false;
 
   static getConfigElement() { return document.createElement('smarthomeshop-waterp1-card-editor'); }
-  static getStubConfig() { return { show_graph: true, show_water: true, show_energy: true, has_water_leak_sensor: false }; }
+  static getStubConfig() {
+    return {
+      show_header: true,
+      show_status: true,
+      show_water: true,
+      show_water_current: true,
+      show_water_totals: true,
+      show_graph: true,
+      show_meter_reading: true,
+      show_leak_detection: true,
+      show_energy: true,
+      show_energy_current: true,
+      show_energy_today: true,
+      show_energy_returned: true,
+      show_gas_today: true,
+      has_water_leak_sensor: false,
+    };
+  }
 
   public override setConfig(config: WaterP1Config): void {
     const deviceChanged = this._config.device_id !== config.device_id;
     this._config = {
+      show_header: true,
+      show_status: true,
       show_graph: true,
       show_water: true,
+      show_water_current: true,
+      show_water_totals: true,
+      show_today: true,
+      show_week: true,
+      show_month: true,
+      show_year: true,
+      show_meter_reading: true,
+      show_leak_detection: true,
       show_energy: true,
+      show_energy_current: true,
+      show_energy_today: true,
+      show_energy_returned: true,
+      show_gas_today: true,
       has_water_leak_sensor: false,
       _entitiesResolved: deviceChanged ? false : config._entitiesResolved,
       ...config,
@@ -616,7 +661,6 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
     const weekUsage = this._getWeekUsage();
     const monthUsage = this._getMonthUsage();
     const yearUsage = this._getYearUsage();
-    const waterTotal = this._getMeterTotal();
     const hasLeak = this._hasLeak();
     const leakScore = this._getLeakScore();
     const isContinuousFlow = this._isContinuousFlow();
@@ -629,20 +673,28 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
     // Use statistics-based energy calculation (same as Energy Dashboard)
     const energyToday = this._getEnergyToday();
     const gasToday = this._getGasToday();
+    const showWater = this._config.show_water !== false && this._hasVisibleWaterContent();
+    const showEnergy = this._config.show_energy !== false && this._hasVisibleEnergyContent();
 
     return html`
       <ha-card>
         <div class="card-content">
           ${isHardwareSensorWet ? this._renderHardwareLeakAlert() : nothing}
-          ${this._renderHeader(flowRate, power, hasLeak, isHardwareSensorWet)}
-          ${this._config.show_water ? html`
+          ${this._config.show_header !== false
+            ? this._renderHeader(flowRate, power, hasLeak, isHardwareSensorWet)
+            : nothing}
+          ${showWater ? html`
             <div class="water-section">
-              ${this._renderWaterSection(flowRate, todayUsage, weekUsage, monthUsage, yearUsage, waterTotal)}
-              ${this._renderLeakDetectionPanel(hasLeak, leakScore, isContinuousFlow, isNightUsage, isMicroLeak, hasLeakSensorEnabled, isHardwareSensorWet)}
+              ${this._renderWaterSection(flowRate, todayUsage, weekUsage, monthUsage, yearUsage)}
+              ${this._config.show_leak_detection !== false
+                ? this._renderLeakDetectionPanel(hasLeak, leakScore, isContinuousFlow, isNightUsage, isMicroLeak, hasLeakSensorEnabled, isHardwareSensorWet)
+                : nothing}
             </div>
           ` : nothing}
-          ${this._config.show_water && this._config.show_energy ? html`<div class="section-divider"></div>` : nothing}
-          ${this._config.show_energy ? html`<div class="energy-section">${this._renderEnergySection(power, energyToday, gasToday)}</div>` : nothing}
+          ${showWater && showEnergy ? html`<div class="section-divider"></div>` : nothing}
+          ${showEnergy
+            ? html`<div class="energy-section">${this._renderEnergySection(power, energyToday, gasToday)}</div>`
+            : nothing}
         </div>
       </ha-card>
     `;
@@ -676,27 +728,69 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
           <div class="header-icon ${flowRate > 0 || power > 100 ? 'flowing' : ''}">${productLogo('waterp1meterkit') ? unsafeHTML(productLogo('waterp1meterkit')!) : html`<ha-icon icon="mdi:water-flash"></ha-icon>`}</div>
           <div><h2 class="header-title">WaterP1MeterKit</h2><div class="header-subtitle">Water + Energy</div></div>
         </div>
-        <div class="status-badge ${statusClass}"><ha-icon icon="${statusIcon}"></ha-icon><span>${statusText}</span></div>
+        ${this._config.show_status !== false ? html`
+          <div class="status-badge ${statusClass}"><ha-icon icon="${statusIcon}"></ha-icon><span>${statusText}</span></div>
+        ` : nothing}
       </div>
     `;
   }
 
-  private _renderWaterSection(flowRate: number, todayUsage: number, weekUsage: number, monthUsage: number, yearUsage: number, _waterTotal: number) {
+  private _hasVisibleWaterContent(): boolean {
+    const hasTotals = this._config.show_water_totals !== false && [
+      this._config.show_today,
+      this._config.show_week,
+      this._config.show_month,
+      this._config.show_year,
+    ].some((value) => value !== false);
+
+    return this._config.show_water_current !== false ||
+      hasTotals ||
+      this._config.show_graph !== false ||
+      this._config.show_meter_reading !== false ||
+      this._config.show_leak_detection !== false;
+  }
+
+  private _hasVisibleEnergyContent(): boolean {
+    return this._config.show_energy_current !== false ||
+      this._config.show_energy_today !== false ||
+      this._config.show_energy_returned !== false ||
+      this._config.show_gas_today !== false;
+  }
+
+  private _renderWaterSection(flowRate: number, todayUsage: number, weekUsage: number, monthUsage: number, yearUsage: number) {
     const sparklinePath = generateSparkline(this._historyData);
     const maxValue = this._getMaxHistoryValue();
+    const showToday = this._config.show_today !== false;
+    const showWeek = this._config.show_week !== false;
+    const showMonth = this._config.show_month !== false;
+    const showYear = this._config.show_year !== false;
+    const showTotals = this._config.show_water_totals !== false &&
+      (showToday || showWeek || showMonth || showYear);
 
     return html`
       <div class="section-header water"><ha-icon icon="mdi:water"></ha-icon> Water</div>
-      <div class="value-display ${flowRate > 0 ? 'active' : ''}" @click=${() => this._handleClick(this._config.flow_entity)}>
-        <span class="value-big">${formatNumber(flowRate, 1)}</span><span class="value-unit">L/min</span>
-        <div class="value-label">Current water usage</div>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-item" @click=${() => this._handleClick(this._config.today_entity)}><div class="stat-value">${formatNumber(todayUsage, 0)}<span class="stat-unit">L</span></div><div class="stat-label">Today</div></div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.week_entity)}><div class="stat-value">${formatNumber(weekUsage, 0)}<span class="stat-unit">L</span></div><div class="stat-label">Week</div></div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.month_entity)}><div class="stat-value">${formatNumber(monthUsage / 1000, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Month</div></div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}><div class="stat-value">${formatNumber(yearUsage, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Year</div></div>
-      </div>
+      ${this._config.show_water_current !== false ? html`
+        <div class="value-display ${flowRate > 0 ? 'active' : ''}" @click=${() => this._handleClick(this._config.flow_entity)}>
+          <span class="value-big">${formatNumber(flowRate, 1)}</span><span class="value-unit">L/min</span>
+          <div class="value-label">Current water usage</div>
+        </div>
+      ` : nothing}
+      ${showTotals ? html`
+        <div class="stats-grid">
+          ${showToday ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.today_entity)}><div class="stat-value">${formatNumber(todayUsage, 0)}<span class="stat-unit">L</span></div><div class="stat-label">Today</div></div>
+          ` : nothing}
+          ${showWeek ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.week_entity)}><div class="stat-value">${formatNumber(weekUsage, 0)}<span class="stat-unit">L</span></div><div class="stat-label">Week</div></div>
+          ` : nothing}
+          ${showMonth ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.month_entity)}><div class="stat-value">${formatNumber(monthUsage / 1000, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Month</div></div>
+          ` : nothing}
+          ${showYear ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}><div class="stat-value">${formatNumber(yearUsage, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Year</div></div>
+          ` : nothing}
+        </div>
+      ` : nothing}
       ${this._config.show_graph ? html`
         <div class="graph-section" @click=${() => this._handleClick(this._config.flow_entity)}>
           <div class="graph-header"><span class="graph-title">Water last 24 hours</span><span class="graph-max">${this._historyData ? `max: ${formatNumber(maxValue, 1)} L/min` : ''}</span></div>
@@ -714,7 +808,6 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
 
   private _renderLeakDetectionPanel(hasLeak: boolean, leakScore: number, isContinuousFlow: boolean, isNightUsage: boolean, isMicroLeak: boolean, hasLeakSensorEnabled: boolean, isHardwareSensorWet: boolean) {
     const activeCount = [isContinuousFlow, isNightUsage, isMicroLeak, isHardwareSensorWet].filter(Boolean).length;
-    const waterTotal = this._getMeterTotal();
 
     let statusClass = 'ok', statusIcon = 'mdi:shield-check', statusText = 'No anomalies';
     if (isHardwareSensorWet) { statusClass = 'alert'; statusIcon = 'mdi:water-alert'; statusText = 'Water leak detected!'; }
@@ -726,7 +819,10 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
         <div class="leak-panel-header" @click=${() => this._leakPanelExpanded = !this._leakPanelExpanded}>
           <div class="header-icon ${statusClass}"><ha-icon icon="${statusIcon}"></ha-icon></div>
           <div class="header-content"><div class="header-title">Leak Detection</div><div class="header-subtitle">${statusText}</div></div>
-          <div class="header-right"><div class="meter-value">${formatNumber(waterTotal, 3)} m³</div><div class="meter-label">Meter</div></div>
+          <ha-icon
+            class="expand-icon"
+            icon=${this._leakPanelExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'}
+          ></ha-icon>
         </div>
         ${this._leakPanelExpanded ? html`
           <div class="leak-details">
@@ -766,42 +862,47 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
   }
 
   private _renderEnergySection(power: number, energyToday: number, gasToday: number) {
-    // Check for solar/return power
     const powerReturned = this._getPowerReturned();
     const energyReturnedToday = this._getEnergyReturnedToday();
     const hasSolar = powerReturned > 0 || energyReturnedToday > 0;
+    const showCurrent = this._config.show_energy_current !== false;
+    const showToday = this._config.show_energy_today !== false;
+    const showReturned = this._config.show_energy_returned !== false && hasSolar;
+    const showGas = this._config.show_gas_today !== false;
+    const showLiveGrid = showCurrent || showReturned;
+    const showStats = showToday || showReturned || showGas;
 
     return html`
       <div class="section-header energy"><ha-icon icon="mdi:flash"></ha-icon> Energy</div>
-
-      ${hasSolar ? html`
-        <!-- Solar mode: show consumption and return -->
+      ${showLiveGrid ? html`
         <div class="dual-power">
-          <div class="value-display ${power > 100 ? 'active' : ''}" @click=${() => this._handleClick(this._config.power_entity)}>
-            <span class="value-big">${formatNumber(power, 0)}</span><span class="value-unit">W</span>
-            <div class="value-label">Usage</div>
-          </div>
-          <div class="value-display solar ${powerReturned > 0 ? 'active' : ''}" @click=${() => this._handleClick(this._config.power_returned_entity)}>
-            <span class="value-big">${formatNumber(powerReturned, 0)}</span><span class="value-unit">W</span>
-            <div class="value-label">Returned</div>
-          </div>
+          ${showCurrent ? html`
+            <div class="value-display ${power > 100 ? 'active' : ''}" @click=${() => this._handleClick(this._config.power_entity)}>
+              <span class="value-big">${formatNumber(power, 0)}</span><span class="value-unit">W</span>
+              <div class="value-label">${hasSolar ? 'Usage' : 'Current usage'}</div>
+            </div>
+          ` : nothing}
+          ${showReturned ? html`
+            <div class="value-display solar ${powerReturned > 0 ? 'active' : ''}" @click=${() => this._handleClick(this._config.power_returned_entity)}>
+              <span class="value-big">${formatNumber(powerReturned, 0)}</span><span class="value-unit">W</span>
+              <div class="value-label">Returned</div>
+            </div>
+          ` : nothing}
         </div>
+      ` : nothing}
+      ${showStats ? html`
         <div class="stats-grid">
-          <div class="stat-item" @click=${() => this._handleClick(this._config.energy_today_entity)}><div class="stat-value">${formatNumber(energyToday, 2)}<span class="stat-unit">kWh</span></div><div class="stat-label">Usage today</div></div>
-          <div class="stat-item solar" @click=${() => this._handleClick(this._config.energy_returned_entity)}><div class="stat-value">${formatNumber(energyReturnedToday, 2)}<span class="stat-unit">kWh</span></div><div class="stat-label">Returned today</div></div>
-          <div class="stat-item" @click=${() => this._handleClick(this._config.gas_entity)}><div class="stat-value">${formatNumber(gasToday, 2)}<span class="stat-unit">m³</span></div><div class="stat-label">Gas today</div></div>
+          ${showToday ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.energy_today_entity)}><div class="stat-value">${formatNumber(energyToday, 2)}<span class="stat-unit">kWh</span></div><div class="stat-label">Electricity today</div></div>
+          ` : nothing}
+          ${showReturned ? html`
+            <div class="stat-item solar" @click=${() => this._handleClick(this._config.energy_returned_entity)}><div class="stat-value">${formatNumber(energyReturnedToday, 2)}<span class="stat-unit">kWh</span></div><div class="stat-label">Returned today</div></div>
+          ` : nothing}
+          ${showGas ? html`
+            <div class="stat-item" @click=${() => this._handleClick(this._config.gas_entity)}><div class="stat-value">${formatNumber(gasToday, 2)}<span class="stat-unit">m³</span></div><div class="stat-label">Gas today</div></div>
+          ` : nothing}
         </div>
-      ` : html`
-        <!-- No solar: simple view -->
-        <div class="value-display ${power > 100 ? 'active' : ''}" @click=${() => this._handleClick(this._config.power_entity)}>
-          <span class="value-big">${formatNumber(power, 0)}</span><span class="value-unit">W</span>
-          <div class="value-label">Current usage</div>
-        </div>
-        <div class="dual-stats">
-          <div class="stat-item" @click=${() => this._handleClick(this._config.energy_today_entity)}><div class="stat-value">${formatNumber(energyToday, 2)}<span class="stat-unit">kWh</span></div><div class="stat-label">Electricity today</div></div>
-          <div class="stat-item" @click=${() => this._handleClick(this._config.gas_entity)}><div class="stat-value">${formatNumber(gasToday, 2)}<span class="stat-unit">m³</span></div><div class="stat-label">Gas today</div></div>
-        </div>
-      `}
+      ` : nothing}
     `;
   }
 

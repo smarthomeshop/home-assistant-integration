@@ -14,6 +14,9 @@ frontend/
 │   │   ├── waterp1-card.ts # WaterP1MeterKit card (water + energy)
 │   │   ├── waterflowkit-card.ts # WaterFlowKit card (dual flow)
 │   │   ├── ultimatesensor-card.ts # UltimateSensor card
+│   │   ├── p1meterkit-card.ts # P1MeterKit card (grid, tariffs and phases)
+│   │   ├── ceilsense-card.ts # CeilSense card (presence, zones and climate)
+│   │   ├── product-card-utils.ts # Registry-first product/entity resolution
 │   │   ├── card-editors.ts # Configuration editors for all cards
 │   │   ├── sensor-settings.ts # Sensor settings component
 │   │   ├── zone-editor.ts  # Zone editor for UltimateSensor
@@ -41,6 +44,26 @@ frontend/
 | **WaterP1 Card** | `smarthomeshop-waterp1-card` | Water + energy monitoring for WaterP1MeterKit |
 | **WaterFlowKit Card** | `smarthomeshop-waterflowkit-card` | Dual flow monitoring with animated pipes |
 | **UltimateSensor Card** | `smarthomeshop-ultimatesensor-card` | Presence detection and environment sensors |
+| **P1MeterKit Card** | `smarthomeshop-p1meterkit-card` | Live electricity, grid direction, tariffs, phases and energy insights |
+| **CeilSense Card** | `smarthomeshop-ceilsense-card` | Ceiling presence, target zones, distance, energy and room climate |
+
+## Visibility Options
+
+Every card exposes these options in the Home Assistant visual card editor. All
+options default to visible, so existing dashboards keep their current layout.
+
+| Card | Configurable content |
+|------|----------------------|
+| **Water Card** | Header, status, current usage, period totals, today, week, month, year, 24-hour graph, total meter reading and leak detection |
+| **WaterP1 Card** | All Water Card options plus complete water/energy sections, current power, electricity today, returned energy and gas today |
+| **WaterFlowKit Card** | Header, combined status, pipe visualization, pipe detail cards, total consumption, hourly rate, both pipes and temperature per pipe |
+| **UltimateSensor Card** | Header, presence status, room score, climate values, individual environment sensors, CO2 meter, PM section, PM gauge, PM value cards, NOx, radar/room view and person distance details |
+| **P1MeterKit Card** | Header, connection status, live power flow, tariff totals, phase load, energy insights, gas and device environment |
+| **CeilSense Card** | Header, connection status, live presence radar, zones, distance and signal energy, environment values and room-quality insights |
+
+The compact `Total meter reading` row stays available on firmware without a
+calibration entity. Firmware that supports meter calibration also shows a
+`Set` action in the same row.
 
 ## Source Files
 
@@ -55,6 +78,9 @@ frontend/
 - **waterp1-card.ts** - Combines water and P1 energy data
 - **waterflowkit-card.ts** - Dual flow visualization with animations
 - **ultimatesensor-card.ts** - Room score, presence, CO2, VOC, air quality
+- **p1meterkit-card.ts** - Grid import/export, tariff totals, phase load and energy insights
+- **ceilsense-card.ts** - Presence targets, zones, distance, signal energy and room climate
+- **product-card-utils.ts** - Shared registry-first product and entity matching
 - **card-editors.ts** - Visual configuration editors for Lovelace UI
 - **sensor-settings.ts** - Settings panel for sensors
 - **zone-editor.ts** - Zone configuration for presence detection

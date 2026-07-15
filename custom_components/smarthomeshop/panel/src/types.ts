@@ -26,6 +26,9 @@ export interface HomeAssistant {
   themes: {
     darkMode: boolean;
   };
+  config?: {
+    time_zone?: string;
+  };
   language: string;
 }
 

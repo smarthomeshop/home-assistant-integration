@@ -18,12 +18,25 @@ interface RadarCardConfig {
   device_id?: string;
   entity_prefix?: string;
   max_distance?: number;
+  show_header?: boolean;
+  show_status?: boolean;
   show_radar?: boolean;
+  show_target_details?: boolean;
   show_environment?: boolean;
   show_zones?: boolean;
   show_grid?: boolean;
   title?: string;
   show_air_quality?: boolean;
+  show_pm_gauge?: boolean;
+  show_pm_values?: boolean;
+  show_nox?: boolean;
+  show_room_score?: boolean;
+  show_temperature?: boolean;
+  show_humidity?: boolean;
+  show_co2?: boolean;
+  show_co2_bar?: boolean;
+  show_illuminance?: boolean;
+  show_voc?: boolean;
   view_mode?: 'radar' | 'room';
   room_view_mode?: '2d' | '3d';
 }
@@ -95,7 +108,6 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   @state() private _deviceName: string = '';
   @state() private _entityIds: EntityIds = { targets: [] };
   @state() private _showSettings: boolean = false;
-  @state() private _viewMode: 'radar' | 'room' = 'radar';
   @state() private _rooms: any[] = [];
   @state() private _selectedRoomId: string | null = null;
   @state() private _roomViewMode: '2d' | '3d' = '2d';
@@ -121,9 +133,21 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   static styles = css`
     :host {
       display: block;
+      container-type: inline-size;
+      --shs-surface: color-mix(
+        in srgb,
+        var(--secondary-background-color) 78%,
+        var(--card-background-color)
+      );
+      --shs-surface-hover: color-mix(
+        in srgb,
+        var(--primary-color) 6%,
+        var(--shs-surface)
+      );
+      --shs-outline: color-mix(in srgb, var(--divider-color) 88%, transparent);
     }
     ha-card {
-      padding: 16px;
+      padding: 14px;
       overflow: hidden;
     }
 
@@ -133,26 +157,29 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 16px;
+      gap: 12px;
+      margin-bottom: 14px;
     }
     .header-left {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      min-width: 0;
     }
     .header-icon {
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 42px;
+      border-radius: 12px;
       display: flex;
       align-items: center;
       justify-content: center;
       background: color-mix(in srgb, var(--primary-color) 15%, transparent);
       color: var(--primary-color);
-      transition: all 0.3s ease;
+      transition: transform 180ms ease-out, background-color 180ms ease-out;
     }
     .header-icon ha-icon {
-      --mdc-icon-size: 28px;
+      --mdc-icon-size: 24px;
     }
     .header-icon svg {
       width: 26px;
@@ -169,8 +196,8 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       50% { transform: scale(1.1); }
     }
     .header-title {
-      font-size: 1.1rem;
-      font-weight: 500;
+      font-size: 1rem;
+      font-weight: 600;
       color: var(--primary-text-color);
       margin: 0;
       line-height: 1.2;
@@ -184,11 +211,12 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      flex: 0 0 auto;
+      padding: 6px 10px;
       border-radius: 20px;
       font-size: 0.75rem;
       font-weight: 500;
-      transition: all 0.2s ease;
+      transition: background-color 180ms ease-out, color 180ms ease-out;
     }
     .status-badge ha-icon {
       --mdc-icon-size: 16px;
@@ -226,14 +254,14 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       cursor: pointer;
       background: transparent;
       color: var(--secondary-text-color);
-      transition: all 0.2s;
+      transition: background-color 180ms ease-out, color 180ms ease-out;
     }
     .view-btn.active {
       background: var(--primary-color, #3b82f6);
       color: white;
     }
     .view-btn:hover:not(.active) {
-      background: rgba(255,255,255,0.1);
+      background: color-mix(in srgb, var(--primary-color) 7%, transparent);
     }
     .room-selector {
       display: flex;
@@ -259,11 +287,11 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
     /* Room Quality Score Section */
     .room-score-section {
-      background: linear-gradient(135deg, rgba(76, 175, 80, 0.08) 0%, rgba(33, 150, 243, 0.08) 100%);
+      background: var(--shs-surface);
       border-radius: 12px;
       padding: 12px;
       margin-bottom: 12px;
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--shs-outline);
     }
     .room-score-header {
       display: flex;
@@ -280,7 +308,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       color: var(--primary-text-color);
     }
     .room-score-title ha-icon {
-      color: #4caf50;
+      color: var(--success-color);
       --mdc-icon-size: 18px;
     }
     .room-score-badge {
@@ -290,7 +318,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       font-weight: 600;
       color: white;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0;
     }
     .room-score-main {
       display: flex;
@@ -324,24 +352,24 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       display: flex;
       align-items: center;
       gap: 8px;
-      background: rgba(255, 152, 0, 0.12);
-      border-left: 2px solid #ff9800;
+      background: color-mix(in srgb, var(--warning-color) 11%, transparent);
+      border: 1px solid color-mix(in srgb, var(--warning-color) 28%, var(--divider-color));
       padding: 6px 10px;
-      border-radius: 0 6px 6px 0;
+      border-radius: 8px;
       font-size: 0.8rem;
       color: var(--primary-text-color);
     }
     .recommendation-item ha-icon {
       --mdc-icon-size: 16px;
-      color: #ff9800;
+      color: var(--warning-color);
       flex-shrink: 0;
     }
     .recommendation-item.positive {
-      background: rgba(76, 175, 80, 0.12);
-      border-left-color: #4caf50;
+      background: color-mix(in srgb, var(--success-color) 11%, transparent);
+      border-color: color-mix(in srgb, var(--success-color) 28%, var(--divider-color));
     }
     .recommendation-item.positive ha-icon {
-      color: #4caf50;
+      color: var(--success-color);
     }
 
     /* Environment Section */
@@ -354,17 +382,18 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       gap: 10px;
     }
     .env-card {
-      background: var(--secondary-background-color);
+      background: var(--shs-surface);
+      border: 1px solid var(--shs-outline);
       border-radius: 12px;
       padding: 14px;
       display: flex;
       flex-direction: column;
-      transition: transform 0.2s, box-shadow 0.2s;
+      transition: background-color 180ms ease-out, border-color 180ms ease-out;
       cursor: pointer;
     }
     .env-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      background: var(--shs-surface-hover);
+      border-color: color-mix(in srgb, var(--primary-color) 25%, var(--divider-color));
     }
     .env-card-header {
       display: flex;
@@ -379,7 +408,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       font-size: 0.75rem;
       color: var(--secondary-text-color);
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      letter-spacing: 0;
     }
     .env-card-value {
       font-size: 1.5rem;
@@ -401,14 +430,15 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     .co2-quality {
       margin-top: 12px;
       padding: 14px;
-      background: var(--secondary-background-color);
+      background: var(--shs-surface);
+      border: 1px solid var(--shs-outline);
       border-radius: 12px;
       cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
+      transition: background-color 180ms ease-out, border-color 180ms ease-out;
     }
     .co2-quality:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      background: var(--shs-surface-hover);
+      border-color: color-mix(in srgb, var(--primary-color) 25%, var(--divider-color));
     }
     .co2-quality-header {
       display: flex;
@@ -434,11 +464,11 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       padding: 4px 10px;
       border-radius: 12px;
     }
-    .co2-quality-status.excellent { background: #e8f5e9; color: #2e7d32; }
-    .co2-quality-status.good { background: #e8f5e9; color: #388e3c; }
-    .co2-quality-status.moderate { background: #fff3e0; color: #f57c00; }
-    .co2-quality-status.poor { background: #ffebee; color: #d32f2f; }
-    .co2-quality-status.unhealthy { background: #fce4ec; color: #c2185b; }
+    .co2-quality-status.excellent { background: color-mix(in srgb, #4caf50 14%, transparent); color: #4caf50; }
+    .co2-quality-status.good { background: color-mix(in srgb, #43a047 14%, transparent); color: #43a047; }
+    .co2-quality-status.moderate { background: color-mix(in srgb, #f57c00 14%, transparent); color: #f57c00; }
+    .co2-quality-status.poor { background: color-mix(in srgb, #d32f2f 14%, transparent); color: #d32f2f; }
+    .co2-quality-status.unhealthy { background: color-mix(in srgb, #c2185b 14%, transparent); color: #c2185b; }
 
     .co2-bar-container {
       position: relative;
@@ -476,11 +506,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     .air-quality-section {
       margin-top: 16px;
       padding: 16px;
-      background: linear-gradient(135deg,
-        rgba(var(--rgb-primary-color), 0.08) 0%,
-        rgba(var(--rgb-primary-color), 0.02) 100%);
+      background: var(--shs-surface);
       border-radius: 12px;
-      border: 1px solid rgba(var(--rgb-primary-color), 0.1);
+      border: 1px solid var(--shs-outline);
     }
     .air-quality-header {
       display: flex;
@@ -505,13 +533,13 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       font-size: 0.75rem;
       font-weight: 600;
     }
-    .air-quality-status.excellent { background: #e8f5e9; color: #2e7d32; }
-    .air-quality-status.good { background: #e8f5e9; color: #43a047; }
-    .air-quality-status.moderate { background: #fff8e1; color: #f9a825; }
-    .air-quality-status.unhealthy-sensitive { background: #fff3e0; color: #ef6c00; }
-    .air-quality-status.unhealthy { background: #ffebee; color: #e53935; }
-    .air-quality-status.very-unhealthy { background: #f3e5f5; color: #8e24aa; }
-    .air-quality-status.hazardous { background: #fce4ec; color: #880e4f; }
+    .air-quality-status.excellent { background: color-mix(in srgb, #4caf50 14%, transparent); color: #4caf50; }
+    .air-quality-status.good { background: color-mix(in srgb, #43a047 14%, transparent); color: #43a047; }
+    .air-quality-status.moderate { background: color-mix(in srgb, #f9a825 14%, transparent); color: #f9a825; }
+    .air-quality-status.unhealthy-sensitive { background: color-mix(in srgb, #ef6c00 14%, transparent); color: #ef6c00; }
+    .air-quality-status.unhealthy { background: color-mix(in srgb, #e53935 14%, transparent); color: #e53935; }
+    .air-quality-status.very-unhealthy { background: color-mix(in srgb, #8e24aa 14%, transparent); color: #8e24aa; }
+    .air-quality-status.hazardous { background: color-mix(in srgb, #880e4f 14%, transparent); color: #ad476e; }
 
     /* PM Gauge */
     .pm-gauge-container {
@@ -587,17 +615,17 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       gap: 10px;
     }
     .pm-item {
-      background: var(--card-background-color);
+      background: color-mix(in srgb, var(--card-background-color) 88%, var(--secondary-background-color));
       padding: 12px 8px;
       border-radius: 10px;
       text-align: center;
       cursor: pointer;
-      transition: transform 0.2s, box-shadow 0.2s;
-      border: 1px solid rgba(var(--rgb-primary-color), 0.1);
+      transition: background-color 180ms ease-out, border-color 180ms ease-out;
+      border: 1px solid var(--shs-outline);
     }
     .pm-item:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      background: var(--shs-surface-hover);
+      border-color: color-mix(in srgb, var(--primary-color) 25%, var(--divider-color));
     }
     .pm-item-label {
       font-size: 0.7rem;
@@ -806,6 +834,42 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       background: var(--divider-color);
       margin: 16px 0;
     }
+
+    @container (max-width: 430px) {
+      ha-card {
+        padding: 14px 12px;
+      }
+
+      .header {
+        align-items: flex-start;
+      }
+
+      .header-icon {
+        width: 40px;
+        height: 40px;
+        flex-basis: 40px;
+      }
+
+      .status-badge {
+        padding: 6px 8px;
+      }
+
+      .pm-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .air-quality-section,
+      .room-view-container {
+        padding: 12px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .header-icon.active,
+      .status-alert {
+        animation: none;
+      }
+    }
   `;
 
   static getConfigElement() {
@@ -815,8 +879,14 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   static getStubConfig() {
     return {
       max_distance: 6000,
+      show_header: true,
+      show_status: true,
       show_radar: true,
+      show_target_details: true,
       show_environment: true,
+      show_pm_gauge: true,
+      show_pm_values: true,
+      show_nox: true,
       show_zones: true,
       show_grid: true,
     };
@@ -825,8 +895,14 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   public setConfig(config: RadarCardConfig): void {
     this._config = {
       max_distance: 6000,
+      show_header: true,
+      show_status: true,
       show_radar: true,
+      show_target_details: true,
       show_environment: true,
+      show_pm_gauge: true,
+      show_pm_values: true,
+      show_nox: true,
       show_zones: true,
       show_grid: true,
       ...config,
@@ -1924,21 +2000,25 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     if (offlineInfo.offline) {
       return html`
         <ha-card>
-          <div class="header">
-            <div class="header-left">
-              <div class="header-icon">
-                ${logo ? unsafeHTML(logo) : html`<ha-icon icon="mdi:radar"></ha-icon>`}
+          ${this._config.show_header !== false ? html`
+            <div class="header">
+              <div class="header-left">
+                <div class="header-icon">
+                  ${logo ? unsafeHTML(logo) : html`<ha-icon icon="mdi:radar"></ha-icon>`}
+                </div>
+                <div>
+                  <h2 class="header-title">${title}</h2>
+                  <div class="header-subtitle">Presence &amp; climate</div>
+                </div>
               </div>
-              <div>
-                <h2 class="header-title">${title}</h2>
-                <div class="header-subtitle">Presence &amp; climate</div>
-              </div>
+              ${this._config.show_status !== false ? html`
+                <div class="status-badge status-alert">
+                  <ha-icon icon="mdi:lan-disconnect"></ha-icon>
+                  <span>Offline</span>
+                </div>
+              ` : nothing}
             </div>
-            <div class="status-badge status-alert">
-              <ha-icon icon="mdi:lan-disconnect"></ha-icon>
-              <span>Offline</span>
-            </div>
-          </div>
+          ` : nothing}
           <div class="offline-state">
             <ha-icon icon="mdi:lan-disconnect"></ha-icon>
             <div class="offline-title">Device offline</div>
@@ -1952,28 +2032,36 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
         </ha-card>
       `;
     }
-    const { temperature, humidity, co2, illuminance, voc, nox, pm1_0, pm2_5, pm4_0, pm10, typical_particle_size } = this._environment;
+    const { temperature, humidity, co2, illuminance, voc, nox, pm1_0, pm2_5, pm4_0, pm10 } = this._environment;
     const co2Status = co2 !== null ? this._getCo2Status(co2) : null;
+    const showRoomScore = this._hasEnvironmentData() && this._config.show_room_score !== false;
+    const showEnvironment = this._config.show_environment !== false && this._hasAnyEnvironmentEnabled();
+    const showAirQuality = this._hasAirQualityData() && this._config.show_air_quality !== false;
+    const hasOverviewContent = showRoomScore || showEnvironment || showAirQuality;
 
     return html`
       <ha-card>
-        <div class="header">
-          <div class="header-left">
-            <div class="header-icon ${activeTargets > 0 ? 'active' : ''}">
-              ${logo ? unsafeHTML(logo) : html`<ha-icon icon="mdi:radar"></ha-icon>`}
+        ${this._config.show_header !== false ? html`
+          <div class="header">
+            <div class="header-left">
+              <div class="header-icon ${activeTargets > 0 ? 'active' : ''}">
+                ${logo ? unsafeHTML(logo) : html`<ha-icon icon="mdi:radar"></ha-icon>`}
+              </div>
+              <div>
+                <h2 class="header-title">${title}</h2>
+                <div class="header-subtitle">Presence &amp; climate</div>
+              </div>
             </div>
-            <div>
-              <h2 class="header-title">${title}</h2>
-              <div class="header-subtitle">Presence &amp; climate</div>
-            </div>
+            ${this._config.show_status !== false ? html`
+              <div class="status-badge ${activeTargets > 0 ? 'status-active' : 'status-ok'}">
+                <ha-icon icon="${activeTargets > 0 ? 'mdi:motion-sensor' : 'mdi:motion-sensor-off'}"></ha-icon>
+                <span>${activeTargets} ${activeTargets === 1 ? 'person' : 'people'}</span>
+              </div>
+            ` : nothing}
           </div>
-          <div class="status-badge ${activeTargets > 0 ? 'status-active' : 'status-ok'}">
-            <ha-icon icon="${activeTargets > 0 ? 'mdi:motion-sensor' : 'mdi:motion-sensor-off'}"></ha-icon>
-            <span>${activeTargets} ${activeTargets === 1 ? 'person' : 'people'}</span>
-          </div>
-        </div>
+        ` : nothing}
 
-        ${this._hasEnvironmentData() && this._config.show_room_score !== false ? (() => {
+        ${showRoomScore ? (() => {
           const roomScore = this._calculateRoomScore();
           return html`
             <div class="room-score-section">
@@ -1998,13 +2086,13 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                         <stop offset="100%" style="stop-color:#4caf50"/>
                       </linearGradient>
                     </defs>
-                    <path d="M 10 55 A 50 50 0 0 1 110 55" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8" stroke-linecap="round"/>
+                    <path d="M 10 55 A 50 50 0 0 1 110 55" fill="none" stroke="var(--divider-color)" stroke-width="8" stroke-linecap="round"/>
                     <path d="M 10 55 A 50 50 0 0 1 110 55" fill="none" stroke="url(#scoreGradient)" stroke-width="8" stroke-linecap="round"
                           stroke-dasharray="${(roomScore.score / 10) * Math.PI * 50} ${Math.PI * 50}" />
                     <circle
                       cx="${60 + 50 * Math.cos(Math.PI * (1 - roomScore.score / 10))}"
                       cy="${55 - 50 * Math.sin(Math.PI * (1 - roomScore.score / 10))}"
-                      r="6" fill="${roomScore.color}" stroke="white" stroke-width="2"/>
+                      r="6" fill="${roomScore.color}" stroke="var(--card-background-color)" stroke-width="2"/>
                   </svg>
                   <div class="room-score-value" style="color: ${roomScore.color}">${roomScore.score.toFixed(1)}</div>
                 </div>
@@ -2024,7 +2112,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
           `;
         })() : nothing}
 
-        ${this._hasAnyEnvironmentEnabled() ? html`
+        ${showEnvironment ? html`
           <div class="environment-section">
             <div class="environment-grid">
               ${temperature !== null && this._config.show_temperature !== false ? html`
@@ -2103,7 +2191,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
         ` : nothing}
 
 
-        ${this._hasAirQualityData() && this._config.show_air_quality !== false ? html`
+        ${showAirQuality ? html`
           <div class="air-quality-section">
             <div class="air-quality-header">
               <div class="air-quality-title">
@@ -2117,7 +2205,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
               ` : nothing}
             </div>
 
-            ${pm2_5 !== null ? html`
+            ${pm2_5 !== null && this._config.show_pm_gauge !== false ? html`
               <div class="pm-gauge-container" @click=${() => this._fireMoreInfo(this._entityIds.pm2_5)}>
                 <div class="pm-gauge-label">
                   <span class="pm-gauge-label-text">PM2.5 (Fine Particles)</span>
@@ -2140,7 +2228,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
               </div>
             ` : nothing}
 
-            <div class="pm-grid">
+            ${this._config.show_pm_values !== false ? html`<div class="pm-grid">
               ${pm1_0 !== null ? html`
                 <div class="pm-item pm1" @click=${() => this._fireMoreInfo(this._entityIds.pm1_0)}>
                   <div class="pm-item-label">PM1.0</div>
@@ -2169,9 +2257,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                   <span class="pm-item-unit">µg/m³</span>
                 </div>
               ` : nothing}
-            </div>
+            </div>` : nothing}
 
-            ${nox !== null ? html`
+            ${nox !== null && this._config.show_nox !== false ? html`
               <div class="voc-nox-grid" style="margin-top: 12px;">
                 <div class="env-card nox" @click=${() => this._fireMoreInfo(this._entityIds.nox)}>
                   <div class="env-card-header">
@@ -2186,7 +2274,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
         ` : nothing}
 
         ${this._config.show_radar !== false ? html`
-          ${this._config.show_environment !== false ? html`<div class="section-divider"></div>` : nothing}
+          ${hasOverviewContent ? html`<div class="section-divider"></div>` : nothing}
 
           <div class="radar-section">
             ${this._config.view_mode === 'room' ? html`
@@ -2199,18 +2287,20 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
               </div>
             `}
 
-            <div class="target-info">
-              ${this._targets.map((target, i) => html`
-                <div class="target-info-item ${target.active ? '' : 'inactive'}"
-                     @click=${() => this._fireMoreInfo(this._entityIds.targets[i])}>
-                  <div class="target-info-dot target-${i + 1}"></div>
-                  <div class="target-info-label">Person ${i + 1}</div>
-                  <div class="target-info-value">
-                    ${target.active ? `${(target.distance / 1000).toFixed(1)}m` : '-'}
+            ${this._config.show_target_details !== false ? html`
+              <div class="target-info">
+                ${this._targets.map((target, i) => html`
+                  <div class="target-info-item ${target.active ? '' : 'inactive'}"
+                       @click=${() => this._fireMoreInfo(this._entityIds.targets[i])}>
+                    <div class="target-info-dot target-${i + 1}"></div>
+                    <div class="target-info-label">Person ${i + 1}</div>
+                    <div class="target-info-value">
+                      ${target.active ? `${(target.distance / 1000).toFixed(1)}m` : '-'}
+                    </div>
                   </div>
-                </div>
-              `)}
-            </div>
+                `)}
+              </div>
+            ` : nothing}
           </div>
         ` : nothing}
       <smarthomeshop-sensor-settings
@@ -2264,6 +2354,22 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
     }
     .checkbox-row input { width: 18px; height: 18px; }
     .checkbox-row label { margin-bottom: 0; }
+    .option-group {
+      padding: 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: color-mix(
+        in srgb,
+        var(--secondary-background-color) 72%,
+        var(--card-background-color)
+      );
+      margin-bottom: 10px;
+    }
+    .nested-options {
+      margin: 8px 0 0 25px;
+      padding: 8px 0 0 12px;
+      border-left: 2px solid var(--divider-color);
+    }
     .info {
       font-size: 12px;
       color: var(--secondary-text-color);
@@ -2275,8 +2381,8 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
       margin: 16px 0;
     }
     .info-banner {
-      background: linear-gradient(135deg, rgba(156, 39, 176, 0.15), rgba(63, 81, 181, 0.15));
-      border: 1px solid rgba(156, 39, 176, 0.3);
+      background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
+      border: 1px solid color-mix(in srgb, var(--primary-color) 28%, var(--divider-color));
       border-radius: 12px;
       padding: 12px 16px;
       margin-bottom: 20px;
@@ -2395,102 +2501,157 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
       <div class="divider"></div>
 
       <div class="form-row">
-        <label>Sections</label>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_room_score" .checked=${this._config.show_room_score !== false}
-            @change=${(e: Event) => this._valueChanged('show_room_score', (e.target as HTMLInputElement).checked)} />
-          <label for="show_room_score">Room Quality Score</label>
+        <label>Card</label>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_header" .checked=${this._config.show_header !== false}
+              @change=${(e: Event) => this._valueChanged('show_header', (e.target as HTMLInputElement).checked)} />
+            <label for="show_header">Header</label>
+          </div>
+          ${this._config.show_header !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_status" .checked=${this._config.show_status !== false}
+                  @change=${(e: Event) => this._valueChanged('show_status', (e.target as HTMLInputElement).checked)} />
+                <label for="show_status">Presence status</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_radar" .checked=${this._config.show_radar !== false}
-            @change=${(e: Event) => this._valueChanged('show_radar', (e.target as HTMLInputElement).checked)} />
-          <label for="show_radar">Radar/presence</label>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_room_score" .checked=${this._config.show_room_score !== false}
+              @change=${(e: Event) => this._valueChanged('show_room_score', (e.target as HTMLInputElement).checked)} />
+            <label for="show_room_score">Room quality score</label>
+          </div>
         </div>
       </div>
 
       <div class="form-row">
         <label>Environmental sensors</label>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_temperature" .checked=${this._config.show_temperature !== false}
-            @change=${(e: Event) => this._valueChanged('show_temperature', (e.target as HTMLInputElement).checked)} />
-          <label for="show_temperature">Temperature</label>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_environment" .checked=${this._config.show_environment !== false}
+              @change=${(e: Event) => this._valueChanged('show_environment', (e.target as HTMLInputElement).checked)} />
+            <label for="show_environment">Climate values</label>
+          </div>
+          ${this._config.show_environment !== false ? html`
+            <div class="nested-options">
+              ${([
+                ['show_temperature', 'Temperature'],
+                ['show_humidity', 'Humidity'],
+                ['show_co2', 'CO2'],
+                ['show_illuminance', 'Illuminance'],
+                ['show_voc', 'VOC index'],
+              ] as const).map(([key, label]) => html`
+                <div class="checkbox-row">
+                  <input type="checkbox" id=${key} .checked=${this._config[key] !== false}
+                    @change=${(e: Event) => this._valueChanged(key, (e.target as HTMLInputElement).checked)} />
+                  <label for=${key}>${label}</label>
+                </div>
+              `)}
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_co2_bar" .checked=${this._config.show_co2_bar !== false}
+                  @change=${(e: Event) => this._valueChanged('show_co2_bar', (e.target as HTMLInputElement).checked)} />
+                <label for="show_co2_bar">CO2 quality meter</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_humidity" .checked=${this._config.show_humidity !== false}
-            @change=${(e: Event) => this._valueChanged('show_humidity', (e.target as HTMLInputElement).checked)} />
-          <label for="show_humidity">Humidity</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_co2" .checked=${this._config.show_co2 !== false}
-            @change=${(e: Event) => this._valueChanged('show_co2', (e.target as HTMLInputElement).checked)} />
-          <label for="show_co2">CO₂</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_co2_bar" .checked=${this._config.show_co2_bar !== false}
-            @change=${(e: Event) => this._valueChanged('show_co2_bar', (e.target as HTMLInputElement).checked)} />
-          <label for="show_co2_bar">CO₂ quality meter</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_illuminance" .checked=${this._config.show_illuminance !== false}
-            @change=${(e: Event) => this._valueChanged('show_illuminance', (e.target as HTMLInputElement).checked)} />
-          <label for="show_illuminance">Illuminance</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_voc" .checked=${this._config.show_voc !== false}
-            @change=${(e: Event) => this._valueChanged('show_voc', (e.target as HTMLInputElement).checked)} />
-          <label for="show_voc">VOC Index</label>
-        </div>
-        <div class="checkbox-row">
-          <input type="checkbox" id="show_air_quality" .checked=${this._config.show_air_quality !== false}
-            @change=${(e: Event) => this._valueChanged('show_air_quality', (e.target as HTMLInputElement).checked)} />
-          <label for="show_air_quality">Particulate matter (PM)</label>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_air_quality" .checked=${this._config.show_air_quality !== false}
+              @change=${(e: Event) => this._valueChanged('show_air_quality', (e.target as HTMLInputElement).checked)} />
+            <label for="show_air_quality">Particulate matter (PM)</label>
+          </div>
+          ${this._config.show_air_quality !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_pm_gauge" .checked=${this._config.show_pm_gauge !== false}
+                  @change=${(e: Event) => this._valueChanged('show_pm_gauge', (e.target as HTMLInputElement).checked)} />
+                <label for="show_pm_gauge">PM2.5 quality meter</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_pm_values" .checked=${this._config.show_pm_values !== false}
+                  @change=${(e: Event) => this._valueChanged('show_pm_values', (e.target as HTMLInputElement).checked)} />
+                <label for="show_pm_values">PM value cards</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_nox" .checked=${this._config.show_nox !== false}
+                  @change=${(e: Event) => this._valueChanged('show_nox', (e.target as HTMLInputElement).checked)} />
+                <label for="show_nox">NOx index</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
       </div>
-
-      <div class="divider"></div>
 
       <div class="form-row">
-        <label>View mode</label>
-        <select @change=${(e: Event) => this._valueChanged('view_mode', (e.target as HTMLSelectElement).value)}>
-          <option value="radar" ?selected=${this._config.view_mode !== 'room'}>📡 Radar view</option>
-          <option value="room" ?selected=${this._config.view_mode === 'room'}>🏠 Room view</option>
-        </select>
-        <div class="info">Radar shows the sensor view, Room shows your drawn room with live tracking</div>
+        <label>Presence</label>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_radar" .checked=${this._config.show_radar !== false}
+              @change=${(e: Event) => this._valueChanged('show_radar', (e.target as HTMLInputElement).checked)} />
+            <label for="show_radar">Radar or room view</label>
+          </div>
+          ${this._config.show_radar !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_target_details" .checked=${this._config.show_target_details !== false}
+                  @change=${(e: Event) => this._valueChanged('show_target_details', (e.target as HTMLInputElement).checked)} />
+                <label for="show_target_details">Person distance details</label>
+              </div>
+            </div>
+          ` : nothing}
+        </div>
       </div>
 
-      ${this._config.view_mode === 'room' ? html`
-        <div class="form-row">
-          <label>Default room view</label>
-          <select @change=${(e: Event) => this._valueChanged('room_view_mode', (e.target as HTMLSelectElement).value)}>
-            <option value="2d" ?selected=${this._config.room_view_mode !== '3d'}>2D floor plan</option>
-            <option value="3d" ?selected=${this._config.room_view_mode === '3d'}>3D view</option>
-          </select>
-          <div class="info">The view the card starts in. You can still toggle 2D/3D on the card itself.</div>
-        </div>
-      ` : nothing}
-
-      ${this._config.view_mode !== 'room' ? html`
+      ${this._config.show_radar !== false ? html`
         <div class="divider"></div>
 
         <div class="form-row">
-          <label>Radar options</label>
-          <div class="checkbox-row">
-            <input type="checkbox" id="show_zones" .checked=${this._config.show_zones !== false}
-              @change=${(e: Event) => this._valueChanged('show_zones', (e.target as HTMLInputElement).checked)} />
-            <label for="show_zones">Show zones</label>
-          </div>
-          <div class="checkbox-row">
-            <input type="checkbox" id="show_grid" .checked=${this._config.show_grid !== false}
-              @change=${(e: Event) => this._valueChanged('show_grid', (e.target as HTMLInputElement).checked)} />
-            <label for="show_grid">Show grid lines</label>
-          </div>
+          <label>View mode</label>
+          <select @change=${(e: Event) => this._valueChanged('view_mode', (e.target as HTMLSelectElement).value)}>
+            <option value="radar" ?selected=${this._config.view_mode !== 'room'}>Radar view</option>
+            <option value="room" ?selected=${this._config.view_mode === 'room'}>Room view</option>
+          </select>
+          <div class="info">Radar shows the sensor view. Room shows your drawn room with live tracking.</div>
         </div>
 
-        <div class="form-row">
-          <label>Maximum distance (mm)</label>
-          <input type="number" .value=${this._config.max_distance || 6000} min="1000" max="8000" step="500"
-            @input=${(e: Event) => this._valueChanged('max_distance', parseInt((e.target as HTMLInputElement).value))} />
-        </div>
+        ${this._config.view_mode === 'room' ? html`
+          <div class="form-row">
+            <label>Default room view</label>
+            <select @change=${(e: Event) => this._valueChanged('room_view_mode', (e.target as HTMLSelectElement).value)}>
+              <option value="2d" ?selected=${this._config.room_view_mode !== '3d'}>2D floor plan</option>
+              <option value="3d" ?selected=${this._config.room_view_mode === '3d'}>3D view</option>
+            </select>
+            <div class="info">The view the card starts in. You can still switch views on the card.</div>
+          </div>
+        ` : nothing}
+
+        ${this._config.view_mode !== 'room' ? html`
+          <div class="divider"></div>
+
+          <div class="form-row">
+            <label>Radar options</label>
+            <div class="checkbox-row">
+              <input type="checkbox" id="show_zones" .checked=${this._config.show_zones !== false}
+                @change=${(e: Event) => this._valueChanged('show_zones', (e.target as HTMLInputElement).checked)} />
+              <label for="show_zones">Show zones</label>
+            </div>
+            <div class="checkbox-row">
+              <input type="checkbox" id="show_grid" .checked=${this._config.show_grid !== false}
+                @change=${(e: Event) => this._valueChanged('show_grid', (e.target as HTMLInputElement).checked)} />
+              <label for="show_grid">Show grid lines</label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <label>Maximum distance (mm)</label>
+            <input type="number" .value=${this._config.max_distance || 6000} min="1000" max="8000" step="500"
+              @input=${(e: Event) => this._valueChanged('max_distance', parseInt((e.target as HTMLInputElement).value))} />
+          </div>
+        ` : nothing}
       ` : nothing}
     `;
   }

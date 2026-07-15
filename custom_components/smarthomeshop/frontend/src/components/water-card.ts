@@ -26,14 +26,32 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
   }
 
   static getStubConfig() {
-    return { show_graph: true, graph_type: 'sparkline' };
+    return {
+      show_header: true,
+      show_status: true,
+      show_water_current: true,
+      show_water_totals: true,
+      show_graph: true,
+      show_meter_reading: true,
+      show_leak_detection: true,
+    };
   }
 
   public override setConfig(config: WaterCardConfig): void {
     const deviceChanged = this._config.device_id !== config.device_id;
 
     this._config = {
+      show_header: true,
+      show_status: true,
+      show_water_current: true,
+      show_water_totals: true,
+      show_today: true,
+      show_week: true,
+      show_month: true,
+      show_year: true,
       show_graph: true,
+      show_meter_reading: true,
+      show_leak_detection: true,
       _entitiesResolved: deviceChanged ? false : config._entitiesResolved,
       ...config,
     };
@@ -53,19 +71,26 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
     const weekUsage = this._getWeekUsage();
     const monthUsage = this._getMonthUsage();
     const yearUsage = this._getYearUsage();
-    const meterTotal = this._getMeterTotal();
     const hasLeak = this._hasLeak();
     const productName = this._config._productName || 'SmartHomeShop';
 
     return html`
       <ha-card>
         <div class="card-content">
-          ${this._renderHeader(productName, flowRate, hasLeak)}
-          ${this._renderFlowDisplay(flowRate)}
-          ${this._renderStats(todayUsage, weekUsage, monthUsage, yearUsage)}
+          ${this._config.show_header !== false
+            ? this._renderHeader(productName, flowRate, hasLeak)
+            : nothing}
+          ${this._config.show_water_current !== false
+            ? this._renderFlowDisplay(flowRate)
+            : nothing}
+          ${this._config.show_water_totals !== false
+            ? this._renderStats(todayUsage, weekUsage, monthUsage, yearUsage)
+            : nothing}
           ${this._config.show_graph ? this._renderGraph() : nothing}
-          ${this._renderLeakBar(hasLeak, meterTotal)}
           ${this._renderMeterSection()}
+          ${this._config.show_leak_detection !== false
+            ? this._renderLeakBar(hasLeak)
+            : nothing}
         </div>
       </ha-card>
     `;
@@ -103,10 +128,12 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
             <div class="header-subtitle">Water Monitoring</div>
           </div>
         </div>
-        <div class="status-badge ${statusClass}">
-          <ha-icon icon="${statusIcon}"></ha-icon>
-          <span>${statusText}</span>
-        </div>
+        ${this._config.show_status !== false ? html`
+          <div class="status-badge ${statusClass}">
+            <ha-icon icon="${statusIcon}"></ha-icon>
+            <span>${statusText}</span>
+          </div>
+        ` : nothing}
       </div>
     `;
   }
@@ -125,26 +152,40 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
   }
 
   private _renderStats(today: number, week: number, month: number, year: number) {
+    const showToday = this._config.show_today !== false;
+    const showWeek = this._config.show_week !== false;
+    const showMonth = this._config.show_month !== false;
+    const showYear = this._config.show_year !== false;
+    if (!showToday && !showWeek && !showMonth && !showYear) return nothing;
+
     return html`
       <div class="stats-grid">
-        <div class="stat-item" @click=${() => this._handleClick(this._config.today_entity)}>
-          <div class="stat-value">${formatNumber(today, 0)}<span class="stat-unit">L</span></div>
-          <div class="stat-label">Today</div>
-        </div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.week_entity)}>
-          <div class="stat-value">${formatNumber(week, 0)}<span class="stat-unit">L</span></div>
-          <div class="stat-label">Week</div>
-        </div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.month_entity)}>
-          <div class="stat-value">
-            ${formatNumber(month / 1000, 1)}<span class="stat-unit">m³</span>
+        ${showToday ? html`
+          <div class="stat-item" @click=${() => this._handleClick(this._config.today_entity)}>
+            <div class="stat-value">${formatNumber(today, 0)}<span class="stat-unit">L</span></div>
+            <div class="stat-label">Today</div>
           </div>
-          <div class="stat-label">Month</div>
-        </div>
-        <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}>
-          <div class="stat-value">${formatNumber(year, 1)}<span class="stat-unit">m³</span></div>
-          <div class="stat-label">Year</div>
-        </div>
+        ` : nothing}
+        ${showWeek ? html`
+          <div class="stat-item" @click=${() => this._handleClick(this._config.week_entity)}>
+            <div class="stat-value">${formatNumber(week, 0)}<span class="stat-unit">L</span></div>
+            <div class="stat-label">Week</div>
+          </div>
+        ` : nothing}
+        ${showMonth ? html`
+          <div class="stat-item" @click=${() => this._handleClick(this._config.month_entity)}>
+            <div class="stat-value">
+              ${formatNumber(month / 1000, 1)}<span class="stat-unit">m³</span>
+            </div>
+            <div class="stat-label">Month</div>
+          </div>
+        ` : nothing}
+        ${showYear ? html`
+          <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}>
+            <div class="stat-value">${formatNumber(year, 1)}<span class="stat-unit">m³</span></div>
+            <div class="stat-label">Year</div>
+          </div>
+        ` : nothing}
       </div>
     `;
   }
@@ -182,7 +223,7 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
     `;
   }
 
-  private _renderLeakBar(hasLeak: boolean, meterTotal: number) {
+  private _renderLeakBar(hasLeak: boolean) {
     return html`
       <div
         class="info-bar ${hasLeak ? 'alert' : ''}"
@@ -193,19 +234,12 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
             <ha-icon icon="${hasLeak ? 'mdi:alert' : 'mdi:check-circle'}"></ha-icon>
           </div>
           <div>
-            <div class="info-text">Lekdetectie</div>
+            <div class="info-text">Leak detection</div>
             <div class="info-subtext">${hasLeak ? 'Possible leak' : 'No anomalies'}</div>
           </div>
         </div>
-        <div
-          class="info-right"
-          @click=${(e: Event) => {
-            e.stopPropagation();
-            this._handleClick(this._config.total_entity);
-          }}
-        >
-          <div class="info-value">${formatNumber(meterTotal, 3)} m³</div>
-          <div class="info-label">Meter reading</div>
+        <div class="info-right" aria-hidden="true">
+          <ha-icon icon="mdi:chevron-right"></ha-icon>
         </div>
       </div>
     `;

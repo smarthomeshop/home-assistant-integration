@@ -204,6 +204,40 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def cheap_now(self) -> bool | None:
         return self._summary().get("cheap_now")
 
+    def difference_from_average(self) -> float | None:
+        data = self._summary().get("current_vs_average") or {}
+        return self._float_or_none(data.get("amount"))
+
+    def difference_percentage_from_average(self) -> float | None:
+        data = self._summary().get("current_vs_average") or {}
+        return self._float_or_none(data.get("percentage"))
+
+    def current_price_rank(self) -> int | None:
+        data = self._summary().get("current_rank") or {}
+        value = data.get("position")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def ranked_price_hours(self) -> int | None:
+        data = self._summary().get("current_rank") or {}
+        value = data.get("total")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def lowest_period(self) -> dict[str, Any] | None:
+        return self._summary().get("lowest_period")
+
+    def highest_period(self) -> dict[str, Any] | None:
+        return self._summary().get("highest_period")
+
+    def next_lower_period(self) -> dict[str, Any] | None:
+        return self._summary().get("next_lower_period")
+
+    def price_spread_today(self) -> float | None:
+        return self._float_or_none(self._summary().get("price_spread_today"))
+
+    def negative_hours_today(self) -> int | None:
+        value = self._summary().get("negative_hours_today")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
     def cheapest_block(self, hours: int) -> dict[str, Any] | None:
         return (self._summary().get("cheapest_blocks") or {}).get(str(hours))
 

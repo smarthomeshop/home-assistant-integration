@@ -93,7 +93,7 @@ export class ZonesPage extends LitElement {
   // Live tracking, keyed by sensor instance id
   @state() private _liveTargets: Record<string, Array<{x: number, y: number, active: boolean}>> = {};
 
-  // ESPHome sync state
+  // Zone sync state
   @state() private _entryExitEnabled = false;
   @state() private _assumedPresent = false;
   @state() private _pushingToSensor = false;
@@ -906,6 +906,25 @@ export class ZonesPage extends LitElement {
 
   @state() private _pushingToESPHome = false;
 
+  private _entityExists(entityId: string): boolean {
+    return !!this.hass?.states?.[entityId];
+  }
+
+  private async _setTextEntityIfPresent(entityId: string, value: string): Promise<boolean> {
+    if (!this._entityExists(entityId)) return false;
+    if (value.length > 255) {
+      throw new Error(`${entityId} value is ${value.length} characters; LD2450 text entities allow 255 characters`);
+    }
+    await this.hass.callService('text', 'set_value', { entity_id: entityId, value });
+    return true;
+  }
+
+  private async _turnOnSwitchIfPresent(entityId: string): Promise<boolean> {
+    if (!this._entityExists(entityId)) return false;
+    await this.hass.callService('switch', 'turn_on', { entity_id: entityId });
+    return true;
+  }
+
   private async _pushToESPHome() {
     const linkedSensors = this._sensors.filter(sn => sn.deviceId);
     if (linkedSensors.length === 0) {
@@ -919,6 +938,8 @@ export class ZonesPage extends LitElement {
     const entryLines = this._zones.filter(z => z.type === 'entry');
     const defaultLineOwner = linkedSensors[0].id;
     const errors: string[] = [];
+    let nativePushCount = 0;
+    let legacyPushCount = 0;
 
     try {
       for (const sensor of linkedSensors) {
@@ -937,6 +958,50 @@ export class ZonesPage extends LitElement {
         };
         const toPolygonStr = (points: Point[]): string =>
           points.map(pt => { const sp = toSensor(pt); return `${Math.round(sp.x)}:${Math.round(sp.y)}`; }).join(';');
+
+        const hasNativeZoneTextApi = [
+          'polygon_zone_1',
+          'polygon_exclusion_1',
+          'entry_line_1',
+        ].some(suffix => this._entityExists(`text.${deviceName}_${suffix}`));
+
+        if (hasNativeZoneTextApi) {
+          await this._turnOnSwitchIfPresent(`switch.${deviceName}_polygon_zones_enabled`);
+
+          for (let i = 0; i < 4; i++) {
+            const zone = detectionZones[i];
+            const entityId = `text.${deviceName}_polygon_zone_${i + 1}`;
+            const pushed = await this._setTextEntityIfPresent(entityId, zone ? toPolygonStr(zone.points) : '');
+            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+          }
+
+          for (let i = 0; i < 2; i++) {
+            const zone = exclusionZones[i];
+            const entityId = `text.${deviceName}_polygon_exclusion_${i + 1}`;
+            const pushed = await this._setTextEntityIfPresent(entityId, zone ? toPolygonStr(zone.points) : '');
+            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+          }
+
+          const ownedLines = entryLines.filter(l => (l.sensorId || defaultLineOwner) === sensor.id);
+          for (let i = 0; i < 2; i++) {
+            const line = ownedLines[i];
+            let lineStr = '';
+            if (line && line.points.length === 2) {
+              const dir = line.inDirection || 'left';
+              const p1 = toSensor(line.points[0]);
+              const p2 = toSensor(line.points[1]);
+              lineStr = `${Math.round(p1.x)}:${Math.round(p1.y)};${Math.round(p2.x)}:${Math.round(p2.y)};${dir}`;
+            }
+            const entityId = `text.${deviceName}_entry_line_${i + 1}`;
+            const pushed = await this._setTextEntityIfPresent(entityId, lineStr);
+            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+          }
+
+          nativePushCount += 1;
+          continue;
+        }
+
+        errors.push(`${deviceName}: native LD2450 text entities not found; used legacy services`);
 
         // Detection zones: every sensor watches the same room zones
         for (let i = 0; i < 4; i++) {
@@ -988,15 +1053,18 @@ export class ZonesPage extends LitElement {
             break;
           }
         }
+        legacyPushCount += 1;
       }
 
       if (errors.length > 0) {
         alert(`Push finished with warnings:\n${[...new Set(errors)].join('\n')}`);
       } else {
-        alert(`Zones successfully pushed to ${linkedSensors.length} sensor${linkedSensors.length !== 1 ? 's' : ''}!`);
+        const targetLabel = nativePushCount > 0 ? 'native LD2450 entity set' : 'sensor';
+        const count = nativePushCount || legacyPushCount || linkedSensors.length;
+        alert(`Zones successfully pushed to ${count} ${targetLabel}${count !== 1 ? 's' : ''}!`);
       }
     } catch (err) {
-      console.error('Failed to push to ESPHome:', err);
+      console.error('Failed to push zones:', err);
       alert(`Failed to push zones: ${err}`);
     } finally {
       this._pushingToESPHome = false;

@@ -45,6 +45,13 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
             "market_price": c.electricity_market_price(),
             "feed_in_price": c.electricity_feed_in(),
             "level": c.electricity_level(),
+            "difference_from_average": c.difference_from_average(),
+            "difference_percentage_from_average": (
+                c.difference_percentage_from_average()
+            ),
+            "price_rank": c.current_price_rank(),
+            "ranked_hours": c.ranked_price_hours(),
+            "next_lower_price_start": (c.next_lower_period() or {}).get("start"),
             "prices_today": c.today(),
             "prices_tomorrow": c.tomorrow(),
         },
@@ -99,6 +106,7 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.lowest_today(),
+        attr_fn=lambda c: _period_attrs(c.lowest_period()),
     ),
     PriceSensorDescription(
         key="highest_price_today",
@@ -108,6 +116,56 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.highest_today(),
+        attr_fn=lambda c: _period_attrs(c.highest_period()),
+    ),
+    PriceSensorDescription(
+        key="price_difference_from_average",
+        name="Price difference from average",
+        icon="mdi:compare-horizontal",
+        native_unit_of_measurement="€/kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda c: c.difference_from_average(),
+    ),
+    PriceSensorDescription(
+        key="price_difference_percentage",
+        name="Price difference percentage",
+        icon="mdi:percent-outline",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=lambda c: c.difference_percentage_from_average(),
+    ),
+    PriceSensorDescription(
+        key="current_price_rank",
+        name="Current price rank",
+        icon="mdi:podium",
+        value_fn=lambda c: c.current_price_rank(),
+        attr_fn=lambda c: {"total_hours": c.ranked_price_hours()},
+    ),
+    PriceSensorDescription(
+        key="price_spread_today",
+        name="Price spread today",
+        icon="mdi:arrow-expand-vertical",
+        native_unit_of_measurement="€/kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=4,
+        value_fn=lambda c: c.price_spread_today(),
+    ),
+    PriceSensorDescription(
+        key="negative_price_hours_today",
+        name="Negative price hours today",
+        icon="mdi:cash-minus",
+        native_unit_of_measurement="h",
+        value_fn=lambda c: c.negative_hours_today(),
+    ),
+    PriceSensorDescription(
+        key="next_lower_price_start",
+        name="Next lower price start",
+        icon="mdi:clock-fast",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda c: _period_start(c.next_lower_period()),
+        attr_fn=lambda c: _period_attrs(c.next_lower_period()),
     ),
     *(
         PriceSensorDescription(
@@ -136,10 +194,27 @@ def _block_start(block: dict[str, Any] | None) -> datetime | None:
     return parsed
 
 
+def _period_start(period: dict[str, Any] | None) -> datetime | None:
+    """Parse a summary price period into a timestamp sensor value."""
+    if not period:
+        return None
+    return _block_start({"start": period.get("start")})
+
+
 def _block_attrs(block: dict[str, Any] | None) -> dict[str, Any]:
     if not block:
         return {}
     return {"end": block.get("end"), "average_price": block.get("average")}
+
+
+def _period_attrs(period: dict[str, Any] | None) -> dict[str, Any]:
+    if not period:
+        return {}
+    return {
+        "end": period.get("end"),
+        "price": period.get("price"),
+        "saving": period.get("saving"),
+    }
 
 
 class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity):

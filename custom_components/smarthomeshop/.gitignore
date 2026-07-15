@@ -1,9 +1,8 @@
 # ===== ESPHOME CONFIGURATIES =====
 esphome/
 
-# ===== SOURCE CODE (PRIVÉ) =====
-# Frontend source & build config
-frontend/src/
+# ===== BUILD CONFIG =====
+# Frontend source is tracked; local build configuration stays private.
 frontend/rollup.config.js
 frontend/tsconfig.json
 frontend/package.json

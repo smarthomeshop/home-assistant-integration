@@ -626,6 +626,15 @@ def _account_result(hass: HomeAssistant) -> dict:
             "lowest": prices.lowest_today(),
             "highest": prices.highest_today(),
             "cheap_now": prices.cheap_now(),
+            "difference": prices.difference_from_average(),
+            "difference_percentage": prices.difference_percentage_from_average(),
+            "rank": prices.current_price_rank(),
+            "ranked_hours": prices.ranked_price_hours(),
+            "lowest_period": prices.lowest_period(),
+            "highest_period": prices.highest_period(),
+            "next_lower_period": prices.next_lower_period(),
+            "spread": prices.price_spread_today(),
+            "negative_hours": prices.negative_hours_today(),
             "cheapest_3h": prices.cheapest_block(3),
         }
     return result

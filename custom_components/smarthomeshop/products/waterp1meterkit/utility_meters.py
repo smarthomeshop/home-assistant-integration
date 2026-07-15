@@ -56,7 +56,9 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
     returned_t1_entity = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_1"
     returned_t2_entity = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_2"
 
-    # Water source entity (from ESPHome water meter)
+    # The raw pulse total is intentional here. Utility meters calculate period
+    # deltas and handle source resets, while the absolute Water Meter Total can
+    # be changed by calibration and must only be used as the displayed reading.
     water_entity = f"sensor.waterp1meterkit_{short_id}_water_total_consumption"
 
     # Gas source entity (from ESPHome P1 meter)

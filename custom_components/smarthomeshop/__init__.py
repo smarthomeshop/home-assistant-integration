@@ -126,6 +126,13 @@ async def async_setup_entry(
 
     # Create the appropriate coordinator based on product type
     if product_type == PRODUCT_WATERP1METERKIT:
+        from .products.waterp1meterkit.entity_resolver import (
+            migrate_water_total_source,
+        )
+
+        # Older config entries stored the raw pulse counter. Prefer the
+        # firmware's reboot-safe absolute meter reading whenever available.
+        migrate_water_total_source(hass, entry)
         coordinator = WaterP1MeterKitCoordinator(hass, entry)
 
         # Create utility meter helpers for energy + water tracking

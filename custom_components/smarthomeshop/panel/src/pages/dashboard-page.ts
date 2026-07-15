@@ -147,6 +147,7 @@ export class DashboardPage extends LitElement {
       color: var(--secondary-text-color);
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 8px;
     }
 
@@ -216,6 +217,10 @@ export class DashboardPage extends LitElement {
       border-top: 1px solid var(--divider-color);
     }
 
+    .sensor-grid.combined {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
     .sensor-item {
       background: var(--card-background-color);
       padding: 12px 8px;
@@ -242,6 +247,9 @@ export class DashboardPage extends LitElement {
       color: var(--secondary-text-color);
       margin-bottom: 4px;
     }
+
+    .sensor-item.water-metric .sensor-icon { color: #0096c7; }
+    .sensor-item.energy-metric .sensor-icon { color: #d8890b; }
 
 
     /* Tools */
@@ -438,6 +446,10 @@ export class DashboardPage extends LitElement {
     @media (max-width: 600px) {
       .sensor-grid {
         grid-template-columns: repeat(2, 1fr);
+      }
+
+      .sensor-grid.combined {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
   `;
@@ -1102,13 +1114,21 @@ export class DashboardPage extends LitElement {
 
         ${(ins.radar.zones || []).length > 0 ? html`
           <div class="insight-card">
-            <div class="insight-title">Polygon zones</div>
-            ${ins.radar.zones.map((zone: any) => html`
-              <div class="metric-row">
-                <span class="metric-label">Zone ${zone.zone}</span>
-                <span class="status-badge ${zone.occupied ? 'ok' : ''}">${zone.occupied ? 'Occupied' : 'Empty'}</span>
-              </div>
-            `)}
+            <div class="insight-title">LD2450 zones</div>
+            ${ins.radar.zones.map((zone: any) => {
+              const counts = [
+                zone.target_count != null ? `${Math.round(zone.target_count)} total` : '',
+                zone.still_target_count != null ? `${Math.round(zone.still_target_count)} still` : '',
+                zone.moving_target_count != null ? `${Math.round(zone.moving_target_count)} moving` : '',
+              ].filter(Boolean).join(' / ');
+              return html`
+                <div class="metric-row">
+                  <span class="metric-label">Zone ${zone.zone}</span>
+                  <span class="metric-value">${counts}</span>
+                  <span class="status-badge ${zone.occupied ? 'ok' : ''}">${zone.occupied ? 'Occupied' : 'Empty'}</span>
+                </div>
+              `;
+            })}
           </div>
         ` : nothing}
 
@@ -1142,9 +1162,8 @@ export class DashboardPage extends LitElement {
     };
   }
 
-  private _getSensorValue(entities: DeviceEntity[] | undefined, pattern: string): string | null {
-    if (!entities) return null;
-    const pat = pattern.toLowerCase();
+  private _getSensorEntity(entities: DeviceEntity[] | undefined, patterns: string[]): DeviceEntity | undefined {
+    if (!entities) return undefined;
     // Only measurement entities; config numbers like "Temperature Offset"
     // would otherwise match patterns such as "temperature"
     const candidates = entities.filter(e =>
@@ -1152,11 +1171,59 @@ export class DashboardPage extends LitElement {
       !e.entity_id.includes('offset') &&
       !e.entity_id.includes('calibrat')
     );
-    const entity =
-      candidates.find(e => e.entity_id.toLowerCase().endsWith(`_${pat}`)) ||
-      candidates.find(e => e.entity_id.toLowerCase().includes(pat));
+    for (const pattern of patterns) {
+      const pat = pattern.toLowerCase();
+      const exact = candidates.find(e => e.entity_id.toLowerCase().endsWith(`_${pat}`));
+      if (exact) return exact;
+    }
+    for (const pattern of patterns) {
+      const pat = pattern.toLowerCase();
+      const partial = candidates.find(e => e.entity_id.toLowerCase().includes(pat));
+      if (partial) return partial;
+    }
+    return undefined;
+  }
+
+  private _getSensorValue(entities: DeviceEntity[] | undefined, pattern: string): string | null {
+    const entity = this._getSensorEntity(entities, [pattern]);
     if (!entity || !entity.state || entity.state === 'unavailable' || entity.state === 'unknown') return null;
     return entity.state;
+  }
+
+  private _getSensorNumber(entities: DeviceEntity[] | undefined, patterns: string[]): number | null {
+    const entity = this._getSensorEntity(entities, patterns);
+    if (!entity || !entity.state || entity.state === 'unavailable' || entity.state === 'unknown') return null;
+    const value = Number(entity.state);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  private _getPowerWatts(entities: DeviceEntity[] | undefined, patterns: string[]): number | null {
+    const entity = this._getSensorEntity(entities, patterns);
+    if (!entity || !entity.state || entity.state === 'unavailable' || entity.state === 'unknown') return null;
+    const value = Number(entity.state);
+    if (!Number.isFinite(value)) return null;
+    const unit = String(entity.attributes?.unit_of_measurement || '').toLowerCase();
+    if (unit === 'mw') return value * 1000000;
+    if (unit === 'kw') return value * 1000;
+    return value;
+  }
+
+  private _formatPowerMetric(watts: number | null): string {
+    if (watts === null) return '—';
+    const value = Math.abs(watts);
+    if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} kW`;
+    return `${Math.round(value)} W`;
+  }
+
+  private _formatEnergyMetric(kwh: number | null): string {
+    if (kwh === null) return '—';
+    const decimals = Math.abs(kwh) >= 100 ? 0 : Math.abs(kwh) >= 10 ? 1 : 2;
+    return `${kwh.toFixed(decimals)} kWh`;
+  }
+
+  private _sumAvailable(values: Array<number | null>): number | null {
+    const available = values.filter((value): value is number => value !== null);
+    return available.length ? available.reduce((total, value) => total + value, 0) : null;
   }
 
   private _formatValue(value: string | null, unit: string, decimals = 1): string {
@@ -1169,6 +1236,54 @@ export class DashboardPage extends LitElement {
   private _renderDeviceSensors(device: DeviceWithEntities) {
     const config = this._getProductConfig(device.product_type);
     const entities = device.entities || [];
+
+    if (device.product_type === 'waterp1meterkit') {
+      const flow = this._getSensorValue(entities, 'current_flow_rate')
+        || this._getSensorValue(entities, 'water_current_usage')
+        || this._getSensorValue(entities, 'flow_rate');
+      const waterToday = this._getSensorValue(entities, 'today_usage')
+        || this._getSensorValue(entities, 'water_daily');
+      const netGrid = this._getPowerWatts(entities, ['net_grid_power_cc', 'net_grid_power']);
+      const importedPower = this._getPowerWatts(entities, ['power_consumed']);
+      const exportedPower = this._getPowerWatts(entities, ['power_produced']);
+      const gridPower = netGrid ?? (importedPower === null && exportedPower === null
+        ? null
+        : (importedPower || 0) - (exportedPower || 0));
+      const energyToday = this._sumAvailable([
+        this._getSensorNumber(entities, ['energy_daily_t1_cc']),
+        this._getSensorNumber(entities, ['energy_daily_t2_cc']),
+      ]);
+      const energyTotal = this._sumAvailable([
+        this._getSensorNumber(entities, ['energy_consumed_tariff_1']),
+        this._getSensorNumber(entities, ['energy_consumed_tariff_2']),
+      ]);
+      const shownEnergy = energyToday ?? energyTotal;
+
+      return html`
+        <div class="sensor-grid combined">
+          <div class="sensor-item water-metric">
+            <ha-icon class="sensor-icon" icon="mdi:water"></ha-icon>
+            <span class="sensor-value">${this._formatValue(flow, ' L/m')}</span>
+            <div class="sensor-label">Flow</div>
+          </div>
+          <div class="sensor-item water-metric">
+            <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
+            <span class="sensor-value">${this._formatValue(waterToday, ' L', 0)}</span>
+            <div class="sensor-label">Water today</div>
+          </div>
+          <div class="sensor-item energy-metric">
+            <ha-icon class="sensor-icon" icon=${gridPower !== null && gridPower < 0 ? 'mdi:transmission-tower-export' : 'mdi:transmission-tower-import'}></ha-icon>
+            <span class="sensor-value">${this._formatPowerMetric(gridPower)}</span>
+            <div class="sensor-label">${gridPower !== null && gridPower < 0 ? 'Export now' : 'Import now'}</div>
+          </div>
+          <div class="sensor-item energy-metric">
+            <ha-icon class="sensor-icon" icon="mdi:lightning-bolt"></ha-icon>
+            <span class="sensor-value">${this._formatEnergyMetric(shownEnergy)}</span>
+            <div class="sensor-label">${energyToday !== null ? 'Energy today' : 'Energy total'}</div>
+          </div>
+        </div>
+      `;
+    }
 
     if (config.category === 'water') {
       const flow = this._getSensorValue(entities, 'flow_rate') || this._getSensorValue(entities, 'flow');
@@ -1321,6 +1436,9 @@ export class DashboardPage extends LitElement {
                     <h3 class="device-name">${device.name}</h3>
                     <div class="device-type">
                       <span class="device-type-badge ${config.category}">${config.category}</span>
+                      ${device.product_type === 'waterp1meterkit' ? html`
+                        <span class="device-type-badge energy">energy</span>
+                      ` : nothing}
                       ${device.product_name || 'Unknown'}
                     </div>
                   </div>

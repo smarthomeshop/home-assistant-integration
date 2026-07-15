@@ -15,7 +15,17 @@ import {
 
 export interface CardConfig {
   device_id?: string;
+  show_header?: boolean;
+  show_status?: boolean;
+  show_water_current?: boolean;
+  show_water_totals?: boolean;
+  show_today?: boolean;
+  show_week?: boolean;
+  show_month?: boolean;
+  show_year?: boolean;
   show_graph?: boolean;
+  show_meter_reading?: boolean;
+  show_leak_detection?: boolean;
   flow_entity?: string;
   total_entity?: string;
   today_entity?: string;
@@ -44,7 +54,17 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
     const deviceChanged = this._config.device_id !== config.device_id;
 
     this._config = {
+      show_header: true,
+      show_status: true,
+      show_water_current: true,
+      show_water_totals: true,
+      show_today: true,
+      show_week: true,
+      show_month: true,
+      show_year: true,
       show_graph: true,
+      show_meter_reading: true,
+      show_leak_detection: true,
       _entitiesResolved: deviceChanged ? false : config._entitiesResolved,
       ...config,
     };
@@ -67,6 +87,10 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
         this._autoDetectEntities();
         this._lastDeviceId = this._config.device_id;
       }
+
+      // Firmware updates can add the persistent meter entity after the card
+      // was configured. Upgrade a stale raw source as soon as it appears.
+      this._preferPersistentWaterTotal();
 
       // Fetch history every 5 minutes
       if (this._config.show_graph && this._config.flow_entity) {
@@ -98,19 +122,21 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
 
       const friendlyName = (state.attributes.friendly_name || '').toLowerCase();
       const entityIdLower = id.toLowerCase();
+      const registryDeviceId = this.hass!.entities?.[id]?.device_id;
+      const matchesRegistryDevice = !!deviceId && registryDeviceId === deviceId;
+      const matchesLegacyDeviceId = !!deviceId && (
+        friendlyName.includes(deviceId.toLowerCase()) ||
+        entityIdLower.includes(deviceId.toLowerCase())
+      );
 
       // Check if this is a SmartHomeShop entity
       const isSmartHomeShop = productPatterns.some((p) =>
         friendlyName.includes(p) || entityIdLower.includes(p)
       );
-      if (!isSmartHomeShop) return false;
+      if (!isSmartHomeShop && !matchesRegistryDevice) return false;
 
       // If device_id is set, filter by it
-      if (deviceId) {
-        const hasDeviceId = friendlyName.includes(deviceId.toLowerCase()) ||
-                           entityIdLower.includes(deviceId.toLowerCase());
-        if (!hasDeviceId) return false;
-      }
+      if (deviceId && !matchesRegistryDevice && !matchesLegacyDeviceId) return false;
 
       // Match keywords
       if (searchInEntityId) {
@@ -129,12 +155,15 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
     // Detect product name
     const deviceId = this._config.device_id;
     if (deviceId) {
-      const entities = Object.keys(this.hass.states);
-      if (entities.some((e) => e.includes('waterp1meterkit') && e.includes(deviceId))) {
+      const entities = Object.keys(this.hass.states).filter((entityId) => {
+        const registryDeviceId = this.hass!.entities?.[entityId]?.device_id;
+        return registryDeviceId === deviceId || entityId.includes(deviceId);
+      });
+      if (entities.some((e) => e.includes('waterp1meterkit'))) {
         this._config._productName = 'WaterP1MeterKit';
-      } else if (entities.some((e) => e.includes('watermeterkit') && e.includes(deviceId))) {
+      } else if (entities.some((e) => e.includes('watermeterkit'))) {
         this._config._productName = 'WaterMeterKit';
-      } else if (entities.some((e) => e.includes('waterflowkit') && e.includes(deviceId))) {
+      } else if (entities.some((e) => e.includes('waterflowkit'))) {
         this._config._productName = 'WaterFlowKit';
       } else {
         this._config._productName = 'SmartHomeShop';
@@ -159,12 +188,16 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
         this._findEntity(['current_usage'], 'sensor', true) ||
         this._findEntity(['current water usage']);
     }
-    if (!this._config.total_entity) {
-      this._config.total_entity = this._findEntity(
-        ['water_meter_total', 'total_consumption'],
-        'sensor',
-        true
-      );
+    const persistentWaterTotal =
+      this._findEntity(['water_meter_total'], 'sensor', true) ||
+      this._findEntity(['water meter total']);
+    if (
+      persistentWaterTotal &&
+      (!this._config.total_entity || this._isRawWaterTotal(this._config.total_entity))
+    ) {
+      this._config.total_entity = persistentWaterTotal;
+    } else if (!this._config.total_entity) {
+      this._config.total_entity = this._findEntity(['total_consumption'], 'sensor', true);
     }
     if (!this._config.today_entity) {
       this._config.today_entity = this._findEntity(['usage today']);
@@ -191,6 +224,30 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
     }
 
     this._config._entitiesResolved = true;
+  }
+
+  private _isRawWaterTotal(entityId?: string): boolean {
+    if (!entityId) return false;
+    if (entityId.toLowerCase().includes('water_total_consumption')) return true;
+
+    const friendlyName = this.hass?.states[entityId]?.attributes.friendly_name;
+    return typeof friendlyName === 'string' &&
+      friendlyName.toLowerCase().includes('water total consumption');
+  }
+
+  private _preferPersistentWaterTotal(): void {
+    const currentEntity = this._config.total_entity;
+    if (currentEntity && !this._isRawWaterTotal(currentEntity)) return;
+
+    const persistentEntity =
+      this._findEntity(['water_meter_total'], 'sensor', true) ||
+      this._findEntity(['water meter total']);
+    if (!persistentEntity || persistentEntity === currentEntity) return;
+
+    this._config = {
+      ...this._config,
+      total_entity: persistentEntity,
+    };
   }
 
   protected async _fetchHistory(): Promise<void> {
@@ -257,60 +314,65 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
     return this._historyData?.length ? Math.max(...this._historyData) : 0;
   }
 
-  /**
-   * Shared meter reading section: shows the firmware's calibrated
-   * "Water Meter Total" as a classic counter, with an inline form that
-   * writes a new reading to the on-device "Water Meter Initial Value".
-   */
+  /** Compact total meter reading with optional on-device calibration. */
   protected _renderMeterSection() {
     const totalEntity = this._config.total_entity;
-    if (!totalEntity) return nothing;
+    if (!totalEntity || this._config.show_meter_reading === false) return nothing;
+
+    const isResettingWaterP1Total =
+      this._config._productName === 'WaterP1MeterKit' &&
+      this._isRawWaterTotal(totalEntity);
+    if (isResettingWaterP1Total) {
+      return html`
+        <div class="meter-counter-section meter-counter-upgrade">
+          <span class="meter-counter-icon"><ha-icon icon="mdi:update"></ha-icon></span>
+          <span class="meter-counter-copy">
+            <span class="meter-counter-title">Persistent meter reading unavailable</span>
+            <span class="meter-counter-subtitle">
+              Update the WaterP1MeterKit firmware to enable Water Meter Total.
+            </span>
+          </span>
+        </div>
+      `;
+    }
 
     const total = this._getMeterTotal();
-    const intPart = Math.floor(total);
-    const decPart = Math.round((total - intPart) * 1000);
-    const intDigits = intPart.toString().padStart(6, '0').split('');
-    const decDigits = decPart.toString().padStart(3, '0').split('');
     const canSet = !!this._config.meter_initial_entity;
+
     const inputValue = parseFloat(this._meterInput.replace(',', '.'));
     const inputValid = !isNaN(inputValue) && inputValue >= 0;
 
     return html`
       <div class="meter-counter-section">
-        <div class="meter-counter-header">
-          <div class="meter-counter-title" @click=${() => fireMoreInfo(this, totalEntity)}>
-            <ha-icon icon="mdi:counter"></ha-icon>
-            Meter reading
-          </div>
+        <div class="meter-counter-main">
+          <button type="button" class="meter-counter-reading" @click=${() => fireMoreInfo(this, totalEntity)}>
+            <span class="meter-counter-icon"><ha-icon icon="mdi:counter"></ha-icon></span>
+            <span class="meter-counter-copy">
+              <span class="meter-counter-title">Meter reading</span>
+              <span class="meter-counter-subtitle">
+                ${canSet ? 'Synchronized with your device' : 'Total registered water'}
+              </span>
+            </span>
+            <span class="meter-counter-value">${total.toFixed(3)}<span>m³</span></span>
+          </button>
           ${canSet ? html`
-            <div class="meter-counter-calibrate" @click=${this._toggleMeterForm}>
-              <ha-icon icon="mdi:pencil"></ha-icon>
-              ${this._showMeterForm ? 'Cancel' : 'Set reading'}
-            </div>
+            <button
+              type="button"
+              class="meter-counter-calibrate"
+              aria-label=${this._showMeterForm ? 'Cancel setting meter reading' : 'Set meter reading'}
+              aria-expanded=${String(this._showMeterForm)}
+              @click=${this._toggleMeterForm}
+            >
+              <ha-icon icon=${this._showMeterForm ? 'mdi:close' : 'mdi:pencil'}></ha-icon>
+              <span>${this._showMeterForm ? 'Cancel' : 'Set'}</span>
+            </button>
           ` : nothing}
         </div>
-        <div class="meter-counter-display" @click=${() => fireMoreInfo(this, totalEntity)}>
-          ${intDigits.map((d) => html`<div class="meter-digit">${d}</div>`)}
-          <span class="meter-separator">,</span>
-          ${decDigits.map((d) => html`<div class="meter-digit decimal">${d}</div>`)}
-          <span class="meter-unit">m³</span>
-        </div>
-        ${!canSet ? html`
+        ${canSet && this._showMeterForm ? html`
           <div class="meter-form">
             <div class="meter-form-help">
-              Setting the meter reading is done on the device itself and
-              requires the latest firmware. Update the firmware of your kit,
-              then the <b>Set reading</b> button appears here.
-            </div>
-          </div>
-        ` : nothing}
-        ${this._showMeterForm ? html`
-          <div class="meter-form">
-            <div class="meter-form-help">
-              Enter the reading shown on your physical water meter (in m³,
-              e.g. 123.456). It is stored on the device itself and the meter
-              keeps counting from there — you only need to do this once, or
-              when the values drift apart.
+              Enter the reading shown on your physical water meter in m³, for
+              example 123.456. The value is stored on the device itself.
             </div>
             <div class="meter-form-row">
               <input

@@ -10,12 +10,18 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { baseStyles } from '../utils/styles';
 import { productLogo } from '../utils/product-logos';
 import { formatNumber, fireMoreInfo, getEntityValue } from '../utils/helpers';
-import { getTranslations, type Translations } from '../utils/translations';
+import { getTranslations } from '../utils/translations';
 import type { HomeAssistant } from '../types/home-assistant';
 import { debugLog } from '../utils/debug';
 
 interface WaterFlowKitConfig {
   device_id?: string;
+  show_header?: boolean;
+  show_status?: boolean;
+  show_pipe_visualization?: boolean;
+  show_flow_cards?: boolean;
+  show_total_consumption?: boolean;
+  show_hourly_rate?: boolean;
   flow1_flow_entity?: string;
   flow1_total_entity?: string;
   flow1_temp_entity?: string;
@@ -48,8 +54,8 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
       /* Status badge styling for water flow */
       .status-badge.flowing {
-        background: rgba(14, 165, 233, 0.15);
-        color: #0ea5e9;
+        background: color-mix(in srgb, var(--info-color) 15%, transparent);
+        color: var(--info-color);
       }
       .status-badge.inactive {
         background: var(--secondary-background-color);
@@ -59,14 +65,12 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
       /* Pipe visualization container */
       .pipe-container {
         position: relative;
-        background: linear-gradient(180deg,
-          rgba(15, 23, 42, 0.6) 0%,
-          rgba(30, 41, 59, 0.4) 100%);
-        border-radius: 16px;
-        padding: 20px;
-        margin-bottom: 16px;
+        background: var(--shs-surface);
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 12px;
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--shs-outline);
       }
 
       .pipes-svg {
@@ -149,29 +153,29 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
       /* Flow cards */
       .flow-card {
-        background: var(--secondary-background-color);
+        background: var(--shs-surface);
         border-radius: 12px;
         padding: 16px;
         margin-bottom: 12px;
         cursor: pointer;
-        transition: all 0.2s ease;
-        border: 1px solid transparent;
+        transition: background-color 180ms ease-out, border-color 180ms ease-out;
+        border: 1px solid var(--shs-outline);
       }
 
       .flow-card:last-child { margin-bottom: 0; }
       .flow-card:hover {
-        background: var(--primary-background-color);
-        border-color: rgba(14, 165, 233, 0.3);
+        background: var(--shs-surface-hover);
+        border-color: color-mix(in srgb, var(--info-color) 30%, var(--divider-color));
       }
 
       .flow-card.active {
-        border-color: #0ea5e9;
-        background: linear-gradient(135deg, rgba(14, 165, 233, 0.1) 0%, rgba(2, 132, 199, 0.05) 100%);
+        border-color: color-mix(in srgb, var(--info-color) 55%, var(--divider-color));
+        background: color-mix(in srgb, var(--info-color) 9%, var(--card-background-color));
       }
 
       .flow-card.flow2.active {
-        border-color: #22c55e;
-        background: linear-gradient(135deg, rgba(34, 197, 94, 0.1) 0%, rgba(22, 163, 74, 0.05) 100%);
+        border-color: color-mix(in srgb, var(--success-color) 55%, var(--divider-color));
+        background: color-mix(in srgb, var(--success-color) 9%, var(--card-background-color));
       }
 
       .flow-card-header {
@@ -196,9 +200,9 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
         justify-content: center;
       }
 
-      .flow-icon.flow1 { background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%); }
-      .flow-icon.flow2 { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); }
-      .flow-icon ha-icon { --mdc-icon-size: 22px; color: white; }
+      .flow-icon.flow1 { background: color-mix(in srgb, var(--info-color) 14%, transparent); color: var(--info-color); }
+      .flow-icon.flow2 { background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
+      .flow-icon ha-icon { --mdc-icon-size: 22px; color: currentColor; }
 
       .flow-name { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
       .flow-status { font-size: 11px; color: var(--secondary-text-color); opacity: 0.7; }
@@ -210,10 +214,10 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
       .flow-card-stats {
         display: grid;
-        grid-template-columns: repeat(3, 1fr);
+        grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
         gap: 12px;
         padding-top: 12px;
-        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        border-top: 1px solid var(--shs-outline);
       }
 
       .flow-stat { text-align: center; }
@@ -232,14 +236,44 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
       .temp-display.cold ha-icon { color: #38bdf8; }
       .temp-display.warm ha-icon { color: #fbbf24; }
       .temp-display.hot ha-icon { color: #ef4444; }
+
+      @container (max-width: 430px) {
+        .pipe-container {
+          padding: 10px;
+        }
+
+        .flow-card {
+          padding: 12px;
+        }
+
+        .flow-value {
+          font-size: 21px;
+        }
+
+        .flow-card-stats {
+          gap: 8px;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .water-flow.active,
+        .header-icon.flowing {
+          animation: none;
+        }
+      }
     `
   ];
 
   public setConfig(config: WaterFlowKitConfig): void {
     this._config = {
+      show_header: true,
+      show_status: true,
+      show_pipe_visualization: true,
+      show_flow_cards: true,
+      show_total_consumption: true,
+      show_hourly_rate: true,
       show_flow1: true,
       show_flow2: true,
-      show_temperature: true,
       ...config,
     };
   }
@@ -351,32 +385,42 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
     return html`
       <ha-card>
         <div class="card-content">
-          <div class="header">
-            <div class="header-left">
-              <div class="header-icon ${activeFlows > 0 ? 'flowing' : ''}">
-                ${productLogo('waterflowkit')
-                  ? unsafeHTML(productLogo('waterflowkit')!)
-                  : html`<ha-icon icon="mdi:pipe"></ha-icon>`}
+          ${this._config.show_header !== false ? html`
+            <div class="header">
+              <div class="header-left">
+                <div class="header-icon ${activeFlows > 0 ? 'flowing' : ''}">
+                  ${productLogo('waterflowkit')
+                    ? unsafeHTML(productLogo('waterflowkit')!)
+                    : html`<ha-icon icon="mdi:pipe"></ha-icon>`}
+                </div>
+                <div>
+                  <h2 class="header-title">${t.waterflowkit.title}</h2>
+                  <div class="header-subtitle">${t.waterflowkit.subtitle}</div>
+                </div>
               </div>
-              <div>
-                <h2 class="header-title">${t.waterflowkit.title}</h2>
-                <div class="header-subtitle">${t.waterflowkit.subtitle}</div>
-              </div>
+              ${this._config.show_status !== false ? html`
+                <div class="status-badge ${activeFlows > 0 ? 'flowing' : 'inactive'}">
+                  <ha-icon icon="${activeFlows > 0 ? 'mdi:water' : 'mdi:water-off'}"></ha-icon>
+                  <span>${activeFlows > 0
+                    ? `${formatNumber(totalFlow, 2)} L/min`
+                    : t.waterflowkit.noFlow}</span>
+                </div>
+              ` : nothing}
             </div>
-            <div class="status-badge ${activeFlows > 0 ? 'flowing' : 'inactive'}">
-              <ha-icon icon="${activeFlows > 0 ? 'mdi:water' : 'mdi:water-off'}"></ha-icon>
-              <span>${activeFlows > 0
-                ? `${formatNumber(totalFlow, 2)} L/min`
-                : t.waterflowkit.noFlow}</span>
+          ` : nothing}
+
+          ${this._config.show_pipe_visualization !== false ? html`
+            <div class="pipe-container">
+              ${this._renderPipesSVG(flow1, flow2, showFlow1, showFlow2, showFlow1Temp, showFlow2Temp)}
             </div>
-          </div>
+          ` : nothing}
 
-          <div class="pipe-container">
-            ${this._renderPipesSVG(flow1, flow2, showFlow1, showFlow2, showFlow1Temp, showFlow2Temp)}
-          </div>
-
-          ${showFlow1 ? this._renderFlowCard(1, flow1, flow1Name, showFlow1Temp) : nothing}
-          ${showFlow2 ? this._renderFlowCard(2, flow2, flow2Name, showFlow2Temp) : nothing}
+          ${this._config.show_flow_cards !== false && showFlow1
+            ? this._renderFlowCard(1, flow1, flow1Name, showFlow1Temp)
+            : nothing}
+          ${this._config.show_flow_cards !== false && showFlow2
+            ? this._renderFlowCard(2, flow2, flow2Name, showFlow2Temp)
+            : nothing}
         </div>
       </ha-card>
     `;
@@ -542,6 +586,10 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
     const t = getTranslations(this.hass);
     const flowEntity = num === 1 ? this._config.flow1_flow_entity : this._config.flow2_flow_entity;
     const tempClass = this._getTempClass(data.temp);
+    const showTotal = this._config.show_total_consumption !== false;
+    const showTemperature = showTemp && data.hasTemp;
+    const showHourlyRate = this._config.show_hourly_rate !== false;
+    const hasStats = showTotal || showTemperature || showHourlyRate;
 
     return html`
       <div class="flow-card flow${num} ${data.isFlowing ? 'active' : ''}" @click=${() => flowEntity && fireMoreInfo(this, flowEntity)}>
@@ -560,32 +608,33 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
             <span class="flow-unit">L/min</span>
           </div>
         </div>
-        <div class="flow-card-stats">
-          <div class="flow-stat">
-            <div class="flow-stat-label">${t.waterflowkit.totalConsumption}</div>
-            <div class="flow-stat-value">${formatNumber(data.total * 1000, 0)}</div>
-            <div class="flow-stat-unit">liter</div>
-          </div>
-          ${showTemp && data.hasTemp ? html`
-            <div class="flow-stat">
-              <div class="flow-stat-label">${t.common.temperature}</div>
-              <div class="temp-display ${tempClass}">
-                <ha-icon icon="mdi:thermometer"></ha-icon>
-                <span class="flow-stat-value">${formatNumber(data.temp!, 1)}°C</span>
+        ${hasStats ? html`
+          <div class="flow-card-stats">
+            ${showTotal ? html`
+              <div class="flow-stat">
+                <div class="flow-stat-label">${t.waterflowkit.totalConsumption}</div>
+                <div class="flow-stat-value">${formatNumber(data.total * 1000, 0)}</div>
+                <div class="flow-stat-unit">liter</div>
               </div>
-            </div>
-          ` : html`
-            <div class="flow-stat">
-              <div class="flow-stat-label">Status</div>
-              <div class="flow-stat-value">${data.isFlowing ? t.common.active : t.common.off}</div>
-            </div>
-          `}
-          <div class="flow-stat">
-            <div class="flow-stat-label">${t.waterflowkit.flowRate}</div>
-            <div class="flow-stat-value">${formatNumber(data.flow * 60, 1)}</div>
-            <div class="flow-stat-unit">L/h</div>
+            ` : nothing}
+            ${showTemperature ? html`
+              <div class="flow-stat">
+                <div class="flow-stat-label">${t.common.temperature}</div>
+                <div class="temp-display ${tempClass}">
+                  <ha-icon icon="mdi:thermometer"></ha-icon>
+                  <span class="flow-stat-value">${formatNumber(data.temp!, 1)}°C</span>
+                </div>
+              </div>
+            ` : nothing}
+            ${showHourlyRate ? html`
+              <div class="flow-stat">
+                <div class="flow-stat-label">${t.waterflowkit.flowRate}</div>
+                <div class="flow-stat-value">${formatNumber(data.flow * 60, 1)}</div>
+                <div class="flow-stat-unit">L/h</div>
+              </div>
+            ` : nothing}
           </div>
-        </div>
+        ` : nothing}
       </div>
     `;
   }
@@ -596,6 +645,12 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
   public static getStubConfig() {
     return {
+      show_header: true,
+      show_status: true,
+      show_pipe_visualization: true,
+      show_flow_cards: true,
+      show_total_consumption: true,
+      show_hourly_rate: true,
       show_flow1: true,
       show_flow2: true,
       flow1_show_temp: true,
@@ -611,7 +666,6 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private _config: WaterFlowKitConfig = {};
-  @state() private _devices: Array<{ id: string; name: string }> = [];
 
   static styles = css`
     .form-row {
@@ -645,6 +699,22 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
     }
     .checkbox-row input { width: 18px; height: 18px; }
     .checkbox-row label { margin-bottom: 0; font-weight: normal; }
+    .option-group {
+      padding: 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: color-mix(
+        in srgb,
+        var(--secondary-background-color) 72%,
+        var(--card-background-color)
+      );
+      margin-bottom: 10px;
+    }
+    .nested-options {
+      margin: 8px 0 0 25px;
+      padding: 8px 0 0 12px;
+      border-left: 2px solid var(--divider-color);
+    }
     .info {
       font-size: 12px;
       color: var(--secondary-text-color);
@@ -693,8 +763,8 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
     .pipe-title.flow1 ha-icon { color: #0ea5e9; }
     .pipe-title.flow2 ha-icon { color: #22c55e; }
     .info-banner {
-      background: linear-gradient(135deg, rgba(14, 165, 233, 0.15), rgba(6, 182, 212, 0.15));
-      border: 1px solid rgba(14, 165, 233, 0.3);
+      background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
+      border: 1px solid color-mix(in srgb, var(--primary-color) 28%, var(--divider-color));
       border-radius: 12px;
       padding: 12px 16px;
       margin-bottom: 20px;
@@ -722,37 +792,6 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
 
   public setConfig(config: WaterFlowKitConfig): void {
     this._config = config;
-  }
-
-  protected updated(changedProps: Map<string, unknown>): void {
-    if (changedProps.has('hass') && this.hass) {
-      this._findDevices();
-    }
-  }
-
-  private _findDevices(): void {
-    if (!this.hass?.devices || !this.hass?.entities) return;
-
-    const devices: Array<{ id: string; name: string }> = [];
-
-    for (const [deviceId, device] of Object.entries(this.hass.devices)) {
-      const deviceEntities = Object.entries(this.hass.entities)
-        .filter(([_, entity]) => (entity as any).device_id === deviceId)
-        .map(([entityId]) => entityId);
-
-      // Check for WaterFlowKit sensors
-      const hasFlow1 = deviceEntities.some((e) => e.includes('flow1'));
-      const hasFlow2 = deviceEntities.some((e) => e.includes('flow2'));
-
-      if (hasFlow1 || hasFlow2) {
-        devices.push({
-          id: deviceId,
-          name: (device as any).name || (device as any).name_by_user || 'WaterFlowKit',
-        });
-      }
-    }
-
-    this._devices = devices;
   }
 
   private _valueChanged(key: string, value: unknown): void {
@@ -807,6 +846,63 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
           <div class="info-banner-text">
             ${t.waterflowkit.subtitle}. Configure each pipe individually below.
           </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="form-row">
+        <div class="section-title">
+          <ha-icon icon="mdi:view-dashboard-outline"></ha-icon>
+          Visible content
+        </div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_header"
+              .checked=${this._config.show_header !== false}
+              @change=${(e: Event) => this._valueChanged('show_header', (e.target as HTMLInputElement).checked)} />
+            <label for="show_header">Header</label>
+          </div>
+          ${this._config.show_header !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_status"
+                  .checked=${this._config.show_status !== false}
+                  @change=${(e: Event) => this._valueChanged('show_status', (e.target as HTMLInputElement).checked)} />
+                <label for="show_status">Combined flow status</label>
+              </div>
+            </div>
+          ` : nothing}
+        </div>
+        <div class="option-group">
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_pipe_visualization"
+              .checked=${this._config.show_pipe_visualization !== false}
+              @change=${(e: Event) => this._valueChanged('show_pipe_visualization', (e.target as HTMLInputElement).checked)} />
+            <label for="show_pipe_visualization">Pipe visualization</label>
+          </div>
+          <div class="checkbox-row">
+            <input type="checkbox" id="show_flow_cards"
+              .checked=${this._config.show_flow_cards !== false}
+              @change=${(e: Event) => this._valueChanged('show_flow_cards', (e.target as HTMLInputElement).checked)} />
+            <label for="show_flow_cards">Pipe detail cards</label>
+          </div>
+          ${this._config.show_flow_cards !== false ? html`
+            <div class="nested-options">
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_total_consumption"
+                  .checked=${this._config.show_total_consumption !== false}
+                  @change=${(e: Event) => this._valueChanged('show_total_consumption', (e.target as HTMLInputElement).checked)} />
+                <label for="show_total_consumption">Total consumption</label>
+              </div>
+              <div class="checkbox-row">
+                <input type="checkbox" id="show_hourly_rate"
+                  .checked=${this._config.show_hourly_rate !== false}
+                  @change=${(e: Event) => this._valueChanged('show_hourly_rate', (e.target as HTMLInputElement).checked)} />
+                <label for="show_hourly_rate">Calculated hourly rate</label>
+              </div>
+            </div>
+          ` : nothing}
         </div>
       </div>
 

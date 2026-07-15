@@ -5,6 +5,8 @@
  * - smarthomeshop-water-card: Water monitoring (WaterMeterKit, WaterFlowKit)
  * - smarthomeshop-waterp1-card: Water + Energy monitoring (WaterP1MeterKit)
  * - smarthomeshop-ultimatesensor-card: Presence detection & environment (UltimateSensor, UltimateSensor Mini)
+ * - smarthomeshop-p1meterkit-card: Electricity, tariff and phase monitoring (P1MeterKit)
+ * - smarthomeshop-ceilsense-card: Ceiling presence, zones and room climate (CeilSense)
  */
 
 // Import cards and editors
@@ -12,6 +14,8 @@ import { SmartHomeShopWaterCard } from './components/water-card';
 import { SmartHomeShopWaterP1Card } from './components/waterp1-card';
 import { SmartHomeShopWaterFlowKitCard, SmartHomeShopWaterFlowKitCardEditor } from './components/waterflowkit-card';
 import { SmartHomeShopUltimateSensorCard } from './components/ultimatesensor-card';
+import { SmartHomeShopP1MeterKitCard, SmartHomeShopP1MeterKitCardEditor } from './components/p1meterkit-card';
+import { SmartHomeShopCeilSenseCard, SmartHomeShopCeilSenseCardEditor } from './components/ceilsense-card';
 import { SmartHomeShopSensorSettings } from './components/sensor-settings';
 import { SmartHomeShopZoneEditor } from './components/zone-editor';
 import './components/card-editors';
@@ -73,6 +77,22 @@ window.customCards.push({
   documentationURL: 'https://smarthomeshop.io',
 });
 
+window.customCards.push({
+  type: 'smarthomeshop-p1meterkit-card',
+  name: 'SmartHomeShop P1MeterKit Card',
+  description: 'Live grid power, tariffs, phases and energy insights for P1MeterKit',
+  preview: true,
+  documentationURL: 'https://smarthomeshop.io',
+});
+
+window.customCards.push({
+  type: 'smarthomeshop-ceilsense-card',
+  name: 'SmartHomeShop CeilSense Card',
+  description: 'Ceiling presence, target zones, distance and room climate for CeilSense',
+  preview: true,
+  documentationURL: 'https://smarthomeshop.io',
+});
+
 console.log('SmartHomeShop.io Cards loaded successfully!');
 
 // Export for external use
@@ -82,6 +102,10 @@ export {
   SmartHomeShopWaterFlowKitCard,
   SmartHomeShopWaterFlowKitCardEditor,
   SmartHomeShopUltimateSensorCard,
+  SmartHomeShopP1MeterKitCard,
+  SmartHomeShopP1MeterKitCardEditor,
+  SmartHomeShopCeilSenseCard,
+  SmartHomeShopCeilSenseCardEditor,
   SmartHomeShopSensorSettings,
   SmartHomeShopZoneEditor
 };
