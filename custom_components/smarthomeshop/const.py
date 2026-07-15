@@ -8,7 +8,7 @@ from typing import Final
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN: Final = "smarthomeshop"
-VERSION: Final = "0.0.8"
+VERSION: Final = "1.1.2"
 MANUFACTURER: Final = "SmartHomeShop.io"
 
 # Dispatcher signal fired when the smart-energy deadline schedules change, so
