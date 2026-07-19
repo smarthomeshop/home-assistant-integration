@@ -311,7 +311,7 @@ const SCENARIOS: EnergyScenario[] = [
       { key: 'hours', label: 'Charge window', default: 4, min: 1, max: 6, step: 1, unit: 'h' },
       { key: 'current', label: 'Charge current (for a number target)', default: 16, min: 6, max: 32, step: 1, unit: 'A' },
     ],
-    note: 'This does NOT guarantee a "ready by" time yet - it simply charges during the cheapest block. A deadline scheduler is planned.',
+    note: 'This charges during the cheapest block without a ready-by guarantee. For "car ready by 07:00", use a deadline schedule below.',
     build: ({ target, p, px, min, deviceName }) => {
       const N = p.hours;
       const a = acts(target, p.current, min);
@@ -322,28 +322,9 @@ const SCENARIOS: EnergyScenario[] = [
       });
     },
   },
-  {
-    key: 'battery_charge_cheap_hold_peak',
-    title: 'Charge the battery in the cheapest hours',
-    desc: 'Coarse arbitrage without a forecast: charge the battery during the cheapest block and stop when it ends, so it is full for the expensive hours. A preview of the battery tier.',
-    icon: 'mdi:battery-charging-high', color: '#10b981',
-    requires: 'contract', targetDomains: ['switch', 'number'], targetLabel: 'Grid-charge switch or power (number)',
-    aliasStem: 'Battery charge cheap',
-    params: [
-      { key: 'hours', label: 'Charge block', default: 2, min: 1, max: 6, step: 1, unit: 'h' },
-      { key: 'power', label: 'Charge power (for a number target)', default: 2000, min: 100, max: 10000, step: 100, unit: 'W' },
-    ],
-    note: 'Battery brands differ, so pick the inverter grid-charge switch or charge-power number. Fine-tune the created automation for your model.',
-    build: ({ target, p, px, min, deviceName }) => {
-      const N = p.hours;
-      const a = acts(target, p.power, min);
-      return steerOnFlag({
-        alias: `${deviceName} - Battery charge cheap ${N}h`, flag: px[`cheapest_${N}h_window_now`] ?? null,
-        target, startAct: a.startAct, stopAct: a.stopAct, contract: contractCond(px),
-        watchdogHours: a.switchTarget ? N + 1 : undefined,
-      });
-    },
-  },
+  // Home-battery charging deliberately does not live here: the Energy tab's
+  // battery control (Settings) generates one automation that owns the battery,
+  // including SoC limits and solar-aware charging.
 ];
 
 @customElement('shs-energy-automations')
@@ -623,9 +604,9 @@ export class EnergyAutomations extends LitElement {
       <div class="head">
         <div class="head-title">Smart energy</div>
         <div class="head-sub">
-          Let Home Assistant steer a device to save money: run it in the cheapest hours, on your solar
-          surplus, or pause it at price peaks. Each becomes a normal HA automation with a safety max-runtime
-          and a "contract connected" guard baked in - edit it later like any automation.
+          Steer one device to save money: run it in the cheapest hours, on your solar surplus, or pause
+          it at price peaks. Each becomes a normal HA automation with a safety max-runtime and a
+          "contract connected" guard baked in - edit it later like any automation.
         </div>
       </div>
       <div class="cards">${scenarios.map(s => this._renderCard(s))}</div>

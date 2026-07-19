@@ -3,8 +3,6 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 import './energy-automations';
 import './energy-schedules';
-import './energy-sources';
-import './energy-battery';
 
 const ENERGY_PRODUCTS = ['p1meterkit', 'waterp1meterkit'];
 
@@ -195,6 +193,8 @@ export class AutomationsPage extends LitElement {
     .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: white; transition: transform 0.15s; }
     .toggle.on::after { transform: translateX(18px); }
     .empty { font-size: 13px; color: var(--secondary-text-color); }
+    .energy-global-note { display: flex; align-items: flex-start; gap: 9px; margin: 18px 0 6px; padding: 11px 13px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.45; }
+    .energy-global-note ha-icon { --mdc-icon-size: 17px; flex: none; margin-top: 1px; color: var(--shs-primary); }
     .config-hint { margin-top: 24px; font-size: 12px; color: var(--secondary-text-color); line-height: 1.5; opacity: 0.8; }
     .config-hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
     .loading { padding: 40px; text-align: center; }
@@ -519,13 +519,10 @@ export class AutomationsPage extends LitElement {
           .deviceName=${this.deviceName}
           .deviceEntities=${this._entities}
         ></shs-energy-schedules>
-        <shs-energy-sources
-          .hass=${this.hass}
-        ></shs-energy-sources>
-        <shs-energy-battery
-          .hass=${this.hass}
-          .deviceName=${this.deviceName}
-        ></shs-energy-battery>
+        <div class="energy-global-note">
+          <ha-icon icon="mdi:lightning-bolt-outline"></ha-icon>
+          <div>This page covers this device only. Your account, solar and battery sources, and home-battery control are set up once for the whole home under <b>Energy</b> - <b>Settings</b>.</div>
+        </div>
       ` : nothing}
 
       ${!anyScenario ? html`

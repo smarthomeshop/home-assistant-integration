@@ -1,6 +1,9 @@
 import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
+import '../components/account-prices';
+import './energy-sources';
+import './energy-battery';
 
 interface Sources {
   solar_power?: string;
@@ -75,12 +78,19 @@ export class EnergyHub extends LitElement {
   @state() private _hoverBar = -1;
   @state() private _powerChartWidth = 760;
   @state() private _hoverPowerTime?: number;
+  @state() private _settingsOpen = false;
+  @state() private _settingsFocus: 'account' | 'sources' | 'battery' | '' = '';
 
   private static readonly APP_STATS_URL = 'https://app.smarthomeshop.io/energy-prices';
+  private static readonly INITIAL_LOAD_TIMEOUT = 6000;
+  private static readonly BACKGROUND_LOAD_TIMEOUT = 12000;
   private _loadStarted = false;
   private _loading?: Promise<void>;
+  private _accountLoading?: Promise<void>;
+  private _historyLoading?: Promise<void>;
   private _timer?: number;
-  private _refreshAccountOnNextLoad = true;
+  private _accountPollTimer?: number;
+  private _accountPollAttempts = 0;
   private _powerChartObserver?: ResizeObserver;
   private _powerChartElement?: Element;
 
@@ -132,6 +142,32 @@ export class EnergyHub extends LitElement {
       white-space: nowrap;
     }
     .connection-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--shs-green); }
+    .head-actions { display: flex; align-items: center; gap: 14px; }
+    .settings-btn {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 9px 16px; border: 1px solid var(--divider-color); border-radius: 10px;
+      background: var(--card-background-color); color: var(--primary-text-color);
+      font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer;
+    }
+    .settings-btn:hover { border-color: var(--shs-blue); color: var(--shs-blue); }
+    .settings-btn ha-icon { --mdc-icon-size: 17px; }
+
+    /* Energy settings dialog: one place for account, sources and battery.
+       z-index stays below the sub-components' own modals (999) so their
+       pickers layer on top of this dialog. */
+    .dlg-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 32, .55); z-index: 940; display: flex; align-items: flex-start; justify-content: center; padding: 4vh 16px; }
+    .dlg { width: 100%; max-width: 700px; max-height: 92vh; overflow-y: auto; background: var(--primary-background-color); border: 1px solid var(--divider-color); border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
+    .dlg-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: var(--primary-background-color); border-bottom: 1px solid var(--divider-color); }
+    .dlg-title { font-size: 16px; font-weight: 700; color: var(--primary-text-color); }
+    .dlg-sub { font-size: 12px; color: var(--secondary-text-color); margin-top: 1px; }
+    .dlg-x { margin-left: auto; background: none; border: none; color: var(--secondary-text-color); cursor: pointer; padding: 6px; display: flex; border-radius: 8px; }
+    .dlg-x:hover { background: var(--secondary-background-color); color: var(--primary-text-color); }
+    .dlg-body { padding: 6px 20px 24px; }
+    .dlg-sec { scroll-margin-top: 70px; }
+    .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 9px; background: var(--shs-blue, var(--shs-primary, #4361ee)); color: #fff; font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
+    .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
+    .cta-btn ha-icon { --mdc-icon-size: 15px; }
+    .smart-item .cta-btn { margin-left: auto; }
 
     .section { margin-top: 26px; }
     .section-head {
@@ -230,6 +266,8 @@ export class EnergyHub extends LitElement {
     }
     .setup-note ha-icon, .empty ha-icon { --mdc-icon-size: 18px; color: var(--shs-blue); flex: 0 0 auto; }
     .setup-note b, .empty b { color: var(--primary-text-color); }
+    .setup-note > div, .empty > div { flex: 1; }
+    .setup-note .cta-btn, .empty .cta-btn { align-self: center; }
 
     .seg { display: inline-flex; padding: 3px; background: var(--secondary-background-color); border-radius: 7px; }
     .seg button {
@@ -439,7 +477,10 @@ export class EnergyHub extends LitElement {
 
   disconnectedCallback(): void {
     if (this._timer) window.clearInterval(this._timer);
+    if (this._accountPollTimer) window.clearTimeout(this._accountPollTimer);
     this._timer = undefined;
+    this._accountPollTimer = undefined;
+    this._accountPollAttempts = 0;
     this._powerChartObserver?.disconnect();
     this._powerChartObserver = undefined;
     this._powerChartElement = undefined;
@@ -477,29 +518,118 @@ export class EnergyHub extends LitElement {
     return this._loading;
   }
 
-  private async _loadData(): Promise<void> {
-    const accountType = this._refreshAccountOnNextLoad
-      ? 'smarthomeshop/account/refresh'
-      : 'smarthomeshop/account';
-    const [sources, account, entities, schedules, battery] = await Promise.allSettled([
-      this.hass.callWS<{ sources: Sources }>({ type: 'smarthomeshop/energy_sources' }),
-      this.hass.callWS<any>({ type: accountType }),
-      this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' }),
-      this.hass.callWS<{ schedules: any[] }>({ type: 'smarthomeshop/schedules' }),
-      this.hass.callWS<{ battery: any }>({ type: 'smarthomeshop/battery' }),
-    ]);
-
-    if (sources.status === 'fulfilled') this._sources = sources.value.sources || {};
-    if (account.status === 'fulfilled') {
-      this._account = account.value;
-      this._refreshAccountOnNextLoad = false;
+  private async _callWS<T>(message: Record<string, unknown>, timeoutMs: number): Promise<T> {
+    let timeoutId: number | undefined;
+    try {
+      return await Promise.race([
+        this.hass.callWS<T>(message),
+        new Promise<T>((_, reject) => {
+          timeoutId = window.setTimeout(
+            () => reject(new Error(`${String(message.type)} timed out`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
     }
-    if (entities.status === 'fulfilled') this._priceEntity = entities.value.entities?.electricity_price || undefined;
-    if (schedules.status === 'fulfilled') this._schedules = schedules.value.schedules || [];
-    if (battery.status === 'fulfilled') this._battery = battery.value.battery || {};
+  }
 
-    await this._loadHistory();
-    this._loaded = true;
+  private async _loadData(): Promise<void> {
+    // Loading the Energy page must never depend on the external price API.
+    // Read the cached coordinator state immediately; refreshes are scheduled
+    // by the backend or started explicitly from the account controls.
+    this._startAccountLoad('smarthomeshop/account');
+
+    try {
+      const [sources, entities, schedules, battery] = await Promise.allSettled([
+        this._callWS<{ sources: Sources }>(
+          { type: 'smarthomeshop/energy_sources' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
+        this._callWS<{ entities: Record<string, string | null> }>(
+          { type: 'smarthomeshop/prices/entities' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
+        this._callWS<{ schedules: any[] }>(
+          { type: 'smarthomeshop/schedules' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
+        this._callWS<{ battery: any }>(
+          { type: 'smarthomeshop/battery' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
+      ]);
+
+      if (sources.status === 'fulfilled') this._sources = sources.value.sources || {};
+      if (entities.status === 'fulfilled') this._priceEntity = entities.value.entities?.electricity_price || undefined;
+      if (schedules.status === 'fulfilled') this._schedules = schedules.value.schedules || [];
+      if (battery.status === 'fulfilled') this._battery = battery.value.battery || {};
+    } catch (err) {
+      console.warn('Energy overview load failed', err);
+    } finally {
+      // A slow optional endpoint must never leave the complete Energy page blocked.
+      this._loaded = true;
+      this._startHistoryLoad();
+    }
+  }
+
+  private _startAccountLoad(type: string): void {
+    if (this._accountLoading) return;
+    this._accountLoading = this._callWS<any>(
+      { type },
+      EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+    ).then(account => {
+      this._account = account;
+      this._watchAccountRefresh(account, true);
+    }).catch(err => {
+      console.warn('Energy account load failed', err);
+    }).finally(() => {
+      this._accountLoading = undefined;
+    });
+  }
+
+  private _watchAccountRefresh(account: any, reset = false): void {
+    if (reset) {
+      if (this._accountPollTimer) window.clearTimeout(this._accountPollTimer);
+      this._accountPollTimer = undefined;
+      this._accountPollAttempts = 0;
+    }
+    if (!account?.refreshing) {
+      if (this._accountPollTimer) window.clearTimeout(this._accountPollTimer);
+      this._accountPollTimer = undefined;
+      this._accountPollAttempts = 0;
+      return;
+    }
+    if (!this.isConnected || this._accountPollTimer || this._accountPollAttempts >= 30) return;
+
+    this._accountPollTimer = window.setTimeout(() => {
+      this._accountPollTimer = undefined;
+      void this._pollAccountRefresh();
+    }, 1500);
+  }
+
+  private async _pollAccountRefresh(): Promise<void> {
+    if (!this.isConnected) return;
+    this._accountPollAttempts += 1;
+    try {
+      const account = await this._callWS<any>(
+        { type: 'smarthomeshop/account' },
+        EnergyHub.INITIAL_LOAD_TIMEOUT,
+      );
+      this._account = account;
+      this._watchAccountRefresh(account);
+    } catch (err) {
+      if (this._accountPollAttempts < 30) this._watchAccountRefresh(this._account);
+      else console.warn('Energy account status polling failed', err);
+    }
+  }
+
+  private _startHistoryLoad(): void {
+    if (this._historyLoading) return;
+    this._historyLoading = this._loadHistory().finally(() => {
+      this._historyLoading = undefined;
+    });
   }
 
   private async _loadHistory(): Promise<void> {
@@ -512,14 +642,17 @@ export class EnergyHub extends LitElement {
 
     try {
       const start = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
-      const result = await this.hass.callWS<Record<string, any[]>>({
-        type: 'history/history_during_period',
-        start_time: start,
-        entity_ids: ids,
-        minimal_response: true,
-        no_attributes: true,
-        significant_changes_only: false,
-      });
+      const result = await this._callWS<Record<string, any[]>>(
+        {
+          type: 'history/history_during_period',
+          start_time: start,
+          entity_ids: ids,
+          minimal_response: true,
+          no_attributes: true,
+          significant_changes_only: false,
+        },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
       const history: Record<string, HistoryPoint[]> = {};
 
       for (const id of ids) {
@@ -769,7 +902,8 @@ export class EnergyHub extends LitElement {
         ${!this._sources.solar_power && !this._sources.battery_power ? html`
           <div class="setup-note">
             <ha-icon icon="mdi:connection"></ha-icon>
-            <div>Only grid power is connected. Open a P1 device, go to <b>Automations</b>, then connect solar and battery under <b>Solar &amp; battery</b>.</div>
+            <div>Only grid power is connected. Add your solar and battery entities to see production, storage and state of charge.</div>
+            ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('sources')}>Set up</button>` : nothing}
           </div>
         ` : nothing}
       </section>
@@ -869,14 +1003,9 @@ export class EnergyHub extends LitElement {
   }
 
   private _renderPriceSection(priceOk: boolean) {
-    if (!priceOk) {
-      return html`
-        <section class="section">
-          <div class="section-head"><div class="section-title"><h2>Price outlook</h2></div></div>
-          <div class="empty"><ha-icon icon="mdi:account-key-outline"></ha-icon><div>Connect your SmartHomeShop account on a P1 device to see dynamic prices and planning insights.</div></div>
-        </section>
-      `;
-    }
+    // Without a connected account there is nothing to plot; the page-level
+    // connect banner already points to Settings.
+    if (!priceOk) return nothing;
 
     const today = this._priceRows('today');
     const tomorrow = this._priceRows('tomorrow');
@@ -1253,14 +1382,16 @@ export class EnergyHub extends LitElement {
           <div class="smart-item">
             <div class="smart-icon ${priceOk ? 'good' : ''}"><ha-icon icon="mdi:currency-eur"></ha-icon></div>
             <div><div class="smart-name">Dynamic price</div><div class="smart-detail">${priceOk ? `Cheapest ${this._cheapestHours}h ${selectedDay} from ${this._hm(cheapest?.start) || 'not available'}` : 'Account not connected'}</div></div>
+            ${!priceOk && this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
           </div>
           <div class="smart-item">
             <div class="smart-icon ${activeSchedules > 0 ? 'good' : ''}"><ha-icon icon="mdi:calendar-clock"></ha-icon></div>
-            <div><div class="smart-name">Schedules</div><div class="smart-detail">${activeSchedules > 0 ? `${activeSchedules} running now` : nextSchedule ? `Next at ${this._hm(nextSchedule)}` : 'No schedule running'}</div></div>
+            <div><div class="smart-name">Schedules</div><div class="smart-detail">${activeSchedules > 0 ? `${activeSchedules} running now` : nextSchedule ? `Next at ${this._hm(nextSchedule)}` : 'Created on a device page (Automations)'}</div></div>
           </div>
           <div class="smart-item">
             <div class="smart-icon ${batteryOn ? 'good' : ''}"><ha-icon icon="mdi:home-battery-outline"></ha-icon></div>
-            <div><div class="smart-name">Battery control</div><div class="smart-detail">${batteryOn ? 'Arbitrage enabled' : 'Not configured'}</div></div>
+            <div><div class="smart-name">Battery control</div><div class="smart-detail">${batteryOn ? this._batterySummary() : 'Not configured'}</div></div>
+            ${!batteryOn && this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('battery')}>Set up</button>` : nothing}
           </div>
         </div>
       </section>
@@ -1301,14 +1432,120 @@ export class EnergyHub extends LitElement {
           <h1>Energy</h1>
           <div class="subtitle">Live flow, price planning, and automated control in one overview.</div>
         </div>
-        ${priceOk ? html`<div class="connection"><span class="connection-dot"></span>${contractName || 'Energy prices connected'}</div>` : nothing}
+        <div class="head-actions">
+          ${priceOk ? html`<div class="connection"><span class="connection-dot"></span>${contractName || 'Energy prices connected'}</div>` : nothing}
+          ${this.hass.user?.is_admin ? html`
+            <button class="settings-btn" @click=${() => this._openSettings(priceOk ? '' : 'account')}>
+              <ha-icon icon="mdi:cog-outline"></ha-icon>Settings
+            </button>` : nothing}
+        </div>
       </header>
+
+      ${!priceOk ? html`
+        <div class="empty">
+          <ha-icon icon="mdi:account-key-outline"></ha-icon>
+          <div>Connect your SmartHomeShop account to get dynamic prices, cheapest-hours planning and automated control.</div>
+          ${this.hass.user?.is_admin ? html`<button class="cta-btn" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
+        </div>` : nothing}
 
       ${this._renderLive(house, grid, solar, battery, soc, contributorDead)}
       ${this._renderPriceSection(priceOk)}
       ${this._renderPowerSection(grid)}
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
+      ${this._renderSettingsDialog()}
     `;
+  }
+
+  private _openSettings(focus: 'account' | 'sources' | 'battery' | '' = ''): void {
+    this._settingsFocus = focus;
+    this._settingsOpen = true;
+    if (focus) {
+      this.updateComplete.then(() => {
+        window.setTimeout(() => {
+          this.renderRoot.querySelector(`[data-sec="${focus}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }, 60);
+      });
+    }
+  }
+
+  private _closeSettings(): void {
+    this._settingsOpen = false;
+    this._settingsFocus = '';
+    // Reflect whatever was changed in the dialog on the overview.
+    this._load();
+  }
+
+  // One dialog for everything you configure on this page: the account and
+  // contract, the solar/battery measurement entities, and home-battery
+  // control. The cards keep their own edit dialogs, which layer on top.
+  private _renderSettingsDialog() {
+    if (!this._settingsOpen) return nothing;
+    return html`
+      <div class="dlg-backdrop" @click=${this._closeSettings}>
+        <div class="dlg" role="dialog" aria-label="Energy settings" @click=${(e: Event) => e.stopPropagation()}>
+          <div class="dlg-head">
+            <div>
+              <div class="dlg-title">Energy settings</div>
+              <div class="dlg-sub">Account, solar and battery for your whole home - set up once, used everywhere.</div>
+            </div>
+            <button class="dlg-x" title="Close" @click=${this._closeSettings}><ha-icon icon="mdi:close"></ha-icon></button>
+          </div>
+          <div class="dlg-body">
+            <div class="dlg-sec" data-sec="account">
+              <shs-account-prices
+                .hass=${this.hass}
+                @account-changed=${this._handleAccountChanged}>
+              </shs-account-prices>
+            </div>
+            <div class="dlg-sec" data-sec="sources">
+              <shs-energy-sources
+                .hass=${this.hass}
+                @shs-energy-sources-changed=${this._handleEnergySourcesChanged}>
+              </shs-energy-sources>
+            </div>
+            <div class="dlg-sec" data-sec="battery">
+              <shs-energy-battery
+                .hass=${this.hass}
+                .deviceName=${'Home battery'}>
+              </shs-energy-battery>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private async _handleEnergySourcesChanged(): Promise<void> {
+    try {
+      const response = await this._callWS<{ sources: Sources }>(
+        { type: 'smarthomeshop/energy_sources' },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
+      this._sources = response.sources || {};
+      this._history = {};
+      this._startHistoryLoad();
+
+      const battery = this.renderRoot.querySelector('shs-energy-battery') as (HTMLElement & { refresh?: () => Promise<void> }) | null;
+      await battery?.refresh?.();
+    } catch (err) {
+      console.warn('Energy source refresh failed', err);
+    }
+  }
+
+  private _handleAccountChanged(event: CustomEvent<{ account?: any }>): void {
+    if (event.detail?.account) {
+      this._account = event.detail.account;
+      this._watchAccountRefresh(event.detail.account, true);
+      return;
+    }
+    this._startAccountLoad('smarthomeshop/account');
+  }
+
+  private _batterySummary(): string {
+    const config = this._battery || {};
+    const hours = config.charge_hours || 3;
+    const target = config.target_soc;
+    return `Charging in the cheapest ${hours}h${typeof target === 'number' ? ` to ${target}%` : ''}`;
   }
 
   private _shortPower(watts: number): string {
