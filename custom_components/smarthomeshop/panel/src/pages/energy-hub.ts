@@ -86,6 +86,8 @@ export class EnergyHub extends LitElement {
   private static readonly BACKGROUND_LOAD_TIMEOUT = 12000;
   private _loadStarted = false;
   private _loading?: Promise<void>;
+  private _anchorObserver?: ResizeObserver;
+  private _backdropArmed = false;
   private _accountLoading?: Promise<void>;
   private _historyLoading?: Promise<void>;
   private _timer?: number;
@@ -155,15 +157,21 @@ export class EnergyHub extends LitElement {
     /* Energy settings dialog: one place for account, sources and battery.
        z-index stays below the sub-components' own modals (999) so their
        pickers layer on top of this dialog. */
-    .dlg-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 32, .55); z-index: 940; display: flex; align-items: flex-start; justify-content: center; padding: 4vh 16px; }
-    .dlg { width: 100%; max-width: 700px; max-height: 92vh; overflow-y: auto; background: var(--primary-background-color); border: 1px solid var(--divider-color); border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
+    .dlg-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 32, .55); z-index: 940; display: flex; align-items: flex-start; justify-content: center; padding: 4vh 16px; overscroll-behavior: contain; }
+    .dlg { width: 100%; max-width: 700px; max-height: 92vh; overflow-y: auto; overscroll-behavior: contain; outline: none; background: var(--primary-background-color); border: 1px solid var(--divider-color); border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
     .dlg-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: var(--primary-background-color); border-bottom: 1px solid var(--divider-color); }
     .dlg-title { font-size: 16px; font-weight: 700; color: var(--primary-text-color); }
     .dlg-sub { font-size: 12px; color: var(--secondary-text-color); margin-top: 1px; }
     .dlg-x { margin-left: auto; background: none; border: none; color: var(--secondary-text-color); cursor: pointer; padding: 6px; display: flex; border-radius: 8px; }
     .dlg-x:hover { background: var(--secondary-background-color); color: var(--primary-text-color); }
     .dlg-body { padding: 6px 20px 24px; }
-    .dlg-sec { scroll-margin-top: 70px; }
+    .dlg-sec { scroll-margin-top: 92px; border-radius: 14px; }
+    .dlg-sec.focus { animation: sec-focus 1.6s ease-out 1; }
+    @keyframes sec-focus {
+      0% { box-shadow: 0 0 0 2px var(--shs-blue, #4361ee); }
+      100% { box-shadow: 0 0 0 2px transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) { .dlg-sec.focus { animation: none; } }
     .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 9px; background: var(--shs-blue, var(--shs-primary, #4361ee)); color: #fff; font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
     .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .cta-btn ha-icon { --mdc-icon-size: 15px; }
@@ -484,6 +492,10 @@ export class EnergyHub extends LitElement {
     this._powerChartObserver?.disconnect();
     this._powerChartObserver = undefined;
     this._powerChartElement = undefined;
+    this._anchorObserver?.disconnect();
+    this._anchorObserver = undefined;
+    // Never leave the page scroller frozen if we unmount with the dialog open.
+    this._lockPageScroll(false);
     super.disconnectedCallback();
   }
 
@@ -1003,9 +1015,10 @@ export class EnergyHub extends LitElement {
   }
 
   private _renderPriceSection(priceOk: boolean) {
-    // Without a connected account there is nothing to plot; the page-level
-    // connect banner already points to Settings.
-    if (!priceOk) return nothing;
+    // Plot whenever price rows exist, even during a transient connection
+    // error (cached prices remain valid); the page-level banner explains the
+    // connection state.
+    if (!priceOk && !this._priceRows('today').length && !this._priceRows('tomorrow').length) return nothing;
 
     const today = this._priceRows('today');
     const tomorrow = this._priceRows('tomorrow');
@@ -1419,10 +1432,11 @@ export class EnergyHub extends LitElement {
       ? Math.max(0, grid + (solar ?? 0) + (battery ?? 0))
       : null;
     const priceOk = this._account?.status === 'ok';
+    const hasKey = !!this._account?.has_key;
     const activeSchedules = this._schedules.filter(schedule =>
       schedule.entity_id ? this.hass.states[schedule.entity_id]?.state === 'on' : schedule.active,
     ).length;
-    const batteryOn = !!this._battery?.control_entity;
+    const batteryOn = !!this._battery?.enabled;
     const contractName = this._account?.contract?.name;
 
     return html`
@@ -1441,11 +1455,16 @@ export class EnergyHub extends LitElement {
         </div>
       </header>
 
-      ${!priceOk ? html`
+      ${!hasKey ? html`
         <div class="empty">
           <ha-icon icon="mdi:account-key-outline"></ha-icon>
           <div>Connect your SmartHomeShop account to get dynamic prices, cheapest-hours planning and automated control.</div>
           ${this.hass.user?.is_admin ? html`<button class="cta-btn" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
+        </div>` : !priceOk ? html`
+        <div class="empty">
+          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+          <div>The price connection has a problem right now. Cached prices stay in use where available.</div>
+          ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Check connection</button>` : nothing}
         </div>` : nothing}
 
       ${this._renderLive(house, grid, solar, battery, soc, contributorDead)}
@@ -1459,20 +1478,69 @@ export class EnergyHub extends LitElement {
   private _openSettings(focus: 'account' | 'sources' | 'battery' | '' = ''): void {
     this._settingsFocus = focus;
     this._settingsOpen = true;
-    if (focus) {
-      this.updateComplete.then(() => {
-        window.setTimeout(() => {
-          this.renderRoot.querySelector(`[data-sec="${focus}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        }, 60);
-      });
-    }
+    this._lockPageScroll(true);
+    this.updateComplete.then(() => {
+      (this.renderRoot.querySelector('.dlg') as HTMLElement | null)?.focus();
+      if (focus) this._anchorSection(focus);
+    });
+  }
+
+  // The dialog's cards load their content async and grow while rendering, so
+  // a single scrollIntoView lands on a still-empty section. Re-anchor on every
+  // size change of the dialog body until the layout settles.
+  private _anchorSection(focus: string): void {
+    this._anchorObserver?.disconnect();
+    const scroll = (behavior: ScrollBehavior) =>
+      this.renderRoot.querySelector(`[data-sec="${focus}"]`)?.scrollIntoView({ block: 'start', behavior });
+    scroll('smooth');
+    const body = this.renderRoot.querySelector('.dlg-body');
+    if (!body || typeof ResizeObserver === 'undefined') return;
+    this._anchorObserver = new ResizeObserver(() => scroll('auto'));
+    this._anchorObserver.observe(body);
+    window.setTimeout(() => { this._anchorObserver?.disconnect(); this._anchorObserver = undefined; }, 2500);
   }
 
   private _closeSettings(): void {
+    this._anchorObserver?.disconnect();
+    this._anchorObserver = undefined;
     this._settingsOpen = false;
     this._settingsFocus = '';
+    this._lockPageScroll(false);
     // Reflect whatever was changed in the dialog on the overview.
     this._load();
+  }
+
+  // The page scrolls in the panel's .panel-content container (not the body);
+  // freeze it while the dialog is open so backdrop scrolling cannot move the
+  // overview underneath.
+  private _lockPageScroll(lock: boolean): void {
+    const root = this.getRootNode();
+    const container = root instanceof ShadowRoot
+      ? (root.querySelector('.panel-content') as HTMLElement | null)
+      : null;
+    if (container) container.style.overflow = lock ? 'hidden' : '';
+  }
+
+  private _onDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      this._closeSettings();
+    }
+  }
+
+  private _onBackdropPointerDown(event: PointerEvent): void {
+    // Only arm the backdrop-close when the gesture STARTS on the backdrop, so
+    // releasing a drag from a form field over the backdrop cannot close it.
+    this._backdropArmed = event.target === event.currentTarget;
+  }
+
+  private _onBackdropClick(event: MouseEvent): void {
+    if (this._backdropArmed && event.target === event.currentTarget) this._closeSettings();
+    this._backdropArmed = false;
+  }
+
+  private _scrollToAccountSection(): void {
+    this._anchorSection('account');
   }
 
   // One dialog for everything you configure on this page: the account and
@@ -1481,8 +1549,13 @@ export class EnergyHub extends LitElement {
   private _renderSettingsDialog() {
     if (!this._settingsOpen) return nothing;
     return html`
-      <div class="dlg-backdrop" @click=${this._closeSettings}>
-        <div class="dlg" role="dialog" aria-label="Energy settings" @click=${(e: Event) => e.stopPropagation()}>
+      <div class="dlg-backdrop"
+        @pointerdown=${this._onBackdropPointerDown}
+        @click=${this._onBackdropClick}>
+        <div class="dlg" role="dialog" aria-modal="true" aria-label="Energy settings" tabindex="-1"
+          @keydown=${this._onDialogKeydown}
+          @hass-more-info=${this._closeSettings}
+          @click=${(e: Event) => e.stopPropagation()}>
           <div class="dlg-head">
             <div>
               <div class="dlg-title">Energy settings</div>
@@ -1491,22 +1564,23 @@ export class EnergyHub extends LitElement {
             <button class="dlg-x" title="Close" @click=${this._closeSettings}><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
           <div class="dlg-body">
-            <div class="dlg-sec" data-sec="account">
+            <div class="dlg-sec ${this._settingsFocus === 'account' ? 'focus' : ''}" data-sec="account">
               <shs-account-prices
                 .hass=${this.hass}
                 @account-changed=${this._handleAccountChanged}>
               </shs-account-prices>
             </div>
-            <div class="dlg-sec" data-sec="sources">
+            <div class="dlg-sec ${this._settingsFocus === 'sources' ? 'focus' : ''}" data-sec="sources">
               <shs-energy-sources
                 .hass=${this.hass}
                 @shs-energy-sources-changed=${this._handleEnergySourcesChanged}>
               </shs-energy-sources>
             </div>
-            <div class="dlg-sec" data-sec="battery">
+            <div class="dlg-sec ${this._settingsFocus === 'battery' ? 'focus' : ''}" data-sec="battery">
               <shs-energy-battery
                 .hass=${this.hass}
-                .deviceName=${'Home battery'}>
+                .deviceName=${'Home battery'}
+                @open-device-settings=${this._scrollToAccountSection}>
               </shs-energy-battery>
             </div>
           </div>
@@ -1533,6 +1607,10 @@ export class EnergyHub extends LitElement {
   }
 
   private _handleAccountChanged(event: CustomEvent<{ account?: any }>): void {
+    // The battery card gates on the account status, so connecting a key in
+    // the dialog must refresh it too (it sits right below the account card).
+    const battery = this.renderRoot.querySelector('shs-energy-battery') as (HTMLElement & { refresh?: () => Promise<void> }) | null;
+    battery?.refresh?.();
     if (event.detail?.account) {
       this._account = event.detail.account;
       this._watchAccountRefresh(event.detail.account, true);
@@ -1543,9 +1621,9 @@ export class EnergyHub extends LitElement {
 
   private _batterySummary(): string {
     const config = this._battery || {};
-    const hours = config.charge_hours || 3;
     const target = config.target_soc;
-    return `Charging in the cheapest ${hours}h${typeof target === 'number' ? ` to ${target}%` : ''}`;
+    const mode = config.automatic_control ? 'Automatic execution on' : 'Advice only';
+    return `${mode}${typeof target === 'number' ? ` - target ${target}%` : ''}`;
   }
 
   private _shortPower(watts: number): string {

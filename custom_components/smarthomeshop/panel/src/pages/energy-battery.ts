@@ -2,22 +2,15 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 
-// Home-battery arbitrage (smart-energy Phase 3). There is no universal HA
-// battery-control domain, so the user maps their inverter's own entities
-// (a grid-charge switch, a charge-power number, or a mode select) plus an
-// optional state-of-charge sensor and an optional PV-forecast sensor. From
-// that mapping we generate a safe "charge in the cheapest hours up to a target
-// SoC" automation (skipping grid-charge when solar is forecast to fill it),
-// and - if a mode select with a discharge option is mapped - a "cover the
-// evening peak down to a reserve SoC" automation.
-
 type ControlKind = 'switch' | 'number' | 'select';
 
 interface BatteryConfig {
   enabled?: boolean;
+  automatic_control?: boolean;
   control_kind?: ControlKind;
   control_entity?: string;
   charge_power?: number;
+  max_discharge_power?: number;
   off_min?: number;
   charge_option?: string;
   idle_option?: string;
@@ -28,88 +21,47 @@ interface BatteryConfig {
   charge_hours?: number;
   capacity_kwh?: number;
   pv_forecast_sensor?: string;
+  load_forecast_sensor?: string;
+  charge_efficiency?: number;
+  discharge_efficiency?: number;
+  cycle_cost?: number;
+  assumed_load_power?: number;
+  grid_import_limit?: number;
+  grid_export_limit?: number;
+  minimum_confidence?: number;
+  planning_hours?: number;
 }
 
-const dom = (e: string): string => e.split('.')[0];
+interface BatteryPlan {
+  status?: string;
+  recommendation?: string;
+  target_power_w?: number;
+  target_soc?: number;
+  expected_savings?: number;
+  confidence?: number;
+  reason?: string;
+  uses_predicted_prices?: boolean;
+  forecast_hours?: number;
+  timeline?: Array<Record<string, unknown>>;
+}
+
+const dom = (entityId: string): string => entityId.split('.')[0];
 const BATT_ID = 'shs_batt';
 const LEGACY_IDS = ['shs_batt_charge', 'shs_batt_discharge'];
-const NON_PEAK = ['very_low', 'low', 'medium', 'high'];
-const numOr = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+const numOr = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
-const turn = (entity: string, on: boolean) => ({ service: `${dom(entity)}.${on ? 'turn_on' : 'turn_off'}`, target: { entity_id: entity } });
-const setNumber = (entity: string, value: number) => ({ service: 'number.set_value', target: { entity_id: entity }, data: { value } });
-const selectOption = (entity: string, option: string) => ({ service: 'select.select_option', target: { entity_id: entity }, data: { option } });
-
-const chargeAct = (c: BatteryConfig) =>
-  c.control_kind === 'switch' ? turn(c.control_entity!, true)
-    : c.control_kind === 'number' ? setNumber(c.control_entity!, numOr(c.charge_power, 0))
-      : selectOption(c.control_entity!, c.charge_option || '');
-const idleAct = (c: BatteryConfig) =>
-  c.control_kind === 'switch' ? turn(c.control_entity!, false)
-    : c.control_kind === 'number' ? setNumber(c.control_entity!, numOr(c.off_min, 0))
-      : selectOption(c.control_entity!, c.idle_option || '');
-
-// One automation owns the control entity and decides the mode in priority
-// order (charge in the cheap window → discharge at peak → idle), so charge and
-// discharge can never fight each other on a shared mode-select.
-function batteryAutomation(c: BatteryConfig, px: Record<string, string | null>, alias: string) {
-  const N = numOr(c.charge_hours, 3);
-  const win = px[`cheapest_${N}h_window_now`];
-  const target = numOr(c.target_soc, 100);
-  const reserve = numOr(c.reserve_soc, 10);
-  const isSelect = c.control_kind === 'select';
-  const hasDischarge = isSelect && !!c.discharge_option && !!c.soc_sensor;
-
-  const chargeConds: Record<string, unknown>[] = [
-    { condition: 'state', entity_id: win, state: 'on' },
-    { condition: 'state', entity_id: px.contract_active, state: 'on' },
-  ];
-  if (c.soc_sensor) chargeConds.push({ condition: 'numeric_state', entity_id: c.soc_sensor, below: target });
-  if (c.pv_forecast_sensor && c.soc_sensor && c.capacity_kwh) {
-    // Grid-charge unless the forecast solar left today COMFORTABLY covers the
-    // kWh still needed (0.7 haircut for house self-consumption + round-trip
-    // losses), so we don't skip and leave the battery under-charged.
-    chargeConds.push({ condition: 'template', value_template:
-      `{{ (states('${c.pv_forecast_sensor}')|float(0)) * 0.7 < ((${target} - states('${c.soc_sensor}')|float(0)) / 100 * ${numOr(c.capacity_kwh, 0)}) }}` });
-  }
-
-  const trigger: Record<string, unknown>[] = [
-    { platform: 'state', entity_id: win, to: 'on', id: 'edge' },
-    { platform: 'state', entity_id: win, to: ['off', 'unavailable'], id: 'edge' },
-    { platform: 'state', entity_id: px.contract_active, to: 'on', id: 'edge' },
-    { platform: 'homeassistant', event: 'start', id: 'boot' },
-  ];
-  if (c.soc_sensor) {
-    // Re-evaluate whenever SoC crosses the target either way, so charging
-    // resumes if it drops back below target while the window is still open.
-    trigger.push({ platform: 'numeric_state', entity_id: c.soc_sensor, below: target, id: 'edge' });
-    trigger.push({ platform: 'numeric_state', entity_id: c.soc_sensor, above: target - 0.001, id: 'edge' });
-  }
-  if (isSelect) {
-    trigger.push({ platform: 'state', entity_id: px.price_level, to: 'peak', id: 'edge' });
-    trigger.push({ platform: 'state', entity_id: px.price_level, to: NON_PEAK, id: 'edge' });
-  }
-  if (c.control_kind === 'switch') {
-    trigger.push({ platform: 'state', entity_id: c.control_entity!, to: 'on', for: { hours: N + 2 }, id: 'watchdog' });
-  } else if (c.control_kind === 'number') {
-    trigger.push({ platform: 'numeric_state', entity_id: c.control_entity!, above: numOr(c.off_min, 0) + 0.001, for: { hours: N + 2 }, id: 'watchdog' });
-  }
-
-  const branches: Record<string, unknown>[] = [
-    { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [idleAct(c)] },
-    { conditions: chargeConds, sequence: [chargeAct(c)] },
-  ];
-  if (hasDischarge) {
-    branches.push({ conditions: [
-      { condition: 'state', entity_id: px.price_level, state: 'peak' },
-      { condition: 'state', entity_id: px.contract_active, state: 'on' },
-      { condition: 'numeric_state', entity_id: c.soc_sensor!, above: reserve },
-    ], sequence: [selectOption(c.control_entity!, c.discharge_option || '')] });
-  }
+function plannerAutomation(alias: string) {
   return {
-    alias, description: 'Created with the SmartHomeShop.io panel · battery arbitrage', mode: 'restart',
-    trigger, condition: [],
-    action: [{ choose: branches, default: [idleAct(c)] }],
+    alias,
+    description: 'Created with the SmartHomeShop.io battery planner',
+    mode: 'restart',
+    trigger: [
+      { platform: 'time_pattern', minutes: '/5' },
+      { platform: 'homeassistant', event: 'start' },
+    ],
+    condition: [],
+    action: [{ service: 'smarthomeshop.apply_battery_recommendation' }],
   };
 }
 
@@ -119,9 +71,10 @@ export class EnergyBattery extends LitElement {
   @property() public deviceName = '';
 
   @state() private _pricesOk = false;
+  @state() private _accountStatus = 'unconfigured';
   @state() private _loaded = false;
   @state() private _cfg: BatteryConfig = {};
-  @state() private _px: Record<string, string | null> = {};
+  @state() private _plan: BatteryPlan = {};
   @state() private _modal = false;
   @state() private _busy = false;
   @state() private _error = '';
@@ -134,33 +87,59 @@ export class EnergyBattery extends LitElement {
     .head-title { font-size: 12.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--secondary-text-color); }
     .sub { font-size: 12.5px; color: var(--secondary-text-color); line-height: 1.5; margin: -4px 0 12px; }
     .card { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 12px; padding: 14px; }
+    .card.unavailable { background: var(--secondary-background-color); border-style: dashed; }
+    .card.unavailable .row-icon { background: color-mix(in srgb, var(--secondary-text-color) 12%, transparent); color: var(--secondary-text-color); }
+    .card.unavailable .row-title { color: var(--secondary-text-color); }
+    .requirement { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; color: var(--secondary-text-color); font-size: 11px; font-weight: 650; }
+    .requirement ha-icon { --mdc-icon-size: 14px; }
     .row { display: flex; align-items: center; gap: 12px; }
     .row-icon { width: 38px; height: 38px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: rgba(16,185,129,.12); color: #10b981; flex-shrink: 0; }
+    .row-icon.charge { background: rgba(67,97,238,.12); color: #4361ee; }
+    .row-icon.discharge { background: rgba(245,158,11,.14); color: #d97706; }
     .row-main { flex: 1; min-width: 0; }
-    .row-title { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
-    .row-meta { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
-    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 8px; background: var(--shs-primary); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
+    .row-title { font-size: 14px; font-weight: 650; color: var(--primary-text-color); }
+    .row-meta { font-size: 12px; color: var(--secondary-text-color); margin-top: 3px; line-height: 1.4; }
+    .plan-stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .chip { border-radius: 999px; padding: 4px 8px; background: var(--secondary-background-color); color: var(--secondary-text-color); font-size: 11px; font-weight: 600; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 8px 14px; border: none; border-radius: 8px; background: var(--shs-primary); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
     .btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .btn ha-icon { --mdc-icon-size: 15px; }
-    .warn { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 10px; padding: 12px 14px; margin: 8px 0; font-size: 13px; color: var(--primary-text-color); }
+    .warn { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); border-radius: 10px; padding: 12px 14px; margin: 12px 0 0; font-size: 13px; color: var(--primary-text-color); }
+    .legacy-note { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 12px 14px; border: 1px solid rgba(245,158,11,.4); background: rgba(245,158,11,.08); border-radius: 10px; font-size: 12.5px; color: var(--primary-text-color); line-height: 1.45; }
+    .legacy-note ha-icon { --mdc-icon-size: 18px; color: #b45309; flex: 0 0 auto; }
+    .legacy-note > div { flex: 1; }
+    .legacy-note .btn { padding: 7px 12px; font-size: 12px; }
+    .note { border-left: 3px solid var(--shs-primary); background: color-mix(in srgb, var(--shs-primary) 8%, transparent); border-radius: 0 8px 8px 0; padding: 10px 12px; font-size: 12px; line-height: 1.45; color: var(--secondary-text-color); }
 
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px; }
-    .modal { width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
-    .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--divider-color); position: sticky; top: 0; background: var(--card-background-color); }
+    .modal { width: 100%; max-width: 620px; max-height: 92vh; overflow-y: auto; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+    .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--divider-color); position: sticky; top: 0; z-index: 2; background: var(--card-background-color); }
     .modal-title { font-size: 16px; font-weight: 700; color: var(--primary-text-color); }
+    .modal-subtitle { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 2px; }
     .modal-x { margin-left: auto; background: none; border: none; color: var(--secondary-text-color); cursor: pointer; padding: 4px; display: flex; }
     .modal-body { padding: 18px 20px; }
-    .section { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--secondary-text-color); margin: 18px 0 10px; }
+    .section { font-size: 11px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--secondary-text-color); margin: 22px 0 10px; }
     .section:first-child { margin-top: 0; }
-    .field { margin-bottom: 14px; }
+    .field { margin-bottom: 14px; min-width: 0; }
     label.f { display: block; font-size: 12px; font-weight: 600; color: var(--secondary-text-color); margin: 0 0 6px; }
-    .field .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
-    select, input[type="number"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
+    select, input[type='number'] { width: 100%; box-sizing: border-box; min-height: 40px; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
     select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
-    .two { display: flex; gap: 10px; }
-    .two > div { flex: 1; }
-    .modal-foot { display: flex; justify-content: space-between; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--divider-color); position: sticky; bottom: 0; background: var(--card-background-color); }
+    .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .toggle-row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--divider-color); border-radius: 10px; padding: 12px; margin-bottom: 14px; }
+    .toggle-copy { flex: 1; min-width: 0; }
+    .toggle-title { color: var(--primary-text-color); font-size: 13px; font-weight: 650; }
+    .modal-foot { display: flex; justify-content: space-between; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--divider-color); position: sticky; bottom: 0; z-index: 2; background: var(--card-background-color); }
     .modal-foot .right { display: flex; gap: 10px; }
+    @media (max-width: 600px) {
+      .modal-backdrop { align-items: flex-end; padding: 0; }
+      .modal { max-height: 94vh; border-radius: 16px 16px 0 0; }
+      .two, .three { grid-template-columns: 1fr; gap: 0; }
+      .row { align-items: flex-start; flex-wrap: wrap; }
+      .row-main { min-width: calc(100% - 54px); }
+      .card .btn { margin-left: 50px; }
+    }
   `;
 
   connectedCallback(): void {
@@ -168,31 +147,59 @@ export class EnergyBattery extends LitElement {
     this._load();
   }
 
+  public refresh(): Promise<void> {
+    return this._load();
+  }
+
   private async _load(): Promise<void> {
     if (!this.hass) return;
     try {
       const acc = await this.hass.callWS<{ status?: string }>({ type: 'smarthomeshop/account' });
-      this._pricesOk = acc.status === 'ok';
+      this._accountStatus = acc.status || 'unconfigured';
+      this._pricesOk = this._accountStatus === 'ok';
       if (this._pricesOk) {
-        const px = await this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' });
-        this._px = px.entities || {};
-        const b = await this.hass.callWS<{ battery: BatteryConfig }>({ type: 'smarthomeshop/battery' });
-        this._cfg = b.battery || {};
-        const s = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
-        this._sources = s.sources || {};
+        const [battery, sources, plan] = await Promise.all([
+          this.hass.callWS<{ battery: BatteryConfig }>({ type: 'smarthomeshop/battery' }),
+          this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' }),
+          this.hass.callWS<{ plan: BatteryPlan }>({ type: 'smarthomeshop/battery/plan' }),
+        ]);
+        this._cfg = battery.battery || {};
+        this._sources = sources.sources || {};
+        this._plan = plan.plan || {};
       }
-    } catch (err) { console.error('energy-battery: load failed', err); }
+    } catch (err) {
+      console.error('energy-battery: load failed', err);
+    }
     this._loaded = true;
   }
 
-  private _entityOptions(domains: string[], kind?: 'battery' | 'energy'): Array<{ value: string; label: string }> {
+  private _openAccountSettings(): void {
+    this.dispatchEvent(new CustomEvent('open-device-settings', {
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _accountMessage(): string {
+    if (['unauthorized', 'forbidden'].includes(this._accountStatus)) {
+      return 'The saved SmartHomeShop.io API key is invalid or was revoked. Replace it to enable dynamic prices and battery planning.';
+    }
+    if (this._accountStatus === 'unconfigured') {
+      return 'Enter your SmartHomeShop.io API key to enable dynamic prices, forecasts and home battery planning.';
+    }
+    return 'Dynamic price data is unavailable. Check the SmartHomeShop.io API key to enable home battery planning.';
+  }
+
+  private _entityOptions(domains: string[], kind?: 'battery' | 'energy' | 'power' | 'forecast'): Array<{ value: string; label: string }> {
     const out = [{ value: '', label: 'Select...' }];
     for (const [entityId, st] of Object.entries(this.hass.states || {})) {
       if (!domains.includes(dom(entityId))) continue;
-      const dc = st.attributes?.device_class;
+      const deviceClass = String(st.attributes?.device_class || '');
       const unit = String(st.attributes?.unit_of_measurement || '');
-      if (kind === 'battery' && dc !== 'battery' && unit !== '%') continue;
-      if (kind === 'energy' && dc !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
+      if (kind === 'battery' && deviceClass !== 'battery' && unit !== '%') continue;
+      if (kind === 'energy' && deviceClass !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
+      if (kind === 'power' && deviceClass !== 'power' && !/^(k|m)?W$/i.test(unit)) continue;
+      if (kind === 'forecast' && !['energy', 'power'].includes(deviceClass) && !/^(k|m)?W(h)?$/i.test(unit)) continue;
       out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
     }
     return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
@@ -205,25 +212,36 @@ export class EnergyBattery extends LitElement {
 
   private _numberMin(entityId?: string): number {
     if (!entityId) return 0;
-    const min = Number(this.hass.states[entityId]?.attributes?.min);
-    return Number.isFinite(min) ? min : 0;
+    const minimum = Number(this.hass.states[entityId]?.attributes?.min);
+    return Number.isFinite(minimum) ? minimum : 0;
   }
 
   private async _openModal(): Promise<void> {
     this._error = '';
-    // Re-fetch the latest Solar & battery mapping so a just-edited mapping is
-    // reflected, then prefill SoC / forecast / capacity so battery arbitrage
-    // self-configures instead of the user hunting for the right sensors.
     try {
-      const r = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
-      this._sources = r.sources || {};
-    } catch { /* keep last */ }
-    const s = this._sources || {};
+      const response = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
+      this._sources = response.sources || {};
+    } catch { /* Keep the last source mapping. */ }
+    const sources = this._sources || {};
     this._form = {
-      control_kind: 'switch', target_soc: 100, reserve_soc: 10, charge_hours: 3,
-      soc_sensor: s.battery_soc || undefined,
-      pv_forecast_sensor: s.pv_forecast || undefined,
-      capacity_kwh: s.battery_capacity_kwh ?? undefined,
+      enabled: true,
+      automatic_control: false,
+      control_kind: 'switch',
+      target_soc: 90,
+      reserve_soc: 15,
+      capacity_kwh: sources.battery_capacity_kwh ?? undefined,
+      soc_sensor: sources.battery_soc || undefined,
+      pv_forecast_sensor: sources.pv_forecast || undefined,
+      charge_power: 3000,
+      max_discharge_power: 3000,
+      charge_efficiency: 0.95,
+      discharge_efficiency: 0.95,
+      cycle_cost: 0.03,
+      assumed_load_power: 0,
+      grid_import_limit: 0,
+      grid_export_limit: 0,
+      minimum_confidence: 0.55,
+      planning_hours: 36,
       ...this._cfg,
     };
     this._modal = true;
@@ -233,37 +251,71 @@ export class EnergyBattery extends LitElement {
     this._form = { ...this._form, [key]: value };
   }
 
+  private async _deleteAutomation(): Promise<void> {
+    for (const id of [BATT_ID, ...LEGACY_IDS]) {
+      try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* Automation does not exist. */ }
+    }
+  }
+
+  // Battery automations created from the old device-page card would fight the
+  // planner over the same control entity; surface them so they can be removed.
+  private _legacyDeviceAutomations(): Array<{ entityId: string; name: string; configId: string }> {
+    const out: Array<{ entityId: string; name: string; configId: string }> = [];
+    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
+      if (!entityId.startsWith('automation.')) continue;
+      const configId = st.attributes?.id as string | undefined;
+      if (configId && configId.includes('_battery_charge_cheap_hold_peak_')) {
+        out.push({ entityId, name: (st.attributes?.friendly_name as string) || entityId, configId });
+      }
+    }
+    return out;
+  }
+
+  private async _removeLegacyAutomation(configId: string): Promise<void> {
+    if (!this.hass.user?.is_admin) return;
+    try {
+      await this.hass.callApi('DELETE', `config/automation/config/${configId}`);
+      this.requestUpdate();
+    } catch (err) { console.error('energy-battery: legacy cleanup failed', err); }
+  }
+
   private async _save(): Promise<void> {
     if (this._busy) return;
     if (!this.hass.user?.is_admin) { this._error = 'Administrator required.'; return; }
-    const f = this._form;
-    if (!f.control_entity) { this._error = 'Pick the entity that controls charging.'; return; }
-    if (f.control_kind === 'number' && !(numOr(f.charge_power, 0) > 0)) { this._error = 'Set the charge power.'; return; }
-    if (f.control_kind === 'select' && (!f.charge_option || !f.idle_option)) { this._error = 'Pick the charge and idle options.'; return; }
-    const target = numOr(f.target_soc, NaN), reserve = numOr(f.reserve_soc, NaN);
+    const form = { ...this._form, enabled: true };
+    const target = numOr(form.target_soc, NaN);
+    const reserve = numOr(form.reserve_soc, NaN);
+    if (!form.soc_sensor) { this._error = 'Select the battery state-of-charge sensor.'; return; }
+    if (!(numOr(form.capacity_kwh, 0) > 0)) { this._error = 'Enter the usable battery capacity.'; return; }
+    if (!(numOr(form.charge_power, 0) > 0) || !(numOr(form.max_discharge_power, 0) > 0)) {
+      this._error = 'Set both maximum charge and discharge power.'; return;
+    }
     if (!Number.isFinite(target) || target < 10 || target > 100) { this._error = 'Target SoC must be 10-100%.'; return; }
     if (!Number.isFinite(reserve) || reserve < 0 || reserve >= target) { this._error = 'Reserve SoC must be below the target.'; return; }
-    this._busy = true; this._error = '';
+    if (form.automatic_control) {
+      if (!form.control_entity) { this._error = 'Select a control entity before enabling automatic control.'; return; }
+      if (form.control_kind === 'select' && (!form.charge_option || !form.idle_option || !form.discharge_option)) {
+        this._error = 'Select the charge, self-use and discharge options.'; return;
+      }
+    }
+
+    this._busy = true;
+    this._error = '';
     try {
-      if (f.control_kind === 'number') {
-        const min = Number(this.hass.states[f.control_entity]?.attributes?.min);
-        f.off_min = Number.isFinite(min) ? min : 0;
+      if (form.control_kind === 'number') form.off_min = this._numberMin(form.control_entity);
+      else form.off_min = 0;
+      if (form.automatic_control) {
+        await this.hass.callApi('POST', `config/automation/config/${BATT_ID}`, plannerAutomation(`${this.deviceName || 'Battery'} - Smart battery plan`));
+        for (const id of LEGACY_IDS) {
+          try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* none */ }
+        }
       } else {
-        f.off_min = 0;
+        await this._deleteAutomation();
       }
-      // Build first and refuse to write a broken automation (price sensors not ready).
-      const config = batteryAutomation(f, this._px, `${this.deviceName || 'Battery'} - Battery arbitrage`);
-      if (JSON.stringify(config).includes('"entity_id":null')) {
-        this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
-        this._busy = false;
-        return;
-      }
-      // Write the automation BEFORE persisting the mapping, so a failed POST
-      // does not leave the card showing "active" with no working automation.
-      await this.hass.callApi('POST', `config/automation/config/${BATT_ID}`, config);
-      for (const id of LEGACY_IDS) { try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* none */ } }
-      await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: f });
-      this._cfg = { ...f };
+      const saved = await this.hass.callWS<{ battery: BatteryConfig }>({ type: 'smarthomeshop/battery/set', config: form });
+      this._cfg = saved.battery || form;
+      const response = await this.hass.callWS<{ plan: BatteryPlan }>({ type: 'smarthomeshop/battery/plan' });
+      this._plan = response.plan || {};
       this._modal = false;
     } catch (err: any) {
       console.error('energy-battery: save failed', err);
@@ -273,150 +325,161 @@ export class EnergyBattery extends LitElement {
   }
 
   private async _remove(): Promise<void> {
-    if (!this.hass.user?.is_admin) return;
-    if (!window.confirm('Remove the battery setup and its automation?')) return;
+    if (!this.hass.user?.is_admin || !window.confirm('Remove the battery planner and its automation?')) return;
     try {
       await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: {} });
+      await this._deleteAutomation();
       this._cfg = {};
-      for (const id of [BATT_ID, ...LEGACY_IDS]) {
-        try { await this.hass.callApi('DELETE', `config/automation/config/${id}`); } catch { /* none */ }
-      }
+      this._plan = {};
       this._modal = false;
-    } catch (err) { console.error('energy-battery: remove failed', err); }
+    } catch (err) {
+      console.error('energy-battery: remove failed', err);
+    }
   }
 
-  private _hasDead(): boolean {
-    const c = this._cfg;
-    return [c.control_entity, c.soc_sensor, c.pv_forecast_sensor].some(id => {
-      if (!id) return false;
-      const st = this.hass.states[id];
-      return !st || st.state === 'unavailable' || st.state === 'unknown';
-    });
+  private _hasUnavailableEntity(): boolean {
+    return [this._cfg.control_entity, this._cfg.soc_sensor, this._cfg.pv_forecast_sensor, this._cfg.load_forecast_sensor]
+      .some(entityId => entityId && (!this.hass.states[entityId] || ['unavailable', 'unknown'].includes(this.hass.states[entityId].state)));
   }
 
-  private _summary(): string {
-    const c = this._cfg;
-    if (!c.control_entity) return '';
-    const name = (this.hass.states[c.control_entity]?.attributes?.friendly_name as string) || c.control_entity;
-    const bits = [`via ${name}`, `${c.charge_hours || 3}h`, `to ${c.target_soc ?? 100}%`];
-    if (c.pv_forecast_sensor && c.soc_sensor && c.capacity_kwh) bits.push('solar-aware');
-    if (c.control_kind === 'select' && c.discharge_option) bits.push(`covers peak (reserve ${c.reserve_soc ?? 10}%)`);
-    return bits.join(' · ');
+  private _planTitle(): string {
+    if (!this._cfg.enabled) return 'Not set up yet';
+    if (this._hasUnavailableEntity()) return 'A configured entity is unavailable';
+    if (this._plan.status !== 'ready') return 'Planner needs more information';
+    const action = this._plan.recommendation || 'hold';
+    return `${action.charAt(0).toUpperCase()}${action.slice(1)} recommended`;
+  }
+
+  private _planIcon(): string {
+    if (this._plan.recommendation === 'charge') return 'mdi:battery-arrow-up-outline';
+    if (this._plan.recommendation === 'discharge') return 'mdi:battery-arrow-down-outline';
+    return 'mdi:home-battery-outline';
+  }
+
+  private _renderNumber(key: keyof BatteryConfig, label: string, fallback: number, min: number, max: number, step: number, help = '') {
+    const value = this._form[key] as number | undefined;
+    return html`<div class="field">
+      <label class="f">${label}</label>
+      <input type="number" min=${min} max=${max} step=${step} .value=${String(value ?? fallback)}
+        @input=${(event: Event) => this._set(key, parseFloat((event.target as HTMLInputElement).value) as never)} />
+      ${help ? html`<div class="help">${help}</div>` : nothing}
+    </div>`;
   }
 
   private _renderModal() {
     if (!this._modal) return nothing;
-    const f = this._form;
-    const kind = f.control_kind || 'switch';
+    const form = this._form;
+    const kind = form.control_kind || 'switch';
     const controlDomains = kind === 'switch' ? ['switch', 'input_boolean'] : kind === 'number' ? ['number'] : ['select'];
-    const opts = this._selectOptions(f.control_entity);
+    const options = this._selectOptions(form.control_entity);
     return html`
       <div class="modal-backdrop" @click=${() => { this._modal = false; }}>
-        <div class="modal" @click=${(e: Event) => e.stopPropagation()}>
+        <div class="modal" @click=${(event: Event) => event.stopPropagation()}>
           <div class="modal-head">
             <div class="row-icon"><ha-icon icon="mdi:home-battery"></ha-icon></div>
-            <div class="modal-title">Home battery setup</div>
-            <button class="modal-x" @click=${() => { this._modal = false; }}><ha-icon icon="mdi:close"></ha-icon></button>
+            <div>
+              <div class="modal-title">Home battery planner</div>
+              <div class="modal-subtitle">Price, solar, battery wear and grid limits in one plan</div>
+            </div>
+            <button class="modal-x" title="Close" @click=${() => { this._modal = false; }}><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
           <div class="modal-body">
-            <div class="section">How charging is controlled</div>
-            <div class="field">
-              <label class="f">Control type</label>
-              <select @change=${(e: Event) => { this._set('control_kind', (e.target as HTMLSelectElement).value as ControlKind); this._set('control_entity', ''); }}>
-                <option value="switch" ?selected=${kind === 'switch'}>A grid-charge switch (on/off)</option>
-                <option value="number" ?selected=${kind === 'number'}>A charge-power number (Watt)</option>
-                <option value="select" ?selected=${kind === 'select'}>A battery-mode select (charge/idle/discharge)</option>
-              </select>
-              <div class="help">Every inverter names these differently - pick your own entity. No universal battery control exists in Home Assistant.</div>
-            </div>
-            <div class="field">
-              <label class="f">Control entity</label>
-              <select @change=${(e: Event) => this._set('control_entity', (e.target as HTMLSelectElement).value)}>
-                ${this._entityOptions(controlDomains).map(o => html`<option value=${o.value} ?selected=${o.value === f.control_entity}>${o.label}</option>`)}
-              </select>
-            </div>
-            ${kind === 'number' ? html`
+            <div class="section">Battery</div>
+            <div class="two">
               <div class="field">
-                <label class="f">Charge power</label>
-                <input type="number" min="100" max="20000" step="100" .value=${String(f.charge_power ?? 2000)}
-                  @input=${(e: Event) => this._set('charge_power', parseFloat((e.target as HTMLInputElement).value))} />
-                <span class="help">Watt to set while charging. Stops by setting the number's own minimum.</span>
-                ${this._numberMin(f.control_entity) > 0 ? html`<div class="warn" style="margin-top:8px;">This number's minimum is ${this._numberMin(f.control_entity)} W, so it can't be set to 0 - the battery won't fully stop charging. Map a grid-charge switch instead if you need a real off.</div>` : nothing}
-              </div>` : nothing}
-            ${kind === 'select' ? html`
-              <div class="two">
-                <div class="field">
-                  <label class="f">Charge option</label>
-                  <select @change=${(e: Event) => this._set('charge_option', (e.target as HTMLSelectElement).value)}>
-                    <option value="">Select...</option>
-                    ${opts.map(o => html`<option value=${o} ?selected=${o === f.charge_option}>${o}</option>`)}
-                  </select>
-                </div>
-                <div class="field">
-                  <label class="f">Idle / self-use option</label>
-                  <select @change=${(e: Event) => this._set('idle_option', (e.target as HTMLSelectElement).value)}>
-                    <option value="">Select...</option>
-                    ${opts.map(o => html`<option value=${o} ?selected=${o === f.idle_option}>${o}</option>`)}
-                  </select>
-                </div>
-              </div>
-              <div class="field">
-                <label class="f">Discharge option (optional - enables peak cover)</label>
-                <select @change=${(e: Event) => this._set('discharge_option', (e.target as HTMLSelectElement).value)}>
-                  <option value="">None</option>
-                  ${opts.map(o => html`<option value=${o} ?selected=${o === f.discharge_option}>${o}</option>`)}
+                <label class="f">State-of-charge sensor</label>
+                <select @change=${(event: Event) => this._set('soc_sensor', (event.target as HTMLSelectElement).value)}>
+                  ${this._entityOptions(['sensor'], 'battery').map(option => html`<option value=${option.value} ?selected=${option.value === form.soc_sensor}>${option.label}</option>`)}
                 </select>
-              </div>` : nothing}
-
-            <div class="section">Battery state &amp; limits</div>
-            <div class="field">
-              <label class="f">State-of-charge sensor (optional)</label>
-              <select @change=${(e: Event) => this._set('soc_sensor', (e.target as HTMLSelectElement).value)}>
-                ${this._entityOptions(['sensor'], 'battery').map(o => html`<option value=${o.value} ?selected=${o.value === f.soc_sensor}>${o.label}</option>`)}
-              </select>
-              <div class="help">Used to stop charging at the target and to protect the reserve. Without it, charging simply follows the cheapest window.</div>
+              </div>
+              ${this._renderNumber('capacity_kwh', 'Usable capacity (kWh)', 10, 0.5, 500, 0.1)}
             </div>
             <div class="two">
-              <div class="field">
-                <label class="f">Target SoC</label>
-                <input type="number" min="10" max="100" step="1" .value=${String(f.target_soc ?? 100)}
-                  @input=${(e: Event) => this._set('target_soc', parseFloat((e.target as HTMLInputElement).value))} />
-              </div>
-              <div class="field">
-                <label class="f">Reserve SoC</label>
-                <input type="number" min="0" max="90" step="1" .value=${String(f.reserve_soc ?? 10)}
-                  @input=${(e: Event) => this._set('reserve_soc', parseFloat((e.target as HTMLInputElement).value))} />
-              </div>
+              ${this._renderNumber('reserve_soc', 'Protected reserve SoC (%)', 15, 0, 90, 1)}
+              ${this._renderNumber('target_soc', 'Preferred target SoC (%)', 90, 10, 100, 1)}
             </div>
-            <div class="field">
-              <label class="f">Cheapest block length</label>
-              <input type="number" min="1" max="6" step="1" .value=${String(f.charge_hours ?? 3)}
-                @input=${(e: Event) => this._set('charge_hours', parseFloat((e.target as HTMLInputElement).value))} />
+            <div class="two">
+              ${this._renderNumber('charge_power', 'Maximum charge power (W)', 3000, 100, 50000, 100)}
+              ${this._renderNumber('max_discharge_power', 'Maximum discharge power (W)', 3000, 100, 50000, 100)}
             </div>
 
-            <div class="section">Solar-aware (optional)</div>
+            <div class="section">Forecast inputs</div>
             <div class="two">
               <div class="field">
-                <label class="f">Battery capacity (kWh)</label>
-                <input type="number" min="1" max="200" step="0.5" .value=${f.capacity_kwh != null ? String(f.capacity_kwh) : ''}
-                  @input=${(e: Event) => this._set('capacity_kwh', parseFloat((e.target as HTMLInputElement).value))} />
+                <label class="f">Solar forecast (optional)</label>
+                <select @change=${(event: Event) => this._set('pv_forecast_sensor', (event.target as HTMLSelectElement).value)}>
+                  ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.pv_forecast_sensor}>${option.label}</option>`)}
+                </select>
+                <div class="help">Hourly forecast attributes are used when available.</div>
               </div>
               <div class="field">
-                <label class="f">PV forecast sensor (kWh left today)</label>
-                <select @change=${(e: Event) => this._set('pv_forecast_sensor', (e.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(['sensor'], 'energy').map(o => html`<option value=${o.value} ?selected=${o.value === f.pv_forecast_sensor}>${o.label}</option>`)}
+                <label class="f">House load forecast (optional)</label>
+                <select @change=${(event: Event) => this._set('load_forecast_sensor', (event.target as HTMLSelectElement).value)}>
+                  ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.load_forecast_sensor}>${option.label}</option>`)}
                 </select>
               </div>
             </div>
-            <div class="help" style="margin-top:-6px;">With both set, grid-charging is skipped when the forecast solar left today already covers what's needed to reach the target (e.g. a Forecast.Solar / Solcast "remaining today" sensor).</div>
+            <div class="two">
+              ${this._renderNumber('assumed_load_power', 'Fallback house load (W)', 0, 0, 50000, 50, 'Used when no load forecast is selected.')}
+              ${this._renderNumber('planning_hours', 'Planning horizon (hours)', 36, 6, 48, 1)}
+            </div>
+
+            <div class="section">Efficiency, wear &amp; safety</div>
+            <div class="three">
+              ${this._renderNumber('charge_efficiency', 'Charge efficiency', 0.95, 0.5, 1, 0.01)}
+              ${this._renderNumber('discharge_efficiency', 'Discharge efficiency', 0.95, 0.5, 1, 0.01)}
+              ${this._renderNumber('cycle_cost', 'Battery wear (€/kWh)', 0.03, 0, 1, 0.005)}
+            </div>
+            <div class="three">
+              ${this._renderNumber('grid_import_limit', 'Grid import limit (W)', 0, 0, 100000, 100, '0 disables the limit.')}
+              ${this._renderNumber('grid_export_limit', 'Grid export limit (W)', 0, 0, 100000, 100, '0 disables the limit.')}
+              ${this._renderNumber('minimum_confidence', 'Minimum confidence', 0.55, 0, 1, 0.05, 'Below this level the planner holds.')}
+            </div>
+            <div class="note">The planner uses confirmed prices first and conservative bounds for predicted prices. It never moves below the reserve or outside the configured grid limits.</div>
+
+            <div class="section">Execution</div>
+            <div class="toggle-row">
+              <div class="toggle-copy">
+                <div class="toggle-title">Automatically apply recommendations</div>
+                <div class="help">Off by default. With this disabled, Home Assistant only exposes advice sensors.</div>
+              </div>
+              <ha-switch .checked=${!!form.automatic_control} @change=${(event: Event) => this._set('automatic_control', (event.target as HTMLInputElement).checked)}></ha-switch>
+            </div>
+            ${form.automatic_control ? html`
+              <div class="field">
+                <label class="f">Control type</label>
+                <select @change=${(event: Event) => { this._set('control_kind', (event.target as HTMLSelectElement).value as ControlKind); this._set('control_entity', ''); }}>
+                  <option value="switch" ?selected=${kind === 'switch'}>Grid-charge switch</option>
+                  <option value="number" ?selected=${kind === 'number'}>Signed battery-power number</option>
+                  <option value="select" ?selected=${kind === 'select'}>Battery mode select</option>
+                </select>
+              </div>
+              <div class="field">
+                <label class="f">Control entity</label>
+                <select @change=${(event: Event) => this._set('control_entity', (event.target as HTMLSelectElement).value)}>
+                  ${this._entityOptions(controlDomains).map(option => html`<option value=${option.value} ?selected=${option.value === form.control_entity}>${option.label}</option>`)}
+                </select>
+              </div>
+              ${kind === 'number' && this._numberMin(form.control_entity) > 0 ? html`<div class="warn">This number cannot be set to zero. Use a mode select or switch if the battery must have a true idle state.</div>` : nothing}
+              ${kind === 'select' ? html`
+                <div class="three">
+                  ${(['charge_option', 'idle_option', 'discharge_option'] as const).map((key, index) => html`<div class="field">
+                    <label class="f">${['Charge option', 'Self-use / idle option', 'Discharge option'][index]}</label>
+                    <select @change=${(event: Event) => this._set(key, (event.target as HTMLSelectElement).value)}>
+                      <option value="">Select...</option>
+                      ${options.map(option => html`<option value=${option} ?selected=${option === form[key]}>${option}</option>`)}
+                    </select>
+                  </div>`)}
+                </div>` : nothing}
+            ` : nothing}
 
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
           </div>
           <div class="modal-foot">
-            ${this._cfg.control_entity ? html`<button class="btn ghost" @click=${this._remove}>Remove</button>` : html`<span></span>`}
+            ${this._cfg.enabled ? html`<button class="btn ghost" @click=${this._remove}>Remove</button>` : html`<span></span>`}
             <div class="right">
               <button class="btn ghost" @click=${() => { this._modal = false; }}>Cancel</button>
-              <button class="btn" ?disabled=${this._busy} @click=${this._save}><ha-icon icon="mdi:check"></ha-icon> ${this._busy ? 'Saving...' : 'Save'}</button>
+              <button class="btn" ?disabled=${this._busy} @click=${this._save}><ha-icon icon="mdi:check"></ha-icon>${this._busy ? 'Saving...' : 'Save'}</button>
             </div>
           </div>
         </div>
@@ -424,29 +487,57 @@ export class EnergyBattery extends LitElement {
   }
 
   protected render() {
-    if (!this._loaded || !this._pricesOk) return nothing;
-    const isAdmin = !!this.hass.user?.is_admin;
-    const configured = !!this._cfg.control_entity;
+    if (!this._loaded) return nothing;
+    if (!this._pricesOk) {
+      return html`
+        <div class="head"><span class="head-title">Home battery</span></div>
+        <div class="sub">Plan charging and discharging against confirmed and predicted prices, solar, house load, efficiency and battery wear.</div>
+        <div class="card unavailable">
+          <div class="row">
+            <div class="row-icon"><ha-icon icon="mdi:account-key-outline"></ha-icon></div>
+            <div class="row-main">
+              <div class="row-title">SmartHomeShop.io API key required</div>
+              <div class="row-meta">${this._accountMessage()}${!this.hass.user?.is_admin ? ' Ask a Home Assistant administrator to add or replace the key.' : ''}</div>
+              <div class="requirement"><ha-icon icon="mdi:lock-outline"></ha-icon>Battery planner unavailable until connected</div>
+            </div>
+            ${this.hass.user?.is_admin ? html`
+              <button class="btn ghost" @click=${this._openAccountSettings}>
+                <ha-icon icon="mdi:key-outline"></ha-icon>
+                ${['unauthorized', 'forbidden'].includes(this._accountStatus) ? 'Replace API key' : 'Enter API key'}
+              </button>
+            ` : nothing}
+          </div>
+        </div>
+      `;
+    }
+    const configured = !!this._cfg.enabled;
+    const action = this._plan.recommendation || 'hold';
+    const power = Math.abs(numOr(this._plan.target_power_w, 0));
+    const confidence = Math.round(numOr(this._plan.confidence, 0) * 100);
     return html`
-      <div class="head">
-        <span class="head-title">Home battery</span>
-      </div>
-      <div class="sub">
-        Charge your battery in the cheapest hours (and skip it when solar will fill it), so it covers the
-        expensive evening - using your inverter's own control entities.
-      </div>
+      <div class="head"><span class="head-title">Home battery</span></div>
+      <div class="sub">Plan charging and discharging against confirmed and predicted prices, solar, house load, efficiency and battery wear.</div>
       <div class="card">
         <div class="row">
-          <div class="row-icon"><ha-icon icon="mdi:home-battery"></ha-icon></div>
+          <div class="row-icon ${action}"><ha-icon icon=${this._planIcon()}></ha-icon></div>
           <div class="row-main">
-            <div class="row-title">${configured ? (this._hasDead() ? 'Some entities are unavailable' : 'Battery arbitrage active') : 'Not set up yet'}</div>
-            <div class="row-meta">${configured ? this._summary() : 'Map the inverter charge control to charge cheap and cover the peak.'}</div>
+            <div class="row-title">${this._planTitle()}</div>
+            <div class="row-meta">${configured ? (this._plan.reason || 'Waiting for the first complete plan.') : 'Configure battery details to start with advice-only planning.'}</div>
+            ${configured ? html`<div class="plan-stats">
+              ${this._plan.status === 'ready' ? html`<span class="chip">${power ? `${power} W` : 'No power change'}</span><span class="chip">Target ${this._plan.target_soc ?? '-'}%</span><span class="chip">${confidence}% confidence</span><span class="chip">€ ${numOr(this._plan.expected_savings, 0).toFixed(2)} plan value</span>` : nothing}
+              <span class="chip">${this._cfg.automatic_control ? 'Automatic execution on' : 'Advice only'}</span>
+            </div>` : nothing}
           </div>
-          ${isAdmin ? html`<button class="btn ${configured ? 'ghost' : ''}" @click=${this._openModal}>
-            <ha-icon icon=${configured ? 'mdi:cog-outline' : 'mdi:plus'}></ha-icon> ${configured ? 'Configure' : 'Set up'}
-          </button>` : nothing}
+          ${this.hass.user?.is_admin ? html`<button class="btn ${configured ? 'ghost' : ''}" @click=${this._openModal}><ha-icon icon=${configured ? 'mdi:cog-outline' : 'mdi:plus'}></ha-icon>${configured ? 'Configure' : 'Set up'}</button>` : nothing}
         </div>
       </div>
+      ${this._legacyDeviceAutomations().map(legacy => html`
+        <div class="legacy-note">
+          <ha-icon icon="mdi:alert-outline"></ha-icon>
+          <div>An older battery automation (<b>${legacy.name}</b>) still steers the battery and can conflict with this planner.</div>
+          ${this.hass.user?.is_admin ? html`<button class="btn ghost" @click=${() => this._removeLegacyAutomation(legacy.configId)}>Remove</button>` : nothing}
+        </div>
+      `)}
       ${this._renderModal()}
     `;
   }
