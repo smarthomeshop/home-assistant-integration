@@ -36,6 +36,7 @@ from .const import (
     DEFAULT_CONTINUOUS_FLOW_MINUTES,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_END,
+    resolve_api_base_url,
 )
 from .storage import SmartHomeShopStore
 
@@ -742,7 +743,7 @@ def _account_result(hass: HomeAssistant) -> dict:
     account = store.get_account() if store else {}
     result = {
         "has_key": bool(account.get("api_key")),
-        "base_url": account.get("base_url") or "https://api.smarthomeshop.io",
+        "base_url": resolve_api_base_url(account.get("base_url")),
         "contract_id": account.get("contract_id"),
         "status": getattr(prices, "status", "unconfigured"),
         "last_error": getattr(prices, "last_error", None),

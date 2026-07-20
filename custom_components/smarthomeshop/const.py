@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Final
 
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN: Final = "smarthomeshop"
-VERSION: Final = "1.1.4"
+VERSION: Final = "1.2.0"
 MANUFACTURER: Final = "SmartHomeShop.io"
+
+# Cloud API endpoint. Production/HACS installations use the public API by
+# default. Local development can override it through the Docker environment
+# without changing or publishing development URLs in the integration code.
+PRODUCTION_API_BASE_URL: Final = "https://api.smarthomeshop.io"
+API_BASE_URL_ENV: Final = "SMARTHOMESHOP_API_BASE_URL"
+
+
+def resolve_api_base_url(stored_base_url: str | None = None) -> str:
+    """Return the configured API URL, preferring an environment override."""
+    environment_url = os.getenv(API_BASE_URL_ENV, "").strip()
+    return (environment_url or stored_base_url or PRODUCTION_API_BASE_URL).rstrip("/")
 
 # Dispatcher signal fired when the smart-energy deadline schedules change, so
 # the binary_sensor platform can add/update/remove schedule entities live.

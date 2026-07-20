@@ -48,3 +48,7 @@ Thumbs.db
 # ===== LOGS =====
 *.log
 npm-debug.log*
+
+# Local development workspace
+/.impeccable.md
+/smarthomeshop/

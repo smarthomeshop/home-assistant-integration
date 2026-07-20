@@ -19,9 +19,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, LOGGER
+from .const import DOMAIN, LOGGER, resolve_api_base_url
 
-DEFAULT_BASE_URL = "https://api.smarthomeshop.io"
 PRICES_PATH = "/api/v1/energy/prices"
 CONTRACTS_PATH = "/api/v1/energy/contracts"
 UPDATE_INTERVAL = timedelta(minutes=30)
@@ -71,7 +70,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def base_url(self) -> str:
-        return (self._account().get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+        return resolve_api_base_url(self._account().get("base_url"))
 
     @property
     def contract_id(self) -> str | None:

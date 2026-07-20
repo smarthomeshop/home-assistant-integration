@@ -47,6 +47,42 @@ If the button does not work:
 3. Search for "SmartHomeShop.io"
 4. Follow the configuration steps
 
+## Dynamic energy and battery planning
+
+> **Work in progress:** Test work Dwains regarding energy prices and automatic
+> control of home battery - WORK IN PROGRESS.
+
+The Energy page combines live contract prices with an hourly outlook. Stored
+market prices are treated as confirmed; missing future hours can be supplied
+as predictions with a confidence score and conservative lower/upper bounds.
+
+The home battery planner is **advice only by default**. Configure it from the
+Energy page with:
+
+- the battery state-of-charge sensor, usable capacity and protected reserve;
+- maximum charge/discharge power and round-trip efficiency;
+- optional solar and house-load forecast sensors;
+- battery wear cost, grid import/export limits and a minimum confidence level.
+
+It exposes a recommendation, target power, target state of charge, expected
+plan savings and confidence as Home Assistant entities. Charge and discharge
+recommendations are also available as binary sensors for your own automations.
+
+Automatic execution is opt-in. It supports a grid-charge switch, a signed
+battery-power number entity or a battery-mode select. Keep this disabled until
+the suggested actions and configured limits have been verified for your
+specific inverter or battery system.
+
+The current recommendation can also be applied manually or from an automation:
+
+```yaml
+action: smarthomeshop.apply_battery_recommendation
+data: {}
+```
+
+Use `action: charge`, `hold` or `discharge` in `data` only when deliberately
+overriding the current recommendation.
+
 ## Support
 
 - [Documentation](https://docs.smarthomeshop.io)

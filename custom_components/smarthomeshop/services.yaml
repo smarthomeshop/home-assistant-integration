@@ -1,0 +1,13 @@
+apply_battery_recommendation:
+  name: Apply battery recommendation
+  description: Applies the current SmartHomeShop battery plan to the configured control entity.
+  fields:
+    action:
+      name: Action override
+      description: Leave empty to use the current planner recommendation.
+      selector:
+        select:
+          options:
+            - charge
+            - hold
+            - discharge
