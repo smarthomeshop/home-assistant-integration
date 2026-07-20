@@ -1394,7 +1394,7 @@ export class EnergyHub extends LitElement {
         <div class="surface smart-list">
           <div class="smart-item">
             <div class="smart-icon ${priceOk ? 'good' : ''}"><ha-icon icon="mdi:currency-eur"></ha-icon></div>
-            <div><div class="smart-name">Dynamic price</div><div class="smart-detail">${priceOk ? `Cheapest ${this._cheapestHours}h ${selectedDay} from ${this._hm(cheapest?.start) || 'not available'}` : 'Account not connected'}</div></div>
+            <div><div class="smart-name">Dynamic price</div><div class="smart-detail">${priceOk ? (this._hm(cheapest?.start) ? `Cheapest ${this._cheapestHours}h ${selectedDay} from ${this._hm(cheapest?.start)}` : 'Waiting for price data') : 'Account not connected'}</div></div>
             ${!priceOk && this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
           </div>
           <div class="smart-item">

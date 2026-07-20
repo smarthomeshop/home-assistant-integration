@@ -281,7 +281,10 @@ export class AutomationsPage extends LitElement {
   }
 
   private _threshold(s: Scenario): number {
-    return this._thresholds[s.key] ?? s.threshold ?? 0;
+    const value = this._thresholds[s.key];
+    // A cleared input parses to NaN; fall back to the scenario default so we
+    // never show or post "above NaN".
+    return Number.isFinite(value) ? value : (s.threshold ?? 0);
   }
 
   private _buildConfig(s: Scenario, entityId: string) {

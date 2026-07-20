@@ -107,6 +107,11 @@ export class ZonesPage extends LitElement {
   @state() private _isDragging = false;
   @state() private _dirty = false;
 
+  /** Whether there are unsaved Room Designer changes (read by the top nav). */
+  public get isDirty(): boolean {
+    return this._dirty;
+  }
+
   // Design mode: room layout editing vs sensors & zones
   @state() private _designMode: DesignMode = 'layout';
 
@@ -3596,7 +3601,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               </div>
             </div>
           ` : nothing}
-        ` : this._toolMode === 'zone' && this._drawingZone.length > 0 ? html`        ` : this._toolMode === 'zone' && this._drawingZone.length > 0 ? html`
+        ` : this._toolMode === 'zone' && this._drawingZone.length > 0 ? html`
             <div>
               <div class="section-title">CURRENT DRAWING</div>
               <p class="info-text">${this._drawingZone.length} points drawn</p>

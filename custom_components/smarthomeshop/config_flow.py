@@ -512,6 +512,9 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Manage the options."""
         if user_input is not None:
+            # An omitted vacation entity means "none": store it as empty so a
+            # previously chosen entity is actually cleared.
+            user_input.setdefault(CONF_VACATION_MODE_ENTITY, "")
             return self.async_create_entry(title="", data=user_input)
 
         product_type = self.config_entry.data.get(CONF_PRODUCT_TYPE)
@@ -542,9 +545,15 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
                 CONF_NIGHT_END,
                 default=current.get(CONF_NIGHT_END, DEFAULT_NIGHT_END),
             )] = selector.TimeSelector()
+            # No empty-string default here: EntitySelector rejects "" during
+            # schema validation, which blocked saving any option when no
+            # vacation entity was picked and made a chosen one impossible to
+            # clear. suggested_value prefills without forcing a value.
             schema[vol.Optional(
                 CONF_VACATION_MODE_ENTITY,
-                default=current.get(CONF_VACATION_MODE_ENTITY, ""),
+                description={
+                    "suggested_value": current.get(CONF_VACATION_MODE_ENTITY) or None
+                },
             )] = selector.EntitySelector(
                 selector.EntitySelectorConfig(domain="input_boolean")
             )

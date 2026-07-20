@@ -18,9 +18,18 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from ...const import (
+    DEFAULT_CONTINUOUS_FLOW_MINUTES,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
     DOMAIN,
     LOGGER,
     UPDATE_INTERVAL_SECONDS,
+)
+from ..base.water.coordinator import (
+    CONF_CONTINUOUS_FLOW_MINUTES,
+    CONF_NIGHT_END,
+    CONF_NIGHT_START,
+    CONF_VACATION_MODE_ENTITY,
 )
 from ..base.water.leak_detection import LeakDetectionConfig, LeakDetectionEngine
 
@@ -38,8 +47,13 @@ class _LineTracker:
     both lines get their own baseline and leak scores.
     """
 
-    def __init__(self, hass: HomeAssistant, storage_key: str) -> None:
-        self.engine = LeakDetectionEngine(hass, storage_key, LeakDetectionConfig())
+    def __init__(
+        self, hass: HomeAssistant, storage_key: str,
+        leak_config: LeakDetectionConfig | None = None,
+    ) -> None:
+        self.engine = LeakDetectionEngine(
+            hass, storage_key, leak_config or LeakDetectionConfig()
+        )
         self.flow_history: list[tuple[float, float]] = []
         self.last_session: dict[str, Any] | None = None
         self._day_start: float | None = None
@@ -133,11 +147,22 @@ class WaterFlowKitCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Get device info from source entity
         self._device_info = self._get_source_device_info()
 
-        # Per-line trackers (leak detection, history, sessions)
+        # Per-line trackers (leak detection, history, sessions). The leak
+        # engine follows the same options the panel advertises for water
+        # products instead of silently using its defaults.
+        options = config_entry.options
+        leak_config = LeakDetectionConfig(
+            continuous_flow_minutes=int(options.get(
+                CONF_CONTINUOUS_FLOW_MINUTES, DEFAULT_CONTINUOUS_FLOW_MINUTES
+            )),
+            night_start=options.get(CONF_NIGHT_START, DEFAULT_NIGHT_START),
+            night_end=options.get(CONF_NIGHT_END, DEFAULT_NIGHT_END),
+            vacation_mode_entity=options.get(CONF_VACATION_MODE_ENTITY, ""),
+        )
         device_key = config_entry.data.get("device_id", config_entry.entry_id)
         self._trackers = {
-            "flow1": _LineTracker(hass, f"{device_key}_flow1"),
-            "flow2": _LineTracker(hass, f"{device_key}_flow2"),
+            "flow1": _LineTracker(hass, f"{device_key}_flow1", leak_config),
+            "flow2": _LineTracker(hass, f"{device_key}_flow2", leak_config),
         }
         self._engines_loaded = False
 

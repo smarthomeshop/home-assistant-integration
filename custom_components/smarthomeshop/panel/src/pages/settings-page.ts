@@ -1,9 +1,6 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
-import '../components/account-prices';
-
-const ENERGY_PRODUCTS = ['waterp1meterkit', 'p1meterkit'];
 
 interface SettingGroup {
   key: string;
@@ -273,13 +270,13 @@ export class SettingsPage extends LitElement {
         ${hidePrices ? html`
           <div class="cfg-note">
             <ha-icon icon="mdi:file-document-check-outline"></ha-icon>
-            <span>Prices come from your connected energy contract${this._contractName ? html` <strong>${this._contractName}</strong>` : nothing}. Change them in your SmartHomeShop account, or disconnect below to set prices manually.</span>
+            <span>Prices come from your connected energy contract${this._contractName ? html` <strong>${this._contractName}</strong>` : nothing}. Manage or disconnect the global connection from the Energy tab to set prices manually.</span>
           </div>` : nothing}
         ${visibleFields.map(f => this._renderConfigField(f))}
         <div class="cfg-foot">
           ${this._configSaved ? html`<span class="cfg-saved"><ha-icon icon="mdi:check-circle"></ha-icon> Saved</span>` : nothing}
           <button class="cfg-save" ?disabled=${!isAdmin || this._savingConfig} @click=${this._saveConfig}>
-            ${this._savingConfig ? 'Saving…' : 'Save settings'}
+            ${this._savingConfig ? 'Saving...' : 'Save settings'}
           </button>
         </div>
       </div>`;
@@ -399,9 +396,6 @@ export class SettingsPage extends LitElement {
     if (this.embedded) {
       return html`
         ${this._renderConfigCard()}
-        ${ENERGY_PRODUCTS.includes(this._productType)
-          ? html`<shs-account-prices .hass=${this.hass}></shs-account-prices>`
-          : nothing}
         ${this._selectedDevice && grouped ? html`
           <input type="search" class="search-box" placeholder="Search settings..."
             .value=${this._filter}

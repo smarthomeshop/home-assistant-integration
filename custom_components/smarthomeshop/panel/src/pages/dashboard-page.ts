@@ -703,7 +703,7 @@ export class DashboardPage extends LitElement {
       ${ins && ins.configured === false ? html`
         <div class="not-configured">
           This device is not linked to the SmartHomeShop integration yet.
-          Add it via <b>Settings → Devices & Services → Add integration → SmartHomeShop.io</b> to unlock leak detection, costs and insights.
+          Add it via <b>Settings → Devices & Services → Add integration → SmartHomeShop.io</b> to unlock ${this._integrationFeatures(device.product_type)}.
         </div>
       ` : nothing}
 
@@ -728,6 +728,7 @@ export class DashboardPage extends LitElement {
           .deviceId=${device.id}
           .deviceName=${device.name}
           .productType=${device.product_type || ''}
+          @open-device-settings=${() => { this._detailTab = 'settings'; }}
         ></shs-automations-page>
       ` : this._detailTab === 'settings' ? html`
         <shs-settings-page .hass=${this.hass} .selectedDeviceId=${device.id} embedded></shs-settings-page>
@@ -820,8 +821,8 @@ export class DashboardPage extends LitElement {
                 <span class="score-value">${Math.round(leak.total_score)}/100</span>
               </div>
               <div class="leak-footnote">
-                Each signal scores 0–100: how strongly the current water usage matches that
-                leak pattern. Occasional spikes are normal — the alarm only triggers when
+                Each signal scores 0-100: how strongly the current water usage matches that
+                leak pattern. Occasional spikes are normal - the alarm only triggers when
                 the total score stays above <b>60</b>.
               </div>
             ` : html`<div class="spark-empty">No leak data yet</div>`}
@@ -870,7 +871,7 @@ export class DashboardPage extends LitElement {
             <div class="meter-form">
               <div class="meter-form-help">
                 Enter the reading shown on your physical water meter (in m³, e.g. 123.456).
-                It is stored on the device itself and the meter keeps counting from there —
+                It is stored on the device itself and the meter keeps counting from there -
                 you only need to do this once, or when the values drift apart.
               </div>
               <div class="meter-form-row">
@@ -978,7 +979,7 @@ export class DashboardPage extends LitElement {
           <div class="chips-row">
             <div class="chip-card">
               <div class="chip-label">Flow now</div>
-              <div class="chip-value ${Number(vals.flow_rate) > 0.2 ? 'good' : ''}">${vals.flow_rate != null ? Number(vals.flow_rate).toFixed(1) : '–'} <span class="unit">L/min</span></div>
+              <div class="chip-value ${Number(vals.flow_rate) > 0.2 ? 'good' : ''}">${vals.flow_rate != null ? Number(vals.flow_rate).toFixed(1) : '-'} <span class="unit">L/min</span></div>
             </div>
             ${vals.today_usage != null ? html`
               <div class="chip-card">
@@ -988,7 +989,7 @@ export class DashboardPage extends LitElement {
             ` : nothing}
             <div class="chip-card">
               <div class="chip-label">Total</div>
-              <div class="chip-value">${vals.total != null ? Number(vals.total).toFixed(2) : '–'} <span class="unit">m³</span></div>
+              <div class="chip-value">${vals.total != null ? Number(vals.total).toFixed(2) : '-'} <span class="unit">m³</span></div>
             </div>
           </div>
 
@@ -1014,7 +1015,7 @@ export class DashboardPage extends LitElement {
                   <span class="score-value">${Math.round(lineLeak.total_score)}/100</span>
                 </div>
                 <div class="leak-footnote">
-                  How strongly this line's usage matches a leak pattern right now —
+                  How strongly this line's usage matches a leak pattern right now -
                   the alarm only triggers above <b>60</b>.
                 </div>
               ` : html`<div class="spark-empty">No leak data yet</div>`}
@@ -1162,6 +1163,24 @@ export class DashboardPage extends LitElement {
     };
   }
 
+  private _integrationFeatures(productType?: string): string {
+    switch (productType) {
+      case 'waterp1meterkit':
+        return 'water monitoring, leak detection, energy costs and insights';
+      case 'watermeterkit':
+      case 'waterflowkit':
+        return 'water monitoring, leak detection and usage insights';
+      case 'p1meterkit':
+        return 'energy monitoring, dynamic tariffs, costs and smart schedules';
+      case 'ultimatesensor':
+      case 'ultimatesensor_mini':
+      case 'ceilsense':
+        return 'device insights and automations';
+      default:
+        return 'product insights and automations';
+    }
+  }
+
   private _getSensorEntity(entities: DeviceEntity[] | undefined, patterns: string[]): DeviceEntity | undefined {
     if (!entities) return undefined;
     // Only measurement entities; config numbers like "Temperature Offset"
@@ -1209,14 +1228,14 @@ export class DashboardPage extends LitElement {
   }
 
   private _formatPowerMetric(watts: number | null): string {
-    if (watts === null) return '—';
+    if (watts === null) return '-';
     const value = Math.abs(watts);
     if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} kW`;
     return `${Math.round(value)} W`;
   }
 
   private _formatEnergyMetric(kwh: number | null): string {
-    if (kwh === null) return '—';
+    if (kwh === null) return '-';
     const decimals = Math.abs(kwh) >= 100 ? 0 : Math.abs(kwh) >= 10 ? 1 : 2;
     return `${kwh.toFixed(decimals)} kWh`;
   }
@@ -1227,7 +1246,7 @@ export class DashboardPage extends LitElement {
   }
 
   private _formatValue(value: string | null, unit: string, decimals = 1): string {
-    if (value === null) return '—';
+    if (value === null) return '-';
     const num = parseFloat(value);
     if (isNaN(num)) return value;
     return `${num.toFixed(decimals)}${unit}`;

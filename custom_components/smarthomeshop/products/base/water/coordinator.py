@@ -238,6 +238,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
     async def async_config_entry_first_refresh(self) -> None:
         """Handle first refresh - load baseline data."""
         await self._leak_engine.async_load()
+        self._restore_period_anchors()
         # Best-effort water price default from the HA Energy Dashboard
         try:
             from ....energy_prices import async_ha_energy_prices
@@ -248,6 +249,48 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         except Exception:  # noqa: BLE001
             self._ha_water_price = None
         await super().async_config_entry_first_refresh()
+
+    def _restore_period_anchors(self) -> None:
+        """Restore day/week/month/year meter anchors after a restart, so the
+        usage sensors do not reset to zero every time HA restarts."""
+        store = self.hass.data.get(DOMAIN, {}).get("store")
+        if store is None:
+            return
+        anchors = store.get_water_anchors(self.config_entry.entry_id)
+        if not anchors:
+            return
+        self._day_start_reading = anchors.get("day_start")
+        self._week_start_reading = anchors.get("week_start")
+        self._month_start_reading = anchors.get("month_start")
+        self._year_start_reading = anchors.get("year_start")
+        self._night_start_reading = anchors.get("night_start")
+        self._current_day = anchors.get("current_day")
+        week = anchors.get("current_week")
+        self._current_week = tuple(week) if isinstance(week, list) else week
+        self._current_month = anchors.get("current_month")
+        self._current_year = anchors.get("current_year")
+
+    def _persist_period_anchors(self) -> None:
+        """Persist the period anchors when they change (rollover or init)."""
+        store = self.hass.data.get(DOMAIN, {}).get("store")
+        if store is None:
+            return
+        anchors = {
+            "day_start": self._day_start_reading,
+            "week_start": self._week_start_reading,
+            "month_start": self._month_start_reading,
+            "year_start": self._year_start_reading,
+            "night_start": self._night_start_reading,
+            "current_day": self._current_day,
+            "current_week": list(self._current_week) if self._current_week else None,
+            "current_month": self._current_month,
+            "current_year": self._current_year,
+        }
+        if anchors != getattr(self, "_saved_anchors", None):
+            self._saved_anchors = anchors
+            self.hass.async_create_task(
+                store.async_set_water_anchors(self.config_entry.entry_id, anchors)
+            )
 
     def _contract_water_price(self) -> float | None:
         """Water price from a connected contract, if one is active."""
@@ -263,8 +306,14 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         now = dt_util.now()
         data.last_update = now
 
-        # Get current meter reading
-        data.meter_total = self._get_sensor_value(self._water_sensor)
+        # Get current meter reading. An offline/unknown meter must never be
+        # read as 0.0: that would anchor phantom usage, fire false leak alarms
+        # and record a huge jump when the device reconnects. Hold the last
+        # known state instead.
+        raw_total = self._get_sensor_value_or_none(self._water_sensor)
+        if raw_total is None:
+            return self.data if self.data is not None else data
+        data.meter_total = raw_total
 
         # Get current flow rate
         if self._flow_sensor:
@@ -284,9 +333,13 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         )
         data.baseline_status = self._leak_engine.baseline_status
 
-        # Sync smart detection to legacy fields for card compatibility
+        # Sync smart detection to legacy fields for card compatibility.
+        # The engine tracks seconds; the sensor (and the legacy path below)
+        # report minutes.
         if data.leak_score:
-            data.continuous_flow_duration = self._leak_engine.current_flow_duration
+            data.continuous_flow_duration = int(
+                self._leak_engine.current_flow_duration / 60
+            )
             if data.leak_score.is_leak_likely:
                 if data.leak_score.leak_type == "continuous":
                     data.continuous_flow_detected = True
@@ -426,15 +479,20 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
     def _get_sensor_value(self, entity_id: str) -> float:
         """Get numeric value from a sensor."""
+        value = self._get_sensor_value_or_none(entity_id)
+        return 0.0 if value is None else value
+
+    def _get_sensor_value_or_none(self, entity_id: str) -> float | None:
+        """Numeric value from a sensor, or None when it has no valid reading."""
         if not entity_id:
-            return 0.0
+            return None
         state = self.hass.states.get(entity_id)
         if state and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             try:
                 return float(state.state)
             except (ValueError, TypeError):
                 pass
-        return 0.0
+        return None
 
     def _calculate_flow_rate(self, current_reading: float, now: datetime) -> float:
         """Calculate flow rate from meter readings."""
@@ -491,6 +549,9 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         data.week_usage = max(0, (data.meter_total - self._week_start_reading) * 1000)
         data.month_usage = max(0, (data.meter_total - self._month_start_reading) * 1000)
         data.year_usage = max(0, (data.meter_total - self._year_start_reading) * 1000)
+
+        # Persist the anchors so a restart does not reset the usage sensors.
+        self._persist_period_anchors()
 
     def _detect_leaks(self, data: WaterUsageData, now: datetime) -> None:
         """Detect various types of leaks (legacy method)."""

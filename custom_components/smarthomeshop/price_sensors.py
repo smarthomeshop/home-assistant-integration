@@ -54,6 +54,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
             "next_lower_price_start": (c.next_lower_period() or {}).get("start"),
             "prices_today": c.today(),
             "prices_tomorrow": c.tomorrow(),
+            "forecast": c.forecast(),
+            "forecast_meta": c.forecast_meta(),
         },
     ),
     PriceSensorDescription(
@@ -223,7 +225,12 @@ class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity
     _attr_has_entity_name = True
     # The hourly arrays are for the UI/automations only; keeping them out of
     # the recorder avoids writing ~100 rows of price data on every state.
-    _unrecorded_attributes = frozenset({"prices_today", "prices_tomorrow"})
+    # forecast/ranked arrays grew past the recorder's 16KB attribute limit,
+    # which spammed warnings and dropped ALL attributes from the recorder.
+    _unrecorded_attributes = frozenset({
+        "prices_today", "prices_tomorrow", "forecast", "forecast_meta",
+        "ranked_hours", "total_hours",
+    })
     entity_description: PriceSensorDescription
 
     def __init__(

@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -24,7 +25,8 @@ DEFAULT_BASE_URL = "https://api.smarthomeshop.io"
 PRICES_PATH = "/api/v1/energy/prices"
 CONTRACTS_PATH = "/api/v1/energy/contracts"
 UPDATE_INTERVAL = timedelta(minutes=30)
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 30
+ACCOUNT_CHECK_TIMEOUT = 8
 
 
 class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -44,6 +46,16 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.account_email: str | None = None
         # ISO timestamp of the last successful sync with the account API.
         self.last_synced: str | None = None
+        self.last_error: str | None = None
+        # Push a fresh state to all price entities at the top of every hour:
+        # the current-hour row changes then, independent of the 30-min poll.
+        from homeassistant.helpers.event import async_track_time_change
+
+        async_track_time_change(hass, self._handle_hour_tick, minute=0, second=5)
+
+    @callback
+    def _handle_hour_tick(self, _now) -> None:
+        self.async_update_listeners()
 
     @property
     def update_interval_minutes(self) -> int:
@@ -68,11 +80,13 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _ssl_option(self, url: str):
         """Return an aiohttp ssl arg; disable verification for local dev hosts."""
-        lowered = url.lower()
-        if any(
-            token in lowered
-            for token in (".test/", "://localhost", "127.0.0.1", "host-gateway", ".local/")
-        ):
+        hostname = (urlparse(url).hostname or "").lower()
+        if hostname in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "host-gateway",
+        } or hostname.endswith(".test"):
             return False
         return None  # default (verify)
 
@@ -81,6 +95,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         api_key = account.get("api_key")
         if not api_key:
             self.status = "unconfigured"
+            self.last_error = None
             return {}
 
         url = f"{self.base_url}{PRICES_PATH}"
@@ -101,28 +116,50 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ) as resp:
                 if resp.status == 401:
                     self.status = "unauthorized"
+                    self.last_error = "The API key is invalid or was revoked."
                     raise UpdateFailed("Invalid or revoked API key")
                 if resp.status == 403:
+                    # Prices are on the free tier, so a 403 here is a token
+                    # ability/permission problem, not a subscription issue.
                     self.status = "forbidden"
-                    raise UpdateFailed("API subscription tier required")
+                    self.last_error = (
+                        "This API key is not allowed to read prices. "
+                        "Create a new key in your SmartHomeShop account."
+                    )
+                    raise UpdateFailed("API key lacks the prices permission")
                 if resp.status != 200:
                     self.status = "error"
+                    self.last_error = f"The price service returned HTTP {resp.status}."
                     raise UpdateFailed(f"HTTP {resp.status}")
                 data = await resp.json()
         except UpdateFailed:
             raise
-        except (aiohttp.ClientError, TimeoutError) as err:
+        except TimeoutError as err:
             self.status = "error"
-            raise UpdateFailed(f"Connection error: {err}") from err
+            self.last_error = (
+                f"The price service did not respond within {REQUEST_TIMEOUT} seconds."
+            )
+            raise UpdateFailed(self.last_error) from err
+        except aiohttp.ClientConnectorCertificateError as err:
+            self.status = "error"
+            self.last_error = "The TLS certificate of the price service could not be verified."
+            raise UpdateFailed(self.last_error) from err
+        except aiohttp.ClientError as err:
+            self.status = "error"
+            self.last_error = "Could not connect to the dynamic energy price service."
+            raise UpdateFailed(f"{self.last_error} {err}") from err
         except ValueError as err:  # invalid JSON body on a 200 response
             self.status = "error"
+            self.last_error = "The price service returned an invalid response."
             raise UpdateFailed(f"Invalid JSON response: {err}") from err
 
         if not isinstance(data, dict):
             self.status = "error"
+            self.last_error = "The price service returned an unexpected response."
             raise UpdateFailed("Unexpected response format")
 
         self.status = "ok"
+        self.last_error = None
         self.last_synced = dt_util.utcnow().isoformat()
         return data or {}
 
@@ -139,6 +176,20 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return (self.data or {}).get("electricity") or {}
 
     def current_electricity(self) -> dict[str, Any] | None:
+        # Select the row for the CURRENT hour locally instead of trusting the
+        # server-computed "current": with a 30-minute poll interval the server
+        # value can be up to 30 minutes stale after each hour change.
+        from homeassistant.util import dt as dt_util
+
+        now = dt_util.now()
+        for row in self.today() + self.tomorrow():
+            start = dt_util.parse_datetime(str(row.get("start")))
+            if start is None:
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=dt_util.get_default_time_zone())
+            if start <= now < start + timedelta(hours=1):
+                return row
         return self._elec().get("current")
 
     def electricity_price(self) -> float | None:
@@ -166,6 +217,14 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def tomorrow(self) -> list[dict[str, Any]]:
         return self._elec().get("tomorrow") or []
+
+    def forecast(self) -> list[dict[str, Any]]:
+        """Return the confirmed and predicted hourly price horizon."""
+        return self._elec().get("forecast") or []
+
+    def forecast_meta(self) -> dict[str, Any]:
+        """Return metadata describing the available forecast horizon."""
+        return self._elec().get("forecast_meta") or {}
 
     def contract(self) -> dict[str, Any] | None:
         return (self.data or {}).get("contract")
@@ -241,26 +300,89 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def cheapest_block(self, hours: int) -> dict[str, Any] | None:
         return (self._summary().get("cheapest_blocks") or {}).get(str(hours))
 
-    async def async_fetch_contracts(self) -> list[dict[str, Any]]:
-        """Fetch the user's energy contracts (for the panel dropdown)."""
+    def forecast_cheapest_block(self, hours: int) -> dict[str, Any] | None:
+        """Return the cheapest block across the full forecast horizon."""
+        return (self._summary().get("forecast_cheapest_blocks") or {}).get(
+            str(hours)
+        )
+
+    async def _async_fetch_contracts(
+        self, *, update_status: bool
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Fetch contracts and optionally use the request to validate the account."""
         account = self._account()
         api_key = account.get("api_key")
         if not api_key:
-            return []
+            if update_status:
+                self.status = "unconfigured"
+                self.last_error = None
+            return False, []
         url = f"{self.base_url}{CONTRACTS_PATH}"
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         try:
             async with self._session.get(
                 url,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+                timeout=aiohttp.ClientTimeout(total=ACCOUNT_CHECK_TIMEOUT),
                 ssl=self._ssl_option(url),
             ) as resp:
+                if resp.status == 401:
+                    if update_status:
+                        self.status = "unauthorized"
+                        self.last_error = "The API key is invalid or was revoked."
+                    return False, []
+                if resp.status == 403:
+                    if update_status:
+                        self.status = "forbidden"
+                        self.last_error = "This account cannot access dynamic energy prices."
+                    return False, []
                 if resp.status != 200:
-                    return []
+                    if update_status:
+                        self.status = "error"
+                        self.last_error = (
+                            f"The account service returned HTTP {resp.status}."
+                        )
+                    return False, []
                 data = await resp.json()
                 if not isinstance(data, dict):
-                    return []
-                return data.get("contracts", []) or []
-        except (aiohttp.ClientError, TimeoutError, ValueError):
-            return []
+                    if update_status:
+                        self.status = "error"
+                        self.last_error = "The account service returned an invalid response."
+                    return False, []
+                contracts = data.get("contracts", []) or []
+                if update_status:
+                    self.status = "ok"
+                    self.last_error = None
+                return True, contracts if isinstance(contracts, list) else []
+        except TimeoutError:
+            if update_status:
+                self.status = "error"
+                self.last_error = (
+                    "The account service did not respond within "
+                    f"{ACCOUNT_CHECK_TIMEOUT} seconds."
+                )
+        except aiohttp.ClientConnectorCertificateError:
+            if update_status:
+                self.status = "error"
+                self.last_error = (
+                    "The TLS certificate of the account service could not be verified."
+                )
+        except aiohttp.ClientError:
+            if update_status:
+                self.status = "error"
+                self.last_error = "Could not connect to the SmartHomeShop account service."
+        except ValueError:
+            if update_status:
+                self.status = "error"
+                self.last_error = "The account service returned an invalid response."
+        return False, []
+
+    async def async_validate_account(self) -> bool:
+        """Validate the configured token without waiting for a full forecast."""
+        valid, _ = await self._async_fetch_contracts(update_status=True)
+        return valid
+
+    async def async_fetch_contracts(self) -> list[dict[str, Any]]:
+        """Fetch the user's energy contracts (for the panel dropdown)."""
+        _, contracts = await self._async_fetch_contracts(update_status=False)
+        return contracts

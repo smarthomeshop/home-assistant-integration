@@ -152,7 +152,10 @@ class SmartHomeShopCheapestWindowNowBinarySensor(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.status == "ok" and self._window() is not None
+        # Stay available on cached price data during a transient poll failure,
+        # matching the schedule sensors: a hiccup must not flip steering
+        # automations to 'unavailable' mid-window.
+        return self._window() is not None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

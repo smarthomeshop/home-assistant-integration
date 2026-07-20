@@ -35,6 +35,7 @@ class SmartHomeShopStore:
         self._data.setdefault("schedules", {})
         self._data.setdefault("battery", {})
         self._data.setdefault("energy_sources", {})
+        self._data.setdefault("water_anchors", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -139,3 +140,16 @@ class SmartHomeShopStore:
         self._data["energy_sources"] = sources
         await self.async_save()
         return sources
+
+    # ---- Water usage period anchors (per config entry) ----
+    # Meter readings at the start of day/week/month/year, persisted so the
+    # usage sensors survive a Home Assistant restart instead of resetting.
+
+    def get_water_anchors(self, entry_id: str) -> dict[str, Any]:
+        """Return the persisted period anchors for a water device."""
+        return dict(self._data.get("water_anchors", {}).get(entry_id, {}))
+
+    async def async_set_water_anchors(self, entry_id: str, anchors: dict[str, Any]) -> None:
+        """Persist the period anchors for a water device."""
+        self._data.setdefault("water_anchors", {})[entry_id] = anchors
+        await self.async_save()

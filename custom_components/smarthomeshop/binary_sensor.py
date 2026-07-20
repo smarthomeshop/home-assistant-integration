@@ -48,28 +48,46 @@ async def async_setup_entry(
             for description in WATER_BINARY_SENSORS
         )
 
-    # Account-wide price binary sensors — hosted by a single entry, only when
-    # an API key is set (mirrors the price sensors).
+    # WaterFlowKit: per-line smart leak alarms, so the leak engine's scores
+    # are visible in HA and the one-click leak automations have an entity.
+    if product_type == PRODUCT_WATERFLOWKIT:
+        entities.extend(
+            WaterFlowKitLeakBinarySensor(coordinator, config_entry, line, label)
+            for line, label in (("flow1", "Flow 1"), ("flow2", "Flow 2"))
+        )
+
+    # Account-wide price binary sensors are always hosted by one entry. They
+    # remain unavailable until an API key is connected, avoiding a reload when
+    # account settings change.
+    entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
+    is_account_host = bool(entry_ids and config_entry.entry_id == min(entry_ids))
     prices = hass.data.get(DOMAIN, {}).get("prices")
-    if prices is not None and getattr(prices, "has_key", False):
-        entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
-        if entry_ids and config_entry.entry_id == min(entry_ids):
-            from .price_binary_sensors import (
-                SmartHomeShopCheapestWindowNowBinarySensor,
-                SmartHomeShopCheapNowBinarySensor,
-                SmartHomeShopContractActiveBinarySensor,
-                SmartHomeShopTomorrowPricesBinarySensor,
-            )
+    if prices is not None and is_account_host:
+        from .price_binary_sensors import (
+            SmartHomeShopCheapestWindowNowBinarySensor,
+            SmartHomeShopCheapNowBinarySensor,
+            SmartHomeShopContractActiveBinarySensor,
+            SmartHomeShopTomorrowPricesBinarySensor,
+        )
 
-            entities.append(SmartHomeShopCheapNowBinarySensor(prices))
-            entities.append(SmartHomeShopContractActiveBinarySensor(prices))
-            entities.append(SmartHomeShopTomorrowPricesBinarySensor(prices))
-            entities.extend(
-                SmartHomeShopCheapestWindowNowBinarySensor(prices, hours)
-                for hours in range(1, 7)
-            )
+        entities.append(SmartHomeShopCheapNowBinarySensor(prices))
+        entities.append(SmartHomeShopContractActiveBinarySensor(prices))
+        entities.append(SmartHomeShopTomorrowPricesBinarySensor(prices))
+        entities.extend(
+            SmartHomeShopCheapestWindowNowBinarySensor(prices, hours)
+            for hours in range(1, 7)
+        )
 
-            _setup_schedule_sensors(hass, config_entry, prices, async_add_entities)
+        _setup_schedule_sensors(hass, config_entry, prices, async_add_entities)
+
+    battery_plan = hass.data.get(DOMAIN, {}).get("battery_plan")
+    if is_account_host and battery_plan is not None:
+        from .battery_entities import SmartHomeShopBatteryActionBinarySensor
+
+        entities.extend(
+            SmartHomeShopBatteryActionBinarySensor(battery_plan, action)
+            for action in ("charge", "discharge")
+        )
 
     async_add_entities(entities)
 
@@ -109,6 +127,16 @@ def _setup_schedule_sensors(
             if sid not in schedules:
                 entity = known.pop(sid)
                 hass.async_create_task(entity.async_remove(force_remove=True))
+                # Also drop the registry entry so a deleted schedule does not
+                # linger as a restorable orphan in the entity registry.
+                from homeassistant.helpers import entity_registry as er
+
+                registry = er.async_get(hass)
+                entity_id = registry.async_get_entity_id(
+                    "binary_sensor", DOMAIN, f"{DOMAIN}_schedule_{sid}"
+                )
+                if entity_id:
+                    registry.async_remove(entity_id)
 
     # Add the schedules that already exist, then keep in sync on every change.
     for schedule in store.get_schedules():
@@ -120,6 +148,41 @@ def _setup_schedule_sensors(
     config_entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_SCHEDULES_CHANGED, _sync)
     )
+
+
+class WaterFlowKitLeakBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """Smart leak alarm for one WaterFlowKit line, driven by the leak engine."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:water-alert"
+
+    def __init__(self, coordinator, config_entry: ConfigEntry, line: str, label: str) -> None:
+        super().__init__(coordinator)
+        self._line = line
+        self._attr_name = f"{label} leak alarm (CC)"
+        self._attr_unique_id = f"{config_entry.entry_id}_{line}_leak_alarm_cc"
+        if getattr(coordinator, "device_info", None):
+            self._attr_device_info = coordinator.device_info
+
+    def _score(self) -> dict[str, Any] | None:
+        line = (self.coordinator.data or {}).get(self._line) or {}
+        return line.get("leak_score")
+
+    @property
+    def is_on(self) -> bool:
+        score = self._score() or {}
+        return bool(score.get("is_leak_likely"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        score = self._score()
+        if not score:
+            return None
+        return {
+            "leak_type": score.get("leak_type"),
+            "total_score": score.get("total_score"),
+            "confidence": score.get("confidence"),
+        }
 
 
 class SmartHomeShopWaterBinarySensor(

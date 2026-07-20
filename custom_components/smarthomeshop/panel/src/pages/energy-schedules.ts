@@ -217,7 +217,7 @@ export class EnergySchedules extends LitElement {
       const guardOn = this._guard && !!avail;
       const res = await this.hass.callWS<{ schedule: Schedule }>({
         type: 'smarthomeshop/schedules/set',
-        ...(this._editId ? { id: this._editId } : {}),
+        ...(this._editId ? { schedule_id: this._editId } : {}),
         name: this._name.trim(),
         target_entity: this._target,
         hours,
@@ -258,7 +258,7 @@ export class EnergySchedules extends LitElement {
     if (!this.hass.user?.is_admin) return;
     if (!window.confirm(`Delete "${s.name}" and its automation?`)) return;
     try {
-      await this.hass.callWS({ type: 'smarthomeshop/schedules/delete', id: s.id });
+      await this.hass.callWS({ type: 'smarthomeshop/schedules/delete', schedule_id: s.id });
       // Remove the generated automation too, so it can't keep steering the load.
       try {
         await this.hass.callApi('DELETE', `config/automation/config/${autoId(s.id)}`);

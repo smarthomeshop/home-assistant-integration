@@ -172,6 +172,15 @@ export class SmartHomeShopPanel extends LitElement {
   }
 
   private _navigateTo(page: PageType): void {
+    // Leaving the Room Designer with unsaved work must not silently discard it.
+    const leavingZones = (this._currentPage === 'zones' || this._currentPage === 'room-builder')
+      && page !== 'zones' && page !== 'room-builder';
+    if (leavingZones) {
+      const zones = this.renderRoot.querySelector('shs-zones-page') as (HTMLElement & { isDirty?: boolean }) | null;
+      if (zones?.isDirty && !window.confirm('You have unsaved changes in the Room Designer. Discard them?')) {
+        return;
+      }
+    }
     this._currentPage = page;
   }
 

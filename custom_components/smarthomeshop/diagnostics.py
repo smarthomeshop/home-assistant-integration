@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_PRODUCT_TYPE, VERSION
 
-TO_REDACT = {"deviceId", "device_id"}
+TO_REDACT = {"deviceId", "device_id", "api_key"}
 
 
 def _serialise(value: Any) -> Any:
@@ -50,4 +51,4 @@ async def async_get_config_entry_diagnostics(
         if tracker is not None:
             data["energy"] = _serialise(tracker.data)
 
-    return data
+    return async_redact_data(data, TO_REDACT)

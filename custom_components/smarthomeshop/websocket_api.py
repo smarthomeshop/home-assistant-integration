@@ -1,8 +1,10 @@
 """WebSocket API for SmartHomeShop Configurator Panel."""
 from __future__ import annotations
 
-import voluptuous as vol
+import asyncio
 from typing import Any
+
+import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
@@ -42,6 +44,8 @@ CONF_VACATION_MODE_ENTITY = "vacation_mode_entity"
 
 _WATER_PRODUCTS = ("waterp1meterkit", "watermeterkit", "waterflowkit")
 _ENERGY_PRODUCTS = ("waterp1meterkit", "p1meterkit")
+_ACCOUNT_REFRESH_TIMEOUT = 35
+_ACCOUNT_REFRESH_TASK = "account_price_refresh_task"
 
 
 async def async_register_websocket_api(hass: HomeAssistant) -> None:
@@ -68,6 +72,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_schedule)
     websocket_api.async_register_command(hass, ws_delete_schedule)
     websocket_api.async_register_command(hass, ws_get_battery)
+    websocket_api.async_register_command(hass, ws_get_battery_plan)
     websocket_api.async_register_command(hass, ws_set_battery)
     websocket_api.async_register_command(hass, ws_get_energy_sources)
     websocket_api.async_register_command(hass, ws_set_energy_sources)
@@ -171,7 +176,7 @@ def ws_get_devices(
 
         devices.append({
             "id": device_entry.id,
-            "name": device_entry.name or device_entry.name_by_user or "Unknown",
+            "name": device_entry.name_by_user or device_entry.name or "Unknown",
             "model": device_entry.model,
             "manufacturer": device_entry.manufacturer,
             "product_type": detected_product,
@@ -198,6 +203,12 @@ def ws_get_rooms(
     connection.send_result(msg["id"], {"rooms": rooms})
 
 
+_ROOM_SCHEMA = vol.Schema({
+    vol.Optional("id"): str,
+    vol.Required("name"): vol.All(str, vol.Length(min=1, max=120)),
+}, extra=vol.ALLOW_EXTRA)
+
+
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/room/save",
     vol.Required("room"): dict,
@@ -208,9 +219,16 @@ async def ws_save_room(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Save a room configuration."""
+    """Save a room configuration (admin only, like every other write)."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
     store: SmartHomeShopStore = hass.data[DOMAIN]["store"]
-    room_data = msg["room"]
+    try:
+        room_data = _ROOM_SCHEMA(msg["room"])
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
     try:
         room = await store.async_save_room(room_data)
         connection.send_result(msg["id"], {"room": room})
@@ -229,7 +247,10 @@ async def ws_delete_room(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Delete a room configuration."""
+    """Delete a room configuration (admin only)."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
     store: SmartHomeShopStore = hass.data[DOMAIN]["store"]
     try:
         await store.async_delete_room(msg["room_id"])
@@ -588,16 +609,20 @@ async def ws_set_device_config(hass: HomeAssistant, connection, msg: dict) -> No
 
 def _account_result(hass: HomeAssistant) -> dict:
     """Build the account/price status payload for the panel."""
-    store = hass.data.get(DOMAIN, {}).get("store")
-    prices = hass.data.get(DOMAIN, {}).get("prices")
+    domain_data = hass.data.get(DOMAIN, {})
+    store = domain_data.get("store")
+    prices = domain_data.get("prices")
+    refresh_task = domain_data.get(_ACCOUNT_REFRESH_TASK)
     account = store.get_account() if store else {}
     result = {
         "has_key": bool(account.get("api_key")),
         "base_url": account.get("base_url") or "https://api.smarthomeshop.io",
         "contract_id": account.get("contract_id"),
         "status": getattr(prices, "status", "unconfigured"),
+        "last_error": getattr(prices, "last_error", None),
         "last_synced": getattr(prices, "last_synced", None),
         "interval_minutes": getattr(prices, "update_interval_minutes", 30),
+        "refreshing": bool(refresh_task and not refresh_task.done()),
     }
     # Resolve the price entity_ids so the panel can open their more-info dialog
     # (robust against renames — looked up by unique_id, not a hardcoded id).
@@ -640,6 +665,59 @@ def _account_result(hass: HomeAssistant) -> dict:
     return result
 
 
+async def _async_refresh_account_prices(prices: Any) -> None:
+    """Refresh prices without leaving a WebSocket request unanswered."""
+    if prices is None:
+        return
+    try:
+        await asyncio.wait_for(
+            prices.async_refresh(), timeout=_ACCOUNT_REFRESH_TIMEOUT
+        )
+    except TimeoutError:
+        prices.status = "error"
+        prices.last_error = (
+            f"The price service did not respond within {_ACCOUNT_REFRESH_TIMEOUT} seconds."
+        )
+        LOGGER.warning(
+            "Dynamic energy price refresh timed out after %s seconds",
+            _ACCOUNT_REFRESH_TIMEOUT,
+        )
+    except Exception as err:  # Coordinator errors must not strand the panel.
+        prices.status = "error"
+        if not getattr(prices, "last_error", None):
+            prices.last_error = "Could not refresh dynamic energy prices."
+        LOGGER.warning("Dynamic energy price refresh failed: %s", err)
+
+
+async def _async_run_account_refresh(
+    hass: HomeAssistant, prices: Any
+) -> None:
+    """Run one account refresh and release its shared task slot."""
+    try:
+        await _async_refresh_account_prices(prices)
+    finally:
+        domain_data = hass.data.get(DOMAIN, {})
+        if domain_data.get(_ACCOUNT_REFRESH_TASK) is asyncio.current_task():
+            domain_data.pop(_ACCOUNT_REFRESH_TASK, None)
+
+
+def _schedule_account_price_refresh(
+    hass: HomeAssistant, prices: Any
+) -> asyncio.Task | None:
+    """Start one non-blocking account refresh, reusing an active task."""
+    if prices is None:
+        return None
+
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    active_task = domain_data.get(_ACCOUNT_REFRESH_TASK)
+    if active_task is not None and not active_task.done():
+        return active_task
+
+    task = hass.async_create_task(_async_run_account_refresh(hass, prices))
+    domain_data[_ACCOUNT_REFRESH_TASK] = task
+    return task
+
+
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account"})
 @callback
 def ws_get_account(hass: HomeAssistant, connection, msg: dict) -> None:
@@ -648,12 +726,11 @@ def ws_get_account(hass: HomeAssistant, connection, msg: dict) -> None:
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/refresh"})
-@websocket_api.async_response
-async def ws_refresh_account(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Fetch prices from the account API right now and return fresh status."""
+@callback
+def ws_refresh_account(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Start a price refresh and immediately return its current status."""
     prices = hass.data.get(DOMAIN, {}).get("prices")
-    if prices is not None:
-        await prices.async_refresh()
+    _schedule_account_price_refresh(hass, prices)
     connection.send_result(msg["id"], _account_result(hass))
 
 
@@ -714,9 +791,12 @@ def ws_get_schedules(hass: HomeAssistant, connection, msg: dict) -> None:
 _HHMM = vol.Match(r"^([01]?\d|2[0-3]):[0-5]\d$")
 
 
+# The field is called schedule_id (not id): every HA websocket message already
+# carries a required integer "id", so an "id" key in the command schema would
+# override that base field and reject every call.
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/schedules/set",
-    vol.Optional("id"): str,
+    vol.Optional("schedule_id"): str,
     vol.Required("name"): vol.All(str, vol.Length(min=1, max=80)),
     vol.Required("target_entity"): str,
     vol.Required("hours"): vol.All(vol.Coerce(int), vol.Range(min=1, max=24)),
@@ -743,10 +823,12 @@ async def ws_set_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
         return
     schedule = {
         k: msg[k]
-        for k in ("id", "name", "target_entity", "hours", "ready_by", "earliest",
+        for k in ("name", "target_entity", "hours", "ready_by", "earliest",
                   "interruptible", "guard", "load_power", "enabled")
         if k in msg
     }
+    if msg.get("schedule_id"):
+        schedule["id"] = msg["schedule_id"]
     saved = await store.async_save_schedule(schedule)
     async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
     connection.send_result(msg["id"], {"schedule": _schedule_payload(hass, saved)})
@@ -754,7 +836,7 @@ async def ws_set_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
 
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/schedules/delete",
-    vol.Required("id"): str,
+    vol.Required("schedule_id"): str,
 })
 @websocket_api.async_response
 async def ws_delete_schedule(hass: HomeAssistant, connection, msg: dict) -> None:
@@ -770,7 +852,7 @@ async def ws_delete_schedule(hass: HomeAssistant, connection, msg: dict) -> None
     if store is None:
         connection.send_error(msg["id"], "not_ready", "Store not loaded")
         return
-    ok = await store.async_delete_schedule(msg["id"])
+    ok = await store.async_delete_schedule(msg["schedule_id"])
     async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
     connection.send_result(msg["id"], {"ok": ok})
 
@@ -783,11 +865,25 @@ def ws_get_battery(hass: HomeAssistant, connection, msg: dict) -> None:
     connection.send_result(msg["id"], {"battery": store.get_battery() if store else {}})
 
 
+@websocket_api.websocket_command(
+    {vol.Required("type"): "smarthomeshop/battery/plan"}
+)
+@callback
+def ws_get_battery_plan(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the latest account-wide battery recommendation."""
+    planner = hass.data.get(DOMAIN, {}).get("battery_plan")
+    connection.send_result(
+        msg["id"],
+        {"plan": dict(planner.data or {}) if planner is not None else {}},
+    )
+
+
 _BATTERY_SCHEMA = vol.Schema({
     vol.Optional("enabled"): bool,
     vol.Optional("control_kind"): vol.In(["switch", "number", "select"]),
     vol.Optional("control_entity"): str,
     vol.Optional("charge_power"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("max_discharge_power"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("off_min"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("charge_option"): vol.Any(None, str),
     vol.Optional("idle_option"): vol.Any(None, str),
@@ -798,6 +894,32 @@ _BATTERY_SCHEMA = vol.Schema({
     vol.Optional("charge_hours"): vol.Any(None, vol.All(vol.Coerce(int), vol.Range(min=1, max=6))),
     vol.Optional("capacity_kwh"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("pv_forecast_sensor"): vol.Any(None, str),
+    vol.Optional("load_forecast_sensor"): vol.Any(None, str),
+    vol.Optional("charge_efficiency"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1))
+    ),
+    vol.Optional("discharge_efficiency"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0.5, max=1))
+    ),
+    vol.Optional("cycle_cost"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0))
+    ),
+    vol.Optional("assumed_load_power"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0))
+    ),
+    vol.Optional("grid_import_limit"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0))
+    ),
+    vol.Optional("grid_export_limit"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0))
+    ),
+    vol.Optional("minimum_confidence"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0, max=1))
+    ),
+    vol.Optional("planning_hours"): vol.Any(
+        None, vol.All(vol.Coerce(int), vol.Range(min=6, max=48))
+    ),
+    vol.Optional("automatic_control"): bool,
 }, extra=vol.REMOVE_EXTRA)
 
 
@@ -821,6 +943,9 @@ async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     saved = await store.async_set_battery(config)
+    planner = hass.data.get(DOMAIN, {}).get("battery_plan")
+    if planner is not None:
+        await planner.async_request_refresh()
     connection.send_result(msg["id"], {"battery": saved})
 
 
@@ -885,7 +1010,7 @@ async def ws_get_contracts(hass: HomeAssistant, connection, msg: dict) -> None:
 })
 @websocket_api.async_response
 async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Store the API key / base URL and refresh prices immediately."""
+    """Store account settings and refresh prices in the background."""
     if not connection.user.is_admin:
         connection.send_error(msg["id"], "unauthorized", "Administrator required")
         return
@@ -908,15 +1033,23 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
         account["contract_id"] = (str(msg.get("contract_id")).strip() or None) if msg.get("contract_id") not in (None, "") else None
     await store.async_set_account(account)
 
-    # Refresh prices against the new key so we can report the status back.
+    has_key = bool(account.get("api_key"))
     if prices is not None:
-        await prices.async_refresh()
-
-    # Materialise/remove the price sensors by reloading the host entry.
-    entries = hass.config_entries.async_entries(DOMAIN)
-    if entries:
-        host = min(entries, key=lambda e: e.entry_id)
-        hass.async_create_task(hass.config_entries.async_reload(host.entry_id))
+        if has_key:
+            # Never wait for the external API in this WebSocket request. The
+            # panel can poll the shared refresh task without losing its reply
+            # when the price service is slow or temporarily unavailable.
+            prices.status = "connecting"
+            prices.last_error = None
+            _schedule_account_price_refresh(hass, prices)
+        else:
+            refresh_task = hass.data.get(DOMAIN, {}).pop(
+                _ACCOUNT_REFRESH_TASK, None
+            )
+            if refresh_task is not None and not refresh_task.done():
+                refresh_task.cancel()
+            prices.status = "unconfigured"
+            prices.last_error = None
 
     connection.send_result(msg["id"], _account_result(hass))
 
