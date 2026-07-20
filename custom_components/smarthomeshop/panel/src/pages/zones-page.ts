@@ -168,97 +168,108 @@ export class ZonesPage extends LitElement {
   private readonly WALL_HEIGHT_3D = 2500;
 
   static styles = css`
-    :host { display: grid; grid-template-columns: 280px 1fr 280px; gap: 16px; padding: 20px; height: calc(100vh - 100px); box-sizing: border-box; background: #0f172a; }
-    .sidebar { background: #1e293b; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
-    .section-title { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    :host {
+      /* Room Designer theme tokens: follow the active HA theme. The old
+         hardcoded slate palette only suited dark mode. */
+      --rd-deep: var(--secondary-background-color, #0f172a);
+      --rd-panel: var(--card-background-color, #1e293b);
+      --rd-line: var(--divider-color, #334155);
+      --rd-line-strong: var(--divider-color, #475569);
+      --rd-dim: var(--secondary-text-color, #64748b);
+      --rd-dim2: var(--secondary-text-color, #94a3b8);
+      --rd-text: var(--primary-text-color, #e2e8f0);
+    }
+    :host { display: grid; grid-template-columns: 280px 1fr 280px; gap: 16px; padding: 20px; height: calc(100vh - 100px); box-sizing: border-box; background: var(--rd-deep); }
+    .sidebar { background: var(--rd-panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+    .section-title { font-size: 11px; font-weight: 600; color: var(--rd-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
     .room-list { display: flex; flex-direction: column; gap: 6px; }
-    .room-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-    .room-item:hover { border-color: #475569; }
+    .room-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+    .room-item:hover { border-color: var(--rd-line-strong); }
     .room-item.selected { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
-    .room-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: #334155; border-radius: 6px; }
-    .room-icon ha-icon { --mdc-icon-size: 18px; color: #94a3b8; }
-    .room-name { flex: 1; font-size: 13px; color: #e2e8f0; font-weight: 500; }
+    .room-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--rd-line); border-radius: 6px; }
+    .room-icon ha-icon { --mdc-icon-size: 18px; color: var(--rd-dim2); }
+    .room-name { flex: 1; font-size: 13px; color: var(--rd-text); font-weight: 500; }
     .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .tool-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-    .tool-btn:hover { border-color: #475569; background: #1e293b; }
+    .tool-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+    .tool-btn:hover { border-color: var(--rd-line-strong); background: var(--rd-panel); }
     .tool-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.15); }
-    .tool-btn ha-icon { --mdc-icon-size: 24px; color: #94a3b8; }
+    .tool-btn ha-icon { --mdc-icon-size: 24px; color: var(--rd-dim2); }
     .tool-btn.active ha-icon { color: #4361ee; }
-    .tool-btn span { font-size: 11px; color: #94a3b8; }
+    .tool-btn span { font-size: 11px; color: var(--rd-dim2); }
     .tool-btn.active span { color: #4361ee; }
-    .canvas-area { background: #1e293b; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
-    .canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: #0f172a; border-bottom: 1px solid #334155; }
+    .canvas-area { background: var(--rd-panel); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+    .canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: var(--rd-deep); border-bottom: 1px solid var(--rd-line); }
     .header-group { display: flex; align-items: center; gap: 8px; }
-    .room-label { font-size: 13px; color: #94a3b8; }
-    .room-label span { color: #e2e8f0; font-weight: 600; }
-    .save-btn { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: #334155; border: none; border-radius: 8px; color: #94a3b8; font-size: 13px; font-weight: 600; cursor: default; }
+    .room-label { font-size: 13px; color: var(--rd-dim2); }
+    .room-label span { color: var(--rd-text); font-weight: 600; }
+    .save-btn { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--rd-line); border: none; border-radius: 8px; color: var(--rd-dim2); font-size: 13px; font-weight: 600; cursor: default; }
     .save-btn.dirty { background: #22c55e; color: white; cursor: pointer; }
     .save-btn.dirty:hover { background: #16a34a; }
     .push-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: 1px solid #3b82f6; border-radius: 8px; color: #3b82f6; font-size: 13px; font-weight: 600; cursor: pointer; }
-    .push-btn:disabled { border-color: #475569; color: #64748b; cursor: not-allowed; }
+    .push-btn:disabled { border-color: var(--rd-line-strong); color: var(--rd-dim); cursor: not-allowed; }
     .push-btn:hover:not(:disabled) { background: rgba(59, 130, 246, 0.12); }
-    svg { flex: 1; background: #0a1628; cursor: crosshair; }
-    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #64748b; }
+    svg { flex: 1; background: var(--rd-deep); cursor: crosshair; }
+    .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--rd-dim); }
     .empty-state ha-icon { --mdc-icon-size: 64px; margin-bottom: 16px; opacity: 0.5; }
-    .empty-state h3 { margin: 0 0 8px 0; color: #94a3b8; }
-    .grid-line { stroke: #16213a; stroke-width: 0.5; }
-    .grid-line.major { stroke: #1e293b; stroke-width: 1; }
-    .wall-line { stroke: #475569; stroke-width: 3; stroke-linecap: round; }
+    .empty-state h3 { margin: 0 0 8px 0; color: var(--rd-dim2); }
+    .grid-line { stroke: var(--rd-line); stroke-width: 0.5; opacity: 0.6; }
+    .grid-line.major { stroke: var(--rd-panel); stroke-width: 1; }
+    .wall-line { stroke: var(--rd-line-strong); stroke-width: 3; stroke-linecap: round; }
     .canvas-controls { position: absolute; bottom: 16px; left: 16px; display: flex; gap: 8px; }
-    .control-group { display: flex; background: #1e293b; border-radius: 8px; overflow: hidden; border: 1px solid #334155; }
-    .control-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: #94a3b8; cursor: pointer; }
-    .control-btn:hover { background: #334155; color: #e2e8f0; }
-    .instructions { background: #0f172a; border-radius: 10px; padding: 14px; }
+    .control-group { display: flex; background: var(--rd-panel); border-radius: 8px; overflow: hidden; border: 1px solid var(--rd-line); }
+    .control-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: var(--rd-dim2); cursor: pointer; }
+    .control-btn:hover { background: var(--rd-line); color: var(--rd-text); }
+    .instructions { background: var(--rd-deep); border-radius: 10px; padding: 14px; }
     .instructions-title { font-size: 13px; font-weight: 600; color: #4361ee; margin-bottom: 6px; }
-    .instructions-text { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+    .instructions-text { font-size: 12px; color: var(--rd-dim2); line-height: 1.5; }
     .setting-item { margin-bottom: 12px; }
-    .setting-item label { display: block; font-size: 12px; color: #94a3b8; margin-bottom: 4px; }
+    .setting-item label { display: block; font-size: 12px; color: var(--rd-dim2); margin-bottom: 4px; }
     .setting-item input[type="range"] { width: 100%; }
-    select { width: 100%; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-size: 13px; }
-    .info-text { color: #64748b; font-size: 12px; line-height: 1.5; }
+    select { width: 100%; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; }
+    .info-text { color: var(--rd-dim); font-size: 12px; line-height: 1.5; }
     .sensor-list { display: flex; flex-direction: column; gap: 6px; }
-    .sensor-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; cursor: pointer; }
-    .sensor-item:hover { border-color: #475569; }
+    .sensor-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
+    .sensor-item:hover { border-color: var(--rd-line-strong); }
     .sensor-item.selected { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
     .sensor-dot { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; flex-shrink: 0; }
     .sensor-dot.small { width: 18px; height: 18px; font-size: 10px; }
     .sensor-item-info { flex: 1; min-width: 0; }
-    .sensor-item-name { font-size: 13px; color: #e2e8f0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .sensor-item-sub { font-size: 11px; color: #64748b; }
-    .add-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed #475569; border-radius: 8px; background: transparent; color: #94a3b8; font-size: 13px; cursor: pointer; }
+    .sensor-item-name { font-size: 13px; color: var(--rd-text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sensor-item-sub { font-size: 11px; color: var(--rd-dim); }
+    .add-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed var(--rd-line-strong); border-radius: 8px; background: transparent; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
     .add-sensor-btn:hover { border-color: #4361ee; color: #4361ee; }
     .add-sensor-btn ha-icon { --mdc-icon-size: 16px; }
     .live-sensor-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
-    .live-sensor-name { flex: 1; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .live-sensor-count { color: #e2e8f0; font-weight: 600; }
-    .mode-toggle { display: flex; background: #0f172a; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
-    .mode-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-    .mode-btn:hover { color: #e2e8f0; }
+    .live-sensor-name { flex: 1; color: var(--rd-dim2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .live-sensor-count { color: var(--rd-text); font-weight: 600; }
+    .mode-toggle { display: flex; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; }
+    .mode-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: var(--rd-dim2); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+    .mode-btn:hover { color: var(--rd-text); }
     .mode-btn.active { background: #4361ee; color: white; }
     .mode-btn ha-icon { --mdc-icon-size: 16px; }
-    .add-room-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed #475569; border-radius: 8px; background: transparent; color: #94a3b8; font-size: 13px; cursor: pointer; }
+    .add-room-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed var(--rd-line-strong); border-radius: 8px; background: transparent; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
     .add-room-btn:hover { border-color: #4361ee; color: #4361ee; }
     .add-room-btn ha-icon { --mdc-icon-size: 16px; }
     .furniture-grid { display: flex; flex-direction: column; gap: 6px; }
-    .furniture-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; cursor: pointer; }
+    .furniture-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
     .furniture-item:hover { border-color: #4361ee; }
     .furniture-item.selected { border-color: #22c55e; background: rgba(34, 197, 94, 0.1); }
-    .furniture-item ha-icon { --mdc-icon-size: 20px; color: #94a3b8; }
-    .furniture-item span { flex: 1; font-size: 13px; color: #e2e8f0; }
-    .furniture-item small { font-size: 11px; color: #64748b; }
-    .placed-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; margin-bottom: 6px; font-size: 12px; }
+    .furniture-item ha-icon { --mdc-icon-size: 20px; color: var(--rd-dim2); }
+    .furniture-item span { flex: 1; font-size: 13px; color: var(--rd-text); }
+    .furniture-item small { font-size: 11px; color: var(--rd-dim); }
+    .placed-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; margin-bottom: 6px; font-size: 12px; }
     .placed-item.selected { border-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
-    .placed-item ha-icon { --mdc-icon-size: 18px; color: #64748b; }
-    .placed-item .name { flex: 1; color: #e2e8f0; }
-    .placed-item .size { color: #64748b; }
-    .icon-btn { background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px; }
-    .icon-btn:hover { color: #e2e8f0; }
+    .placed-item ha-icon { --mdc-icon-size: 18px; color: var(--rd-dim); }
+    .placed-item .name { flex: 1; color: var(--rd-text); }
+    .placed-item .size { color: var(--rd-dim); }
+    .icon-btn { background: none; border: none; color: var(--rd-dim2); cursor: pointer; padding: 4px; }
+    .icon-btn:hover { color: var(--rd-text); }
     .icon-btn ha-icon { --mdc-icon-size: 16px; }
-    .selected-panel { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; }
-    .selected-panel input { width: 100%; padding: 8px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; box-sizing: border-box; }
-    .selected-panel label { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; }
+    .selected-panel { background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 10px; padding: 12px; }
+    .selected-panel input { width: 100%; padding: 8px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); box-sizing: border-box; }
+    .selected-panel label { display: block; font-size: 11px; color: var(--rd-dim2); margin-bottom: 4px; }
     .panel-btn-row { display: flex; gap: 8px; margin-top: 10px; }
-    .panel-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid #334155; background: transparent; color: #e2e8f0; font-size: 12px; cursor: pointer; }
+    .panel-btn { flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--rd-line); background: transparent; color: var(--rd-text); font-size: 12px; cursor: pointer; }
     .panel-btn:hover { border-color: #4361ee; }
     .panel-btn.danger { color: #ef4444; }
     .panel-btn.danger:hover { border-color: #ef4444; }
@@ -266,91 +277,91 @@ export class ZonesPage extends LitElement {
     .input-row { display: flex; gap: 12px; }
     .input-row > div { flex: 1; }
     .dialog-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-    .dialog { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; min-width: 340px; max-width: 420px; }
-    .dialog h3 { margin: 0 0 16px; font-size: 16px; color: #e2e8f0; }
-    .dialog label { display: block; font-size: 12px; color: #94a3b8; margin: 10px 0 4px; }
-    .dialog input, .dialog select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font-size: 13px; box-sizing: border-box; }
+    .dialog { background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 16px; padding: 24px; min-width: 340px; max-width: 420px; }
+    .dialog h3 { margin: 0 0 16px; font-size: 16px; color: var(--rd-text); }
+    .dialog label { display: block; font-size: 12px; color: var(--rd-dim2); margin: 10px 0 4px; }
+    .dialog input, .dialog select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--rd-line-strong); background: var(--rd-deep); color: var(--rd-text); font-size: 13px; box-sizing: border-box; }
     .dialog input:focus, .dialog select:focus { outline: none; border-color: #4361ee; }
     .dialog-buttons { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
     .dialog-btn { padding: 10px 18px; border-radius: 8px; font-size: 13px; cursor: pointer; border: none; }
-    .dialog-btn.cancel { background: transparent; border: 1px solid #475569; color: #94a3b8; }
+    .dialog-btn.cancel { background: transparent; border: 1px solid var(--rd-line-strong); color: var(--rd-dim2); }
     .dialog-btn.primary { background: #4361ee; color: white; }
-    .remove-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 8px; margin-top: 4px; background: transparent; border: 1px solid #334155; border-radius: 6px; color: #ef4444; font-size: 12px; cursor: pointer; }
+    .remove-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 8px; margin-top: 4px; background: transparent; border: 1px solid var(--rd-line); border-radius: 6px; color: #ef4444; font-size: 12px; cursor: pointer; }
     .remove-sensor-btn:hover { border-color: #ef4444; }
     .remove-sensor-btn ha-icon { --mdc-icon-size: 16px; }
-    .live-status { margin: 12px 0; padding: 12px; background: #0f172a; border-radius: 8px; }
+    .live-status { margin: 12px 0; padding: 12px; background: var(--rd-deep); border-radius: 8px; }
     .live-status .header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .live-status .dot { width: 10px; height: 10px; border-radius: 50%; }
     .live-status .dot.active { background: #22c55e; animation: pulse 1s infinite; }
-    .live-status .dot.inactive { background: #64748b; }
+    .live-status .dot.inactive { background: var(--rd-dim); }
     .live-status .count { font-size: 24px; font-weight: bold; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
     .zone-list { display: flex; flex-direction: column; gap: 6px; }
-    .zone-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; cursor: pointer; }
-    .zone-item:hover { border-color: #475569; }
+    .zone-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
+    .zone-item:hover { border-color: var(--rd-line-strong); }
     .zone-item.selected { border-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
     .zone-color { width: 14px; height: 14px; border-radius: 4px; }
     .zone-info { flex: 1; }
-    .zone-name { font-size: 13px; color: #e2e8f0; font-weight: 500; }
-    .zone-type { font-size: 11px; color: #64748b; }
+    .zone-name { font-size: 13px; color: var(--rd-text); font-weight: 500; }
+    .zone-type { font-size: 11px; color: var(--rd-dim); }
     .zone-actions { display: flex; gap: 4px; }
     .edit-btn { background: none; border: none; color: #3b82f6; cursor: pointer; padding: 4px; }
     .edit-btn:hover { color: #60a5fa; }
     .delete-btn { background: none; border: none; color: #ef4444; cursor: pointer; padding: 4px; }
     .delete-btn:hover { color: #f87171; }
-    .zone-edit-form { background: #0f172a; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px; margin-top: 8px; }
-    .zone-edit-form label { display: block; font-size: 11px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; }
-    .zone-edit-form input { width: 100%; padding: 8px; background: #1e293b; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; font-size: 13px; margin-bottom: 10px; box-sizing: border-box; }
+    .zone-edit-form { background: var(--rd-deep); border: 1px solid #3b82f6; border-radius: 8px; padding: 12px; margin-top: 8px; }
+    .zone-edit-form label { display: block; font-size: 11px; color: var(--rd-dim2); margin-bottom: 4px; text-transform: uppercase; }
+    .zone-edit-form input { width: 100%; padding: 8px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; margin-bottom: 10px; box-sizing: border-box; }
     .zone-edit-form input:focus { outline: none; border-color: #3b82f6; }
     .type-switch { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
-    .type-switch button { flex: 1; min-width: 70px; padding: 6px 4px; border: 2px solid #334155; border-radius: 6px; background: #1e293b; color: #94a3b8; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+    .type-switch button { flex: 1; min-width: 70px; padding: 6px 4px; border: 2px solid var(--rd-line); border-radius: 6px; background: var(--rd-panel); color: var(--rd-dim2); font-size: 11px; cursor: pointer; transition: all 0.15s; }
     .type-switch button.active { border-color: #22c55e; background: rgba(34, 197, 94, 0.1); color: #22c55e; }
     .type-switch button.exclusion.active { border-color: #ef4444; background: rgba(239, 68, 68, 0.1); color: #ef4444; }
     .type-switch button.entry.active { border-color: #10b981; background: rgba(16, 185, 129, 0.1); color: #10b981; }
     /* Direction toggle voor entry lijnen */
     .direction-toggle { display: flex; gap: 6px; margin-bottom: 12px; }
-    .direction-toggle button { flex: 1; padding: 10px 8px; border: 2px solid #334155; border-radius: 8px; background: #1e293b; color: #94a3b8; font-size: 12px; cursor: pointer; transition: all 0.15s; }
-    .direction-toggle button:hover { border-color: #475569; }
+    .direction-toggle button { flex: 1; padding: 10px 8px; border: 2px solid var(--rd-line); border-radius: 8px; background: var(--rd-panel); color: var(--rd-dim2); font-size: 12px; cursor: pointer; transition: all 0.15s; }
+    .direction-toggle button:hover { border-color: var(--rd-line-strong); }
     .direction-toggle button.active.in { border-color: #22c55e; background: rgba(34, 197, 94, 0.15); color: #22c55e; }
-    .help-text { font-size: 11px; color: #64748b; margin: 0 0 12px 0; line-height: 1.4; }
+    .help-text { font-size: 11px; color: var(--rd-dim); margin: 0 0 12px 0; line-height: 1.4; }
     /* Zone Type Picker Dialog */
     .zone-type-picker { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-    .zone-type-picker-content { background: #1e293b; border-radius: 16px; padding: 24px; max-width: 320px; width: 90%; border: 1px solid #334155; }
-    .zone-type-picker h3 { margin: 0 0 8px 0; font-size: 16px; color: #e2e8f0; }
-    .zone-type-picker p { margin: 0 0 20px 0; font-size: 13px; color: #94a3b8; }
+    .zone-type-picker-content { background: var(--rd-panel); border-radius: 16px; padding: 24px; max-width: 320px; width: 90%; border: 1px solid var(--rd-line); }
+    .zone-type-picker h3 { margin: 0 0 8px 0; font-size: 16px; color: var(--rd-text); }
+    .zone-type-picker p { margin: 0 0 20px 0; font-size: 13px; color: var(--rd-dim2); }
     .zone-type-options { display: flex; flex-direction: column; gap: 10px; }
-    .zone-type-option { display: flex; align-items: center; gap: 12px; padding: 14px; background: #0f172a; border: 2px solid #334155; border-radius: 10px; cursor: pointer; transition: all 0.15s; }
-    .zone-type-option:hover:not(.disabled) { border-color: #475569; background: #1e293b; }
+    .zone-type-option { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--rd-deep); border: 2px solid var(--rd-line); border-radius: 10px; cursor: pointer; transition: all 0.15s; }
+    .zone-type-option:hover:not(.disabled) { border-color: var(--rd-line-strong); background: var(--rd-panel); }
     .zone-type-option.disabled { opacity: 0.4; cursor: not-allowed; }
     .zone-type-option .icon { font-size: 24px; }
     .zone-type-option .info { flex: 1; }
-    .zone-type-option .name { font-size: 14px; font-weight: 600; color: #e2e8f0; }
-    .zone-type-option .desc { font-size: 11px; color: #64748b; }
+    .zone-type-option .name { font-size: 14px; font-weight: 600; color: var(--rd-text); }
+    .zone-type-option .desc { font-size: 11px; color: var(--rd-dim); }
     .zone-type-option .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
     .zone-type-option.detection .badge { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
     .zone-type-option.exclusion .badge { background: rgba(248, 113, 113, 0.2); color: #f87171; }
     .zone-type-option.entry .badge { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
-    .zone-type-option.disabled .badge { background: rgba(100, 116, 139, 0.2); color: #64748b; }
-    .zone-type-picker-cancel { width: 100%; margin-top: 16px; padding: 12px; background: #334155; border: none; border-radius: 8px; color: #94a3b8; font-size: 13px; cursor: pointer; }
-    .zone-type-picker-cancel:hover { background: #475569; color: #e2e8f0; }
+    .zone-type-option.disabled .badge { background: rgba(100, 116, 139, 0.18); color: var(--rd-dim); }
+    .zone-type-picker-cancel { width: 100%; margin-top: 16px; padding: 12px; background: var(--rd-line); border: none; border-radius: 8px; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
+    .zone-type-picker-cancel:hover { background: var(--rd-line-strong); color: var(--rd-text); }
     .edit-actions { display: flex; gap: 6px; }
     .edit-actions button { flex: 1; padding: 8px; border: none; border-radius: 6px; font-size: 12px; cursor: pointer; }
     .edit-actions .save-btn { background: #22c55e; color: white; }
-    .edit-actions .cancel-btn { background: #334155; color: #94a3b8; }
+    .edit-actions .cancel-btn { background: var(--rd-line); color: var(--rd-dim2); }
     .zone-type-select { display: flex; gap: 8px; margin-bottom: 12px; }
-    .zone-type-btn { flex: 1; padding: 10px; border: 2px solid #334155; border-radius: 8px; background: #0f172a; cursor: pointer; text-align: center; }
+    .zone-type-btn { flex: 1; padding: 10px; border: 2px solid var(--rd-line); border-radius: 8px; background: var(--rd-deep); cursor: pointer; text-align: center; }
     .zone-type-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
-    .zone-type-btn span { display: block; font-size: 12px; color: #94a3b8; margin-top: 4px; }
+    .zone-type-btn span { display: block; font-size: 12px; color: var(--rd-dim2); margin-top: 4px; }
     .zone-type-btn.active span { color: #4361ee; }
     @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; } .sidebar-right { grid-column: 1 / -1; max-height: 45vh; overflow-y: auto; } }
-    .view-toggle { display: flex; background: #0f172a; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
-    .view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
+    .view-toggle { display: flex; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; }
+    .view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: var(--rd-dim2); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
     .view-toggle-btn.active { background: #4361ee; color: white; }
     .view-toggle-btn ha-icon { --mdc-icon-size: 16px; }
     .canvas3d { flex: 1; display: block; cursor: grab; background: #0a1628; }
     .canvas3d:active { cursor: grabbing; }
-    .view3d-info { position: absolute; bottom: 16px; left: 16px; background: rgba(30, 41, 59, 0.95); border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; z-index: 10; font-size: 12px; color: #94a3b8; }
+    .view3d-info { position: absolute; bottom: 16px; left: 16px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 8px; padding: 10px 14px; z-index: 10; font-size: 12px; color: var(--rd-dim2); }
   `;
 
   connectedCallback() {
@@ -2597,7 +2608,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <text x="${midX + ox}" y="${midY + oy}" text-anchor="middle" dominant-baseline="middle"
             transform="rotate(${adjustedAngle}, ${midX + ox}, ${midY + oy})"
             fill="#7c93f5" font-size="11" font-weight="600"
-            stroke="#0a1628" stroke-width="3" paint-order="stroke"
+            stroke="var(--rd-deep)" stroke-width="3" paint-order="stroke"
             style="pointer-events: none;">${lengthM}m</text>
         `);
       }
@@ -2615,7 +2626,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       if (Math.abs(a) > 1e-6) {
         a /= 2; cx /= 6 * a; cy /= 6 * a;
         const c = this._toCanvas({ x: cx, y: cy });
-        elements.push(svg`<text x="${c.x}" y="${c.y}" text-anchor="middle" dominant-baseline="middle" fill="#64748b" font-size="15" font-weight="600" style="pointer-events: none;">${this._calculateArea().toFixed(1)} m²</text>`);
+        elements.push(svg`<text x="${c.x}" y="${c.y}" text-anchor="middle" dominant-baseline="middle" fill="var(--rd-dim)" font-size="15" font-weight="600" style="pointer-events: none;">${this._calculateArea().toFixed(1)} m²</text>`);
       }
     }
 
@@ -2721,15 +2732,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <rect
             x="${cp.x - w / 2}" y="${cp.y - h / 2}"
             width="${w}" height="${h}"
-            fill="${isDraggingThis ? 'rgba(34, 197, 94, 0.3)' : isSelected ? 'rgba(59, 130, 246, 0.3)' : '#334155'}"
-            stroke="${isDraggingThis ? '#22c55e' : isSelected ? '#3b82f6' : '#475569'}"
+            fill="${isDraggingThis ? 'rgba(34, 197, 94, 0.3)' : isSelected ? 'rgba(59, 130, 246, 0.3)' : 'var(--rd-line)'}"
+            stroke="${isDraggingThis ? '#22c55e' : isSelected ? '#3b82f6' : 'var(--rd-line-strong)'}"
             stroke-width="${isDraggingThis || isSelected ? 2 : 1}"
             transform="rotate(${f.rotation || 0} ${cp.x} ${cp.y})"
             rx="3"
           />
           ${this._designMode === 'layout' ? svg`
             <text x="${cp.x}" y="${cp.y + 4}" text-anchor="middle"
-              fill="${isDraggingThis ? '#22c55e' : isSelected ? '#3b82f6' : '#94a3b8'}"
+              fill="${isDraggingThis ? '#22c55e' : isSelected ? '#3b82f6' : 'var(--rd-dim2)'}"
               font-size="11" font-weight="500" style="pointer-events: none;">${f.name}</text>
           ` : nothing}
         </g>
@@ -2764,7 +2775,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             y1="${cp.y - Math.sin(wallAngle) * doorWidthPx / 2}"
             x2="${cp.x + Math.cos(wallAngle) * doorWidthPx / 2}"
             y2="${cp.y + Math.sin(wallAngle) * doorWidthPx / 2}"
-            stroke="#0a1628" stroke-width="6"
+            stroke="var(--rd-deep)" stroke-width="6"
           />
           <line
             x1="${cp.x}" y1="${cp.y}"
@@ -3322,7 +3333,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <div class="section-title">DOORS</div>
           <p class="info-text" style="margin-bottom: 10px;">Hover a wall and click the preview to add a door.</p>
           ${this._doors.length === 0 ? html`
-            <p class="info-text" style="color: #64748b;">No doors added yet.</p>
+            <p class="info-text" style="color: var(--rd-dim);">No doors added yet.</p>
           ` : this._doors.map((d, i) => html`
             <div class="placed-item">
               <ha-icon icon="mdi:door"></ha-icon>
@@ -3346,7 +3357,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <div class="section-title">WINDOWS</div>
           <p class="info-text" style="margin-bottom: 10px;">Hover a wall and click the preview to add a window.</p>
           ${this._windows.length === 0 ? html`
-            <p class="info-text" style="color: #64748b;">No windows added yet.</p>
+            <p class="info-text" style="color: var(--rd-dim);">No windows added yet.</p>
           ` : this._windows.map((w, i) => html`
             <div class="placed-item">
               <ha-icon icon="mdi:window-closed-variant"></ha-icon>
@@ -3712,12 +3723,12 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
 
         ${this._sensors.some(sn => sn.deviceId) ? html`
-          <div class="live-status" style="border-left: 3px solid ${activeTargets > 0 ? '#22c55e' : '#64748b'};">
+          <div class="live-status" style="border-left: 3px solid ${activeTargets > 0 ? '#22c55e' : 'var(--rd-dim)'};">
             <div class="header">
               <span class="dot ${activeTargets > 0 ? 'active' : 'inactive'}"></span>
-              <span style="font-weight: 600; color: #e2e8f0;">Live Tracking</span>
+              <span style="font-weight: 600; color: var(--rd-text);">Live Tracking</span>
             </div>
-            <div class="count" style="color: ${activeTargets > 0 ? '#22c55e' : '#64748b'};">
+            <div class="count" style="color: ${activeTargets > 0 ? '#22c55e' : 'var(--rd-dim)'};">
               ${activeTargets} ${activeTargets === 1 ? 'person' : 'people'}
             </div>
             ${this._sensors.map((sn, si) => {
@@ -3761,7 +3772,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     <div class="name">Continue drawing</div>
                     <div class="desc">Add more points for a polygon zone</div>
                   </div>
-                  <span class="badge" style="background: rgba(100, 116, 139, 0.2); color: #94a3b8;">→</span>
+                  <span class="badge" style="background: rgba(100, 116, 139, 0.18); color: var(--rd-dim2);">→</span>
                 </div>
               </div>
             ` : html`
