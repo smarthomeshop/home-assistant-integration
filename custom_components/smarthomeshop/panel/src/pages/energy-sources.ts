@@ -128,7 +128,11 @@ export class EnergySourcesCard extends LitElement {
     if (!this.hass.user?.is_admin) { this._error = 'Administrator required.'; return; }
     this._busy = true; this._error = '';
     try {
-      await this.hass.callWS({ type: 'smarthomeshop/energy_sources/set', config: this._form });
+      // Send only the fields this card owns. The P1 meter choice lives in
+      // the same store slot but is written by the Energy settings dialog;
+      // passing a stale copy of it here would silently revert that pick.
+      const { p1_device: _theirs, ...ownFields } = this._form as Record<string, unknown>;
+      await this.hass.callWS({ type: 'smarthomeshop/energy_sources/set', config: ownFields });
       this._cfg = { ...this._form };
       this._modal = false;
       // Let sibling cards (battery prefill) pick up the change.

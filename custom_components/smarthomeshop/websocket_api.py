@@ -1087,6 +1087,9 @@ async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
 
 
 _ENERGY_SOURCES_SCHEMA = vol.Schema({
+    # Which P1 meter feeds the whole-home Energy tab. Auto-selected when
+    # there is exactly one; the panel offers a picker for multi-P1 homes.
+    vol.Optional("p1_device"): vol.Any(None, str),
     vol.Optional("solar_power"): vol.Any(None, str),
     vol.Optional("solar_invert"): bool,
     vol.Optional("battery_power"): vol.Any(None, str),
@@ -1126,7 +1129,13 @@ async def ws_set_energy_sources(hass: HomeAssistant, connection, msg: dict) -> N
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
-    saved = await store.async_set_energy_sources(config)
+    # Merge over the stored mapping: the solar/battery card and the P1
+    # picker are separate writers to this one slot, so keys a writer does
+    # not send must survive its save. Clearing a field still works because
+    # the panel sends an explicit empty value for it.
+    saved = await store.async_set_energy_sources(
+        {**store.get_energy_sources(), **config}
+    )
     connection.send_result(msg["id"], {"sources": saved})
 
 

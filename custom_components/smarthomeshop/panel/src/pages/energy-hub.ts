@@ -6,6 +6,7 @@ import './energy-sources';
 import './energy-battery';
 
 interface Sources {
+  p1_device?: string;
   solar_power?: string;
   solar_invert?: boolean;
   battery_power?: string;
@@ -13,6 +14,13 @@ interface Sources {
   battery_soc?: string;
   battery_capacity_kwh?: number;
   pv_forecast?: string;
+}
+
+interface P1Device {
+  id: string;
+  name: string;
+  product_name: string;
+  online: boolean;
 }
 
 interface PriceRow {
@@ -68,6 +76,11 @@ export class EnergyHub extends LitElement {
 
   @state() private _loaded = false;
   @state() private _sources: Sources = {};
+  @state() private _p1Devices: P1Device[] = [];
+  @state() private _netEntityId?: string;
+  @state() private _p1Saving = false;
+  private _netByDevice: Record<string, string> = {};
+  private _historyQueued = false;
   @state() private _account: any = null;
   @state() private _schedules: any[] = [];
   @state() private _battery: any = {};
@@ -181,6 +194,16 @@ export class EnergyHub extends LitElement {
       100% { box-shadow: 0 0 0 2px transparent; }
     }
     @media (prefers-reduced-motion: reduce) { .dlg-sec.focus { animation: none; } }
+    .p1-card { border: 1px solid var(--divider-color); border-radius: 14px; padding: 14px 16px; background: var(--card-background-color); }
+    .p1-head { display: flex; align-items: flex-start; gap: 10px; }
+    .p1-head ha-icon { color: var(--shs-primary); --mdc-icon-size: 20px; margin-top: 1px; }
+    .p1-title { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
+    .p1-sub { font-size: 12px; color: var(--secondary-text-color); margin-top: 2px; }
+    .p1-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+    .p1-name { font-size: 13.5px; font-weight: 600; color: var(--primary-text-color); }
+    .p1-badge { font-size: 11.5px; color: var(--secondary-text-color); border: 1px solid var(--divider-color); border-radius: 999px; padding: 2px 10px; }
+    .p1-select { flex: 1; min-width: 220px; font-family: inherit; font-size: 13px; color: var(--primary-text-color); background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 10px; padding: 8px 10px; }
+    .p1-select:disabled { opacity: 0.6; }
     .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 9px; background: var(--shs-blue, var(--shs-primary, #4361ee)); color: #fff; font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
     .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .cta-btn ha-icon { --mdc-icon-size: 15px; }
@@ -597,7 +620,7 @@ export class EnergyHub extends LitElement {
     this._startAccountLoad('smarthomeshop/account');
 
     try {
-      const [sources, entities, schedules, battery, savings] = await Promise.allSettled([
+      const [sources, entities, schedules, battery, savings, devices] = await Promise.allSettled([
         this._callWS<{ sources: Sources }>(
           { type: 'smarthomeshop/energy_sources' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
@@ -618,13 +641,54 @@ export class EnergyHub extends LitElement {
           { type: 'smarthomeshop/savings' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
         ),
+        this._callWS<{ devices: any[] }>(
+          { type: 'smarthomeshop/devices' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
       ]);
 
-      if (sources.status === 'fulfilled') this._sources = sources.value.sources || {};
+      // While a P1 pick is being saved, a periodic reload racing it must
+      // not overwrite the fresh choice with a stale snapshot.
+      if (sources.status === 'fulfilled' && !this._p1Saving) this._sources = sources.value.sources || {};
       if (entities.status === 'fulfilled') this._priceEntity = entities.value.entities?.electricity_price || undefined;
       if (schedules.status === 'fulfilled') this._schedules = schedules.value.schedules || [];
       if (battery.status === 'fulfilled') this._battery = battery.value.battery || {};
       if (savings.status === 'fulfilled') this._savings = savings.value.savings || {};
+      if (devices.status === 'fulfilled') {
+        const candidates = (devices.value.devices || [])
+          .filter((device: any) => device.product_type === 'p1meterkit' || device.product_type === 'waterp1meterkit');
+        // Only offer P1 meters that are linked to the integration: the net
+        // grid sensor is created by our coordinator, so probing for it also
+        // hands us the entity id per device. An unlinked meter in the picker
+        // would silently show another meter's readings.
+        const probed = await Promise.all(candidates.map(async (device: any) => {
+          try {
+            const response = await this._callWS<{ entities: Array<{ entity_id: string }> }>(
+              { type: 'smarthomeshop/device/entities', device_id: device.id },
+              EnergyHub.INITIAL_LOAD_TIMEOUT,
+            );
+            const match = (response.entities || []).find(entity =>
+              entity.entity_id.startsWith('sensor.') && entity.entity_id.includes('_net_grid_power'));
+            return match ? { device, netEntity: match.entity_id } : null;
+          } catch {
+            return null;
+          }
+        }));
+        const netByDevice: Record<string, string> = {};
+        this._p1Devices = probed
+          .filter((item): item is { device: any; netEntity: string } => item !== null)
+          .map(({ device, netEntity }) => {
+            netByDevice[device.id] = netEntity;
+            return {
+              id: device.id,
+              name: device.name,
+              product_name: device.product_name,
+              online: device.online !== false,
+            };
+          });
+        this._netByDevice = netByDevice;
+      }
+      this._resolveNetEntity();
     } catch (err) {
       console.warn('Energy overview load failed', err);
     } finally {
@@ -686,9 +750,18 @@ export class EnergyHub extends LitElement {
   }
 
   private _startHistoryLoad(): void {
-    if (this._historyLoading) return;
+    if (this._historyLoading) {
+      // A request while a load is in flight (e.g. right after switching the
+      // P1 meter) queues one re-run, so fresh entity ids are always fetched.
+      this._historyQueued = true;
+      return;
+    }
     this._historyLoading = this._loadHistory().finally(() => {
       this._historyLoading = undefined;
+      if (this._historyQueued) {
+        this._historyQueued = false;
+        this._startHistoryLoad();
+      }
     });
   }
 
@@ -746,9 +819,58 @@ export class EnergyHub extends LitElement {
     return Array.from({ length: maxPoints }, (_, index) => points[Math.round(index * step)]);
   }
 
+  // The effective P1 meter: the one picked in Settings, or the only/first
+  // one when nothing is picked. All grid readings on this page follow it.
+  private _effectiveP1(): P1Device | undefined {
+    const chosen = this._sources.p1_device;
+    return (chosen && this._p1Devices.find(device => device.id === chosen)) || this._p1Devices[0];
+  }
+
+  private _resolveNetEntity(): void {
+    const device = this._effectiveP1();
+    this._netEntityId = device ? this._netByDevice[device.id] : undefined;
+  }
+
   private _netEntity(): string | undefined {
+    if (this._netEntityId) return this._netEntityId;
+    // A known meter list means the choice is explicit: never silently show
+    // another meter. The global scan only covers setups where no linked P1
+    // was found (yet), matching the behavior before the picker existed.
+    if (this._p1Devices.length) return undefined;
     return Object.keys(this.hass.states || {})
       .find(entityId => entityId.startsWith('sensor.') && entityId.includes('_net_grid_power'));
+  }
+
+  private async _selectP1(deviceId: string): Promise<void> {
+    // Compare against the SAVED choice, not the effective one: explicitly
+    // picking the implicit default pins it, so a meter added later cannot
+    // silently take over.
+    if (this._p1Saving || !deviceId || deviceId === this._sources.p1_device) return;
+    this._p1Saving = true;
+    try {
+      // Only send the key this dialog owns; the backend merges it over the
+      // stored solar/battery mapping.
+      await this._callWS(
+        {
+          type: 'smarthomeshop/energy_sources/set',
+          config: { p1_device: deviceId },
+        },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
+      this._sources = { ...this._sources, p1_device: deviceId };
+      this._resolveNetEntity();
+      this._history = {};
+      this._startHistoryLoad();
+    } catch (err: any) {
+      console.warn('P1 selection save failed', err);
+      // Put the dropdown back on the meter that is actually in use; a
+      // user-changed select does not follow re-rendered attributes.
+      const select = this.renderRoot.querySelector('.p1-select') as HTMLSelectElement | null;
+      if (select) select.value = this._effectiveP1()?.id || '';
+      alert(`Could not save the P1 meter selection. ${err?.message || 'Administrator rights are required.'}`);
+    } finally {
+      this._p1Saving = false;
+    }
   }
 
   private _scale(entityId?: string): number {
@@ -1811,7 +1933,7 @@ export class EnergyHub extends LitElement {
           <div class="dlg-head">
             <div>
               <div class="dlg-title">Energy settings</div>
-              <div class="dlg-sub">Account, solar and battery for your whole home - set up once, used everywhere.</div>
+              <div class="dlg-sub">Account, ${this._p1Devices.length ? 'P1 meter, ' : ''}solar and battery for your whole home - set up once, used everywhere.</div>
             </div>
             <button class="dlg-x" title="Close" @click=${this._closeSettings}><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
@@ -1822,6 +1944,41 @@ export class EnergyHub extends LitElement {
                 @account-changed=${this._handleAccountChanged}>
               </shs-account-prices>
             </div>
+            ${this._p1Devices.length ? html`
+              <div class="dlg-sec" data-sec="p1">
+                <div class="p1-card">
+                  <div class="p1-head">
+                    <ha-icon icon="mdi:meter-electric-outline"></ha-icon>
+                    <div style="flex: 1; min-width: 0;">
+                      <div class="p1-title">P1 meter</div>
+                      <div class="p1-sub">All grid readings and smart-energy features on this page follow this meter.</div>
+                    </div>
+                  </div>
+                  ${this._p1Devices.length === 1 ? html`
+                    <div class="p1-row">
+                      <span class="p1-name">${this._p1Devices[0].name}</span>
+                      <span class="p1-badge">Selected automatically</span>
+                    </div>
+                  ` : html`
+                    <div class="p1-row">
+                      <select class="p1-select"
+                        ?disabled=${this._p1Saving || !this.hass.user?.is_admin}
+                        @change=${(e: Event) => this._selectP1((e.target as HTMLSelectElement).value)}>
+                        ${this._p1Devices.map(device => html`
+                          <option value=${device.id} ?selected=${device.id === this._effectiveP1()?.id}>
+                            ${device.name} (${device.product_name})${device.online ? '' : ' - offline'}
+                          </option>
+                        `)}
+                      </select>
+                      ${this._p1Saving ? html`<span class="p1-badge">Saving...</span>` : nothing}
+                    </div>
+                    ${!this.hass.user?.is_admin ? html`
+                      <div class="p1-sub" style="margin-top: 6px;">Ask a Home Assistant administrator to change this.</div>
+                    ` : nothing}
+                  `}
+                </div>
+              </div>
+            ` : nothing}
             <div class="dlg-sec ${this._settingsFocus === 'sources' ? 'focus' : ''}" data-sec="sources">
               <shs-energy-sources
                 .hass=${this.hass}
@@ -1848,6 +2005,7 @@ export class EnergyHub extends LitElement {
         EnergyHub.BACKGROUND_LOAD_TIMEOUT,
       );
       this._sources = response.sources || {};
+      this._resolveNetEntity();
       this._history = {};
       this._startHistoryLoad();
 
