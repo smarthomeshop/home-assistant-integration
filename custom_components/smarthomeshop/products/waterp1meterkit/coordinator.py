@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from ..base.p1 import EnergyTracker
 from ..base.water import WaterCoordinator, WaterUsageData
@@ -40,21 +41,29 @@ class WaterP1MeterKitCoordinator(WaterCoordinator):
         """Initialize the WaterP1MeterKit coordinator."""
         super().__init__(hass, config_entry)
 
-        # Extract short device ID from water sensor entity name
-        # e.g., sensor.waterp1meterkit_776c6c_water_total_consumption -> 776c6c
+        # Resolve the ESPHome entity prefix via the entity registry (like
+        # P1MeterKit does), so renamed entities keep working; fall back to
+        # deriving it from the configured water sensor's entity_id.
+        base = None
+        device_id = config_entry.data.get("device_id")
+        if device_id:
+            ent_reg = er.async_get(hass)
+            for entity in er.async_entries_for_device(ent_reg, device_id):
+                match = re.match(r"^sensor\.(.+)_power_consumed$", entity.entity_id)
+                if match:
+                    base = f"sensor.{match.group(1)}"
+                    break
+
         water_sensor = config_entry.data.get(CONF_WATER_SENSOR, "")
         match = re.search(r"waterp1meterkit_([a-f0-9]+)_", water_sensor.lower())
-
         if match:
             short_id = match.group(1)
         else:
-            # Fallback to device_id
             short_id = config_entry.data.get("device_id", "unknown")
-
         self._short_device_id = short_id
 
-        # Build entity IDs using the short ID
-        base = f"sensor.waterp1meterkit_{short_id}"
+        if base is None:
+            base = f"sensor.waterp1meterkit_{short_id}"
         self._energy_tariff1_sensor = f"{base}_energy_consumed_tariff_1"
         self._energy_tariff2_sensor = f"{base}_energy_consumed_tariff_2"
         self._power_sensor = f"{base}_power_consumed"

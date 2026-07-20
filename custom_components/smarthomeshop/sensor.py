@@ -86,16 +86,28 @@ async def async_setup_entry(
 
     # Account-wide dynamic price sensors: hosted by a single entry (the one
     # with the lowest entry_id) so they exist once, not per device.
+    entry_ids = [
+        e.entry_id for e in hass.config_entries.async_entries(DOMAIN)
+        if not e.disabled_by
+    ]
+    is_account_host = bool(entry_ids and config_entry.entry_id == min(entry_ids))
     prices = hass.data.get(DOMAIN, {}).get("prices")
-    if prices is not None and getattr(prices, "has_key", False):
-        entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
-        if entry_ids and config_entry.entry_id == min(entry_ids):
-            from .price_sensors import PRICE_SENSORS, SmartHomeShopPriceSensor
+    if prices is not None and is_account_host:
+        from .price_sensors import PRICE_SENSORS, SmartHomeShopPriceSensor
 
-            entities.extend(
-                SmartHomeShopPriceSensor(prices, description)
-                for description in PRICE_SENSORS
-            )
+        entities.extend(
+            SmartHomeShopPriceSensor(prices, description)
+            for description in PRICE_SENSORS
+        )
+
+    battery_plan = hass.data.get(DOMAIN, {}).get("battery_plan")
+    if is_account_host and battery_plan is not None:
+        from .battery_entities import BATTERY_SENSORS, SmartHomeShopBatterySensor
+
+        entities.extend(
+            SmartHomeShopBatterySensor(battery_plan, description)
+            for description in BATTERY_SENSORS
+        )
 
     async_add_entities(entities)
 

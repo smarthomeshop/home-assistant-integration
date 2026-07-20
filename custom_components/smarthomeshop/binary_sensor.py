@@ -59,7 +59,10 @@ async def async_setup_entry(
     # Account-wide price binary sensors are always hosted by one entry. They
     # remain unavailable until an API key is connected, avoiding a reload when
     # account settings change.
-    entry_ids = [e.entry_id for e in hass.config_entries.async_entries(DOMAIN)]
+    entry_ids = [
+        e.entry_id for e in hass.config_entries.async_entries(DOMAIN)
+        if not e.disabled_by
+    ]
     is_account_host = bool(entry_ids and config_entry.entry_id == min(entry_ids))
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and is_account_host:

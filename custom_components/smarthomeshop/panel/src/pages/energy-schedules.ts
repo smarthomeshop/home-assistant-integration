@@ -264,7 +264,10 @@ export class EnergySchedules extends LitElement {
         await this.hass.callApi('DELETE', `config/automation/config/${autoId(s.id)}`);
       } catch { /* already gone / never created */ }
       await this._loadSchedules();
-    } catch (err) { console.error('energy-schedules: delete failed', err); }
+    } catch (err) {
+      console.error('energy-schedules: delete failed', err);
+      this._error = 'Could not delete the schedule. Administrator rights are required.';
+    }
   }
 
   private _live(s: Schedule): { active: boolean; next_start?: string | null; forced?: boolean } {
@@ -403,6 +406,7 @@ export class EnergySchedules extends LitElement {
         Have a load finished by a set time in the cheapest hours - e.g. "car ready by 07:00, needs 4 hours".
         The deadline is met whenever the price feed is available (unless the optional fuse guard is waiting for free capacity).
       </div>
+      ${this._error && !this._modal ? html`<div class="warn">${this._error}</div>` : nothing}
       ${this._schedules.length === 0
         ? html`<div class="empty">No schedules yet. Add one to charge or run a device by a deadline in the cheapest hours.</div>`
         : this._schedules.map(s => this._renderItem(s, isAdmin))}

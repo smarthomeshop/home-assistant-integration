@@ -52,9 +52,16 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
     consumed_t1_entity = f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_1"
     consumed_t2_entity = f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_2"
 
-    # Energy RETURNED source entities (for solar/teruglevering)
-    returned_t1_entity = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_1"
-    returned_t2_entity = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_2"
+    # Energy RETURNED source entities (for solar/teruglevering). Firmware
+    # variants name these either energy_returned_tariff_X or
+    # energy_produced_tariff_X; pick whichever actually exists.
+    def _returned_entity(tariff: int) -> str:
+        returned = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_{tariff}"
+        produced = f"sensor.waterp1meterkit_{short_id}_energy_produced_tariff_{tariff}"
+        return returned if hass.states.get(returned) else produced
+
+    returned_t1_entity = _returned_entity(1)
+    returned_t2_entity = _returned_entity(2)
 
     # The raw pulse total is intentional here. Utility meters calculate period
     # deltas and handle source resets, while the absolute Water Meter Total can

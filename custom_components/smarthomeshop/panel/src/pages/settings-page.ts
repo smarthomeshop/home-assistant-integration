@@ -55,6 +55,7 @@ export class SettingsPage extends LitElement {
   @state() private _productType = '';
   @state() private _savingConfig = false;
   @state() private _configSaved = false;
+  @state() private _configError = '';
   @state() private _contractActive = false;
   @state() private _contractName: string | null = null;
 
@@ -136,6 +137,7 @@ export class SettingsPage extends LitElement {
     .cfg-unit { font-size: 12px; color: var(--secondary-text-color); min-width: 34px; }
     .cfg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--divider-color); }
     .cfg-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: #22c55e; }
+    .cfg-error { font-size: 12.5px; color: #ef4444; }
     .cfg-saved ha-icon { --mdc-icon-size: 15px; }
     .cfg-save { padding: 9px 18px; border: none; border-radius: 8px; background: var(--shs-primary); color: #fff; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; }
     .cfg-save:disabled { opacity: 0.5; cursor: default; }
@@ -209,9 +211,11 @@ export class SettingsPage extends LitElement {
         values: this._configValues,
       });
       this._configSaved = true;
+      this._configError = '';
       window.setTimeout(() => { this._configSaved = false; }, 2500);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save config:', err);
+      this._configError = `Could not save: ${err?.message || 'unknown error'}`;
     }
     this._savingConfig = false;
   }
@@ -275,6 +279,7 @@ export class SettingsPage extends LitElement {
         ${visibleFields.map(f => this._renderConfigField(f))}
         <div class="cfg-foot">
           ${this._configSaved ? html`<span class="cfg-saved"><ha-icon icon="mdi:check-circle"></ha-icon> Saved</span>` : nothing}
+          ${this._configError ? html`<span class="cfg-error">${this._configError}</span>` : nothing}
           <button class="cfg-save" ?disabled=${!isAdmin || this._savingConfig} @click=${this._saveConfig}>
             ${this._savingConfig ? 'Saving...' : 'Save settings'}
           </button>

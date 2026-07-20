@@ -911,6 +911,12 @@ export class EnergyHub extends LitElement {
             }) : nothing}
           </div>
         </div>
+        ${!this._netEntity() ? html`
+          <div class="setup-note">
+            <ha-icon icon="mdi:transmission-tower-off"></ha-icon>
+            <div>No SmartHomeShop P1 meter is set up, so there is no live grid reading. Add a P1MeterKit or WaterP1MeterKit for grid power; solar and battery readings work as soon as you connect them in Settings.</div>
+          </div>
+        ` : nothing}
         ${!this._sources.solar_power && !this._sources.battery_power ? html`
           <div class="setup-note">
             <ha-icon icon="mdi:connection"></ha-icon>

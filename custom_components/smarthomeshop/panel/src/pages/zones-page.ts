@@ -342,7 +342,7 @@ export class ZonesPage extends LitElement {
     .zone-type-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
     .zone-type-btn span { display: block; font-size: 12px; color: #94a3b8; margin-top: 4px; }
     .zone-type-btn.active span { color: #4361ee; }
-    @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; } .sidebar-right { display: none; } }
+    @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; } .sidebar-right { grid-column: 1 / -1; max-height: 45vh; overflow-y: auto; } }
     .view-toggle { display: flex; background: #0f172a; border: 1px solid #334155; border-radius: 8px; overflow: hidden; }
     .view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
@@ -675,7 +675,10 @@ export class ZonesPage extends LitElement {
       this.rooms = [...this.rooms, newRoom];
       this._selectRoom(newRoom.id);
       this._showNewRoomDialog = false;
-    } catch (err) { console.error('Failed to create room:', err); }
+    } catch (err) {
+      console.error('Failed to create room:', err);
+      window.alert('Could not create the room. Administrator rights are required and the name must be filled in.');
+    }
   }
 
   private _handleKeyDown = (e: KeyboardEvent) => {
@@ -905,7 +908,10 @@ export class ZonesPage extends LitElement {
       await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
       this.rooms = this.rooms.map(r => r.id === this._selectedRoomId ? updatedRoom as any : r);
       this._dirty = false;
-    } catch (err) { console.error('Failed to save room:', err); }
+    } catch (err) {
+      console.error('Failed to save room:', err);
+      window.alert('Could not save the room. Check that you are an administrator and try again.');
+    }
     finally { this._saving = false; }
   }
 

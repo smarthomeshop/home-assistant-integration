@@ -19,6 +19,7 @@ export class AccountPrices extends LitElement {
   @state() private _syncing = false;
   @state() private _contracts: any[] = [];
   @state() private _error: string | null = null;
+  private _refreshFollow?: Promise<void>;
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; }
@@ -66,6 +67,7 @@ export class AccountPrices extends LitElement {
     .btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .btn.ghost.danger { color: #ef4444; }
     .hint { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 12px; line-height: 1.5; }
+    .warn { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 12px; color: var(--primary-text-color); line-height: 1.45; }
     .hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
     .linkbtn { margin-top: 10px; background: none; border: none; padding: 0; color: var(--shs-primary); font-size: 12px; font-family: inherit; cursor: pointer; }
     .linkbtn:hover { text-decoration: underline; }
@@ -78,27 +80,54 @@ export class AccountPrices extends LitElement {
     this._load();
   }
 
+  private async _callWS<T = any>(message: Record<string, unknown>, timeoutMs = 20000): Promise<T> {
+    let timeoutId: number | undefined;
+    try {
+      return await Promise.race([
+        this.hass.callWS<T>(message),
+        new Promise<T>((_, reject) => {
+          timeoutId = window.setTimeout(
+            () => reject(new Error('The connection check timed out.')),
+            timeoutMs,
+          );
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    }
+  }
+
   private async _load(): Promise<void> {
     try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account' });
+      this._account = await this._callWS({ type: 'smarthomeshop/account' }, 8000);
       this._baseUrlInput = this._account?.base_url || '';
       if (this._account?.status === 'ok') this._loadContracts();
+      this._startRefreshFollow();
     } catch (err) { console.error('account load failed', err); }
   }
 
   private async _loadContracts(): Promise<void> {
     try {
-      const res = await this.hass.callWS<{ contracts: any[] }>({ type: 'smarthomeshop/account/contracts' });
+      const res = await this._callWS<{ contracts: any[] }>({ type: 'smarthomeshop/account/contracts' }, 8000);
       this._contracts = res.contracts || [];
     } catch (err) { console.error('contracts load failed', err); }
   }
 
   private async _selectContract(id: string): Promise<void> {
+    if (this._savingKey) return;
     this._savingKey = true;
+    this._error = null;
     try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', contract_id: id });
-    } catch (err) { console.error('select contract failed', err); }
-    this._savingKey = false;
+      this._account = await this._callWS({ type: 'smarthomeshop/account/set', contract_id: id }, 12000);
+      if (this._account?.status === 'ok') void this._loadContracts();
+      this._notifyAccountChanged();
+      this._startRefreshFollow();
+    } catch (err) {
+      console.error('select contract failed', err);
+      this._error = err instanceof Error ? err.message : 'Could not select the contract.';
+    } finally {
+      this._savingKey = false;
+    }
   }
 
   private async _save(): Promise<void> {
@@ -114,30 +143,85 @@ export class AccountPrices extends LitElement {
       };
       const key = this._apiKeyInput.trim();
       if (key) payload.api_key = key;
-      this._account = await this.hass.callWS(payload);
+      this._account = await this._callWS(payload, 12000);
       this._apiKeyInput = '';
-      this._showKeyForm = false;
+      this._showKeyForm = this._account?.status !== 'ok';
+      if (this._account?.status === 'ok') void this._loadContracts();
+      this._notifyAccountChanged();
+      this._startRefreshFollow();
     } catch (err) {
       console.error('account save failed', err);
-      this._error = 'Could not save - please try again.';
+      this._error = err instanceof Error ? err.message : 'Could not save - please try again.';
+    } finally {
+      this._savingKey = false;
     }
-    this._savingKey = false;
   }
 
   private async _syncNow(): Promise<void> {
     if (this._syncing) return;
     this._syncing = true;
+    this._error = null;
     try {
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/refresh' });
+      const account = await this._callWS({ type: 'smarthomeshop/account/refresh' }, 12000);
+      this._account = await this._waitForRefresh(account);
       if (this._account?.status === 'ok') this._loadContracts();
-    } catch (err) { console.error('sync failed', err); }
-    this._syncing = false;
+      this._notifyAccountChanged();
+    } catch (err) {
+      console.error('sync failed', err);
+      this._error = err instanceof Error ? err.message : 'Could not refresh prices.';
+    } finally {
+      this._syncing = false;
+    }
+  }
+
+  private _startRefreshFollow(): void {
+    if (!this._account?.refreshing || this._refreshFollow) return;
+    this._syncing = true;
+    this._refreshFollow = this._waitForRefresh(this._account)
+      .then(account => {
+        this._account = account;
+        if (account?.status === 'ok') void this._loadContracts();
+        this._notifyAccountChanged();
+      })
+      .catch(err => console.warn('price refresh status polling failed', err))
+      .finally(() => {
+        this._syncing = false;
+        this._refreshFollow = undefined;
+      });
+  }
+
+  private async _waitForRefresh(account: any): Promise<any> {
+    let current = account;
+    const deadline = Date.now() + 45000;
+    let lastError: unknown;
+    while (current?.refreshing && this.isConnected && Date.now() < deadline) {
+      await new Promise(resolve => window.setTimeout(resolve, 1500));
+      try {
+        current = await this._callWS({ type: 'smarthomeshop/account' }, 8000);
+        this._account = current;
+        lastError = undefined;
+      } catch (err) {
+        // Home Assistant can briefly replace the WebSocket while integrations
+        // are being set up. Keep following the existing background refresh.
+        lastError = err;
+      }
+    }
+    if (current?.refreshing && lastError) throw lastError;
+    return current;
   }
 
   private _moreInfo(entityId?: string): void {
     if (!entityId) return;
     this.dispatchEvent(new CustomEvent('hass-more-info', {
       detail: { entityId },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _notifyAccountChanged(): void {
+    this.dispatchEvent(new CustomEvent('account-changed', {
+      detail: { account: this._account },
       bubbles: true,
       composed: true,
     }));
@@ -178,12 +262,14 @@ export class AccountPrices extends LitElement {
     this._error = null;
     try {
       // Explicit null = disconnect (an empty string is ignored by the backend).
-      this._account = await this.hass.callWS({ type: 'smarthomeshop/account/set', api_key: null });
+      this._account = await this._callWS({ type: 'smarthomeshop/account/set', api_key: null });
+      this._notifyAccountChanged();
     } catch (err) {
       console.error('disconnect failed', err);
-      this._error = 'Could not disconnect - please try again.';
+      this._error = err instanceof Error ? err.message : 'Could not disconnect - please try again.';
+    } finally {
+      this._savingKey = false;
     }
-    this._savingKey = false;
   }
 
   protected render() {
@@ -191,7 +277,8 @@ export class AccountPrices extends LitElement {
     const status = a?.status || 'unconfigured';
     const cur = a?.current;
     const statusText: Record<string, string> = {
-      unconfigured: 'The integration works fully locally - no account needed. Connect a key only to pull live dynamic spot prices.',
+      unconfigured: 'Connect once here to use live dynamic spot prices across SmartHomeShop Energy. The integration keeps working locally without an account.',
+      connecting: 'Checking your API key and loading dynamic energy prices...',
       ok: 'Connected - live prices are being fetched.',
       unauthorized: 'That API key is invalid or was revoked.',
       forbidden: 'The price service rejected this key. Create a new API token in your account.',
@@ -211,7 +298,9 @@ export class AccountPrices extends LitElement {
             <div class="status-icon ${cls}"><ha-icon icon="mdi:cloud-outline"></ha-icon></div>
             <div class="status-text">
               ${a?.has_key ? html`<span class="status-badge ${cls === 'ok' ? 'ok' : 'alert'}">${status === 'ok' ? 'Connected' : status}</span>` : nothing}
-              ${statusText[status] || statusText.error}
+              ${status === 'error' && a?.last_error
+                ? a.last_error
+                : statusText[status] || statusText.error}
             </div>
           </div>
 
@@ -237,8 +326,13 @@ export class AccountPrices extends LitElement {
             <div class="hint">
               ${!a?.contract_id
                 ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account, so prices update by themselves when you switch contracts there. Pick a specific contract above to pin it instead.`
-                : html`This device is pinned to a specific contract. Choose <b>Active contract (automatic)</b> to always follow the active contract in your account instead.`}
+                : html`SmartHomeShop Energy is pinned to a specific contract. Choose <b>Active contract (automatic)</b> to always follow the active contract in your account instead.`}
             </div>
+            ${a?.contract_id && !a?.contract ? html`
+              <div class="warn">
+                The pinned contract no longer exists in your account, so generic prices without
+                contract tariffs are used. Pick another contract above.
+              </div>` : nothing}
           ` : nothing}
 
           ${status === 'ok' && cur ? html`
@@ -299,6 +393,9 @@ export class AccountPrices extends LitElement {
               <button class="btn primary" ?disabled=${!this._apiKeyInput.trim() || this._savingKey} @click=${this._save}>
                 ${this._savingKey ? 'Connecting...' : 'Connect'}
               </button>
+              ${a?.has_key ? html`
+                <button class="btn ghost" @click=${() => { this._showKeyForm = false; this._apiKeyInput = ''; }}>Cancel</button>
+              ` : nothing}
             </div>
             <div class="hint">
               Fixed prices are set above and are free. For live dynamic spot prices, create an
