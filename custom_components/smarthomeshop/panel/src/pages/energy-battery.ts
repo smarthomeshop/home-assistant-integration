@@ -122,6 +122,7 @@ export class EnergyBattery extends LitElement {
     .section:first-child { margin-top: 0; }
     .field { margin-bottom: 14px; min-width: 0; }
     label.f { display: block; font-size: 12px; font-weight: 600; color: var(--secondary-text-color); margin: 0 0 6px; }
+    .locked { padding: 9px 12px; border: 1px dashed var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 13.5px; }
     .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
     select, input[type='number'] { width: 100%; box-sizing: border-box; min-height: 40px; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
     select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
@@ -244,7 +245,17 @@ export class EnergyBattery extends LitElement {
       planning_hours: 36,
       ...this._cfg,
     };
+    // The Solar & battery mapping is the single source of truth for these:
+    // when mapped there, it overrides whatever was saved here before.
+    if (sources.battery_soc) this._form.soc_sensor = sources.battery_soc;
+    if (sources.battery_capacity_kwh != null) this._form.capacity_kwh = sources.battery_capacity_kwh;
+    if (sources.pv_forecast) this._form.pv_forecast_sensor = sources.pv_forecast;
     this._modal = true;
+  }
+
+  private _friendly(entityId?: string): string {
+    if (!entityId) return '';
+    return (this.hass.states[entityId]?.attributes?.friendly_name as string) || entityId;
   }
 
   private _set<K extends keyof BatteryConfig>(key: K, value: BatteryConfig[K]): void {
@@ -388,11 +399,22 @@ export class EnergyBattery extends LitElement {
             <div class="two">
               <div class="field">
                 <label class="f">State-of-charge sensor</label>
-                <select @change=${(event: Event) => this._set('soc_sensor', (event.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(['sensor'], 'battery').map(option => html`<option value=${option.value} ?selected=${option.value === form.soc_sensor}>${option.label}</option>`)}
-                </select>
+                ${this._sources?.battery_soc ? html`
+                  <div class="locked">${this._friendly(this._sources.battery_soc)}</div>
+                  <div class="help">From Solar &amp; battery - change it there.</div>
+                ` : html`
+                  <select @change=${(event: Event) => this._set('soc_sensor', (event.target as HTMLSelectElement).value)}>
+                    ${this._entityOptions(['sensor'], 'battery').map(option => html`<option value=${option.value} ?selected=${option.value === form.soc_sensor}>${option.label}</option>`)}
+                  </select>
+                `}
               </div>
-              ${this._renderNumber('capacity_kwh', 'Usable capacity (kWh)', 10, 0.5, 500, 0.1)}
+              ${this._sources?.battery_capacity_kwh != null ? html`
+                <div class="field">
+                  <label class="f">Usable capacity (kWh)</label>
+                  <div class="locked">${this._sources.battery_capacity_kwh} kWh</div>
+                  <div class="help">From Solar &amp; battery - change it there.</div>
+                </div>
+              ` : this._renderNumber('capacity_kwh', 'Usable capacity (kWh)', 10, 0.5, 500, 0.1)}
             </div>
             <div class="two">
               ${this._renderNumber('reserve_soc', 'Protected reserve SoC (%)', 15, 0, 90, 1)}
@@ -407,10 +429,15 @@ export class EnergyBattery extends LitElement {
             <div class="two">
               <div class="field">
                 <label class="f">Solar forecast (optional)</label>
-                <select @change=${(event: Event) => this._set('pv_forecast_sensor', (event.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.pv_forecast_sensor}>${option.label}</option>`)}
-                </select>
-                <div class="help">Hourly forecast attributes are used when available.</div>
+                ${this._sources?.pv_forecast ? html`
+                  <div class="locked">${this._friendly(this._sources.pv_forecast)}</div>
+                  <div class="help">From Solar &amp; battery - change it there.</div>
+                ` : html`
+                  <select @change=${(event: Event) => this._set('pv_forecast_sensor', (event.target as HTMLSelectElement).value)}>
+                    ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.pv_forecast_sensor}>${option.label}</option>`)}
+                  </select>
+                  <div class="help">Hourly forecast attributes are used when available.</div>
+                `}
               </div>
               <div class="field">
                 <label class="f">House load forecast (optional)</label>

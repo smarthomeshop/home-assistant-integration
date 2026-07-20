@@ -19,8 +19,8 @@ from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
 class RoomQualityData:
     """Data class for room quality calculation."""
 
-    score: float
-    score_percentage: int
+    score: float | None
+    score_percentage: int | None
     label: str
     color: str
     recommendations: list[str]
@@ -107,24 +107,47 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         # Get entity registry
         entity_registry = er.async_get(self.hass)
 
-        # Find all entities for this device directly by device_id
+        # Collect this device's sensor entities, skipping settings/diagnostic
+        # entities that share the same words (offsets, calibration targets).
+        excluded = ("offset", "calibrat", "target", "interval", "threshold", "manual")
+        candidates: list[str] = []
         for entity in entity_registry.entities.values():
-            if entity.device_id == self._device_id:
-                entity_id_lower = entity.entity_id.lower()
-                for pattern in patterns[sensor_type]:
-                    if pattern in entity_id_lower:
-                        LOGGER.debug("Found sensor %s: %s", sensor_type, entity.entity_id)
-                        return entity.entity_id
+            if entity.device_id != self._device_id:
+                continue
+            if entity.domain != "sensor":
+                continue
+            object_id = entity.entity_id.split(".", 1)[1].lower()
+            if any(word in object_id for word in excluded):
+                continue
+            candidates.append(entity.entity_id)
+
+        # Prefer an exact suffix match (e.g. ..._co2); fall back to a
+        # substring match only when no suffix match exists. Sorted candidates
+        # keep the choice deterministic instead of registry-order dependent.
+        for pattern in patterns[sensor_type]:
+            for entity_id in sorted(candidates):
+                object_id = entity_id.split(".", 1)[1].lower()
+                if object_id.endswith(f"_{pattern}") or object_id == pattern:
+                    LOGGER.debug("Found sensor %s: %s", sensor_type, entity_id)
+                    return entity_id
+        for pattern in patterns[sensor_type]:
+            for entity_id in sorted(candidates):
+                if pattern in entity_id.lower():
+                    LOGGER.debug("Found sensor %s (substring): %s", sensor_type, entity_id)
+                    return entity_id
 
         LOGGER.debug("No sensor found for type %s on device %s", sensor_type, self._device_id)
         return None
 
     def _get_sensor_value(self, sensor_type: str) -> float | None:
         """Get the current value of a sensor."""
-        # First check cached entity ID
-        if sensor_type in self._sensor_ids:
-            entity_id = self._sensor_ids[sensor_type]
-        else:
+        # Cached entity id, revalidated: a renamed/removed entity must not
+        # pin the lookup to a dead id forever.
+        entity_id = self._sensor_ids.get(sensor_type)
+        if entity_id and self.hass.states.get(entity_id) is None:
+            self._sensor_ids.pop(sensor_type, None)
+            entity_id = None
+        if not entity_id:
             entity_id = self._find_sensor_entity(sensor_type)
             if entity_id:
                 self._sensor_ids[sensor_type] = entity_id
@@ -313,17 +336,19 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
             total_score += humidity_score * weights["humidity"]
             weight_sum += weights["humidity"]
 
-        # Calculate final score (weighted average)
+        # Calculate final score (weighted average). With no readable sensors
+        # (device offline) report unknown instead of inventing a mid-scale
+        # score that looks like a real reading.
         if weight_sum > 0:
-            score = total_score / weight_sum
+            score = max(0.0, min(10.0, total_score / weight_sum))
         else:
-            score = 5.0  # Default if no sensors available
-
-        # Clamp score
-        score = max(0.0, min(10.0, score))
+            score = None
 
         # Determine label and color based on score
-        if score >= 8.5:
+        if score is None:
+            label = "Unknown"
+            color = "#9CA3AF"  # Gray
+        elif score >= 8.5:
             label = "Excellent"
             color = "#22C55E"  # Green
         elif score >= 7.0:
@@ -344,8 +369,8 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         sorted_recommendations = [rec[0] for rec in recommendations[:5]]
 
         return RoomQualityData(
-            score=round(score, 1),
-            score_percentage=int(score * 10),
+            score=round(score, 1) if score is not None else None,
+            score_percentage=int(score * 10) if score is not None else None,
             label=label,
             color=color,
             recommendations=sorted_recommendations,

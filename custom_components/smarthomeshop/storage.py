@@ -36,6 +36,7 @@ class SmartHomeShopStore:
         self._data.setdefault("battery", {})
         self._data.setdefault("energy_sources", {})
         self._data.setdefault("water_anchors", {})
+        self._data.setdefault("schedule_runtime", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -152,4 +153,19 @@ class SmartHomeShopStore:
     async def async_set_water_anchors(self, entry_id: str, anchors: dict[str, Any]) -> None:
         """Persist the period anchors for a water device."""
         self._data.setdefault("water_anchors", {})[entry_id] = anchors
+        await self.async_save()
+
+    # ---- Deadline-schedule runtime (per schedule, per deadline cycle) ----
+    # How long a scheduled load already ran this cycle, so a finished load is
+    # not forced on again at the deadline (and survives restarts).
+
+    def get_schedule_runtime(self, schedule_id: str) -> dict[str, Any]:
+        """Return the persisted runtime state for a schedule."""
+        return dict(self._data.get("schedule_runtime", {}).get(schedule_id, {}))
+
+    async def async_set_schedule_runtime(
+        self, schedule_id: str, runtime: dict[str, Any]
+    ) -> None:
+        """Persist the runtime state for a schedule."""
+        self._data.setdefault("schedule_runtime", {})[schedule_id] = runtime
         await self.async_save()

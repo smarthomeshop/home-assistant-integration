@@ -66,10 +66,22 @@ async def async_register_battery_services(hass: HomeAssistant) -> None:
                 "switch", service, {"entity_id": entity_id}, blocking=True
             )
         elif kind == "number":
+            # Prefer the planner's power for this step (it already honours
+            # grid limits and the optimised profile); the configured powers
+            # act as hard caps. Only trust it when it matches the action.
+            plan_power = None
+            if not explicit_action and plan.get("recommendation") == action:
+                try:
+                    plan_power = abs(float(plan.get("target_power_w")))
+                except (TypeError, ValueError):
+                    plan_power = None
             if action == "charge":
-                value = abs(float(config.get("charge_power") or 0))
+                cap = abs(float(config.get("charge_power") or 0))
+                value = min(plan_power, cap) if plan_power and cap else (plan_power or cap)
             elif action == "discharge":
-                value = -abs(float(config.get("max_discharge_power") or 0))
+                cap = abs(float(config.get("max_discharge_power") or 0))
+                magnitude = min(plan_power, cap) if plan_power and cap else (plan_power or cap)
+                value = -magnitude
             else:
                 # Hold means idle. On a SIGNED power number the entity minimum
                 # is full discharge, so never use it as the idle value; write 0

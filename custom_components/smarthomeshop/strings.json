@@ -3,19 +3,19 @@
     "step": {
       "user": {
         "title": "SmartHomeShop.io",
-        "description": "Voeg een SmartHomeShop product toe aan Home Assistant.\n\nSelecteer het product dat overeenkomt met je fysieke apparaat. Het apparaat moet al online zijn in Home Assistant via de ESPHome integratie.",
+        "description": "Add a SmartHomeShop product to Home Assistant.\n\nSelect the product that matches your physical device. The device must already be online in Home Assistant through the ESPHome integration.",
         "data": {
           "product_type": "Product"
         },
         "data_description": {
-          "product_type": "Kies het SmartHomeShop product dat je wilt configureren."
+          "product_type": "Choose the SmartHomeShop product you want to configure."
         }
       },
       "device": {
-        "title": "Selecteer {product_name}",
-        "description": "{product_description}\n\nSelecteer het ESPHome apparaat dat bij dit product hoort.",
+        "title": "Select {product_name}",
+        "description": "{product_description}\n\nSelect the ESPHome device that belongs to this product.",
         "data": {
-          "device_id": "ESPHome apparaat"
+          "device_id": "ESPHome device"
         }
       },
       "water_options": {
@@ -40,13 +40,13 @@
       }
     },
     "error": {
-      "no_water_sensor": "Geen watersensor gevonden op dit apparaat",
-      "device_not_found": "Apparaat niet gevonden",
-      "cannot_connect": "Kan niet verbinden met het apparaat"
+      "no_water_sensor": "No water sensor found on this device",
+      "device_not_found": "Device not found",
+      "cannot_connect": "Cannot connect to the device"
     },
     "abort": {
-      "already_configured": "Dit apparaat is al geconfigureerd",
-      "no_devices_found": "Geen apparaten van dit type gevonden. Zorg dat je ESPHome apparaat is toegevoegd en online is."
+      "already_configured": "This device is already configured",
+      "no_devices_found": "No devices of this type found.\n\nMake sure your SmartHomeShop device is added to Home Assistant via the ESPHome integration and is online.\n\nFor setup instructions, visit: docs.smarthomeshop.io"
     }
   },
   "options": {
@@ -83,42 +83,135 @@
   "entity": {
     "sensor": {
       "current_flow_rate": {
-        "name": "Huidig waterverbruik"
+        "name": "Current water usage"
       },
       "today_usage": {
-        "name": "Verbruik vandaag"
+        "name": "Usage today"
       },
       "week_usage": {
-        "name": "Verbruik deze week"
+        "name": "Usage this week"
       },
       "month_usage": {
-        "name": "Verbruik deze maand"
+        "name": "Usage this month"
       },
       "year_usage": {
-        "name": "Verbruik dit jaar"
+        "name": "Usage this year"
       },
       "continuous_flow_duration": {
-        "name": "Continue flow duur"
+        "name": "Continuous flow duration"
+      },
+      "flow1_current_flow_rate": {
+        "name": "Flow 1 current usage"
+      },
+      "flow1_today_usage": {
+        "name": "Flow 1 usage today"
+      },
+      "flow1_week_usage": {
+        "name": "Flow 1 usage this week"
+      },
+      "flow1_month_usage": {
+        "name": "Flow 1 usage this month"
+      },
+      "flow1_year_usage": {
+        "name": "Flow 1 usage this year"
+      },
+      "flow1_leak_score": {
+        "name": "Flow 1 leak score"
+      },
+      "flow1_continuous_flow_duration": {
+        "name": "Flow 1 continuous flow duration"
+      },
+      "flow2_current_flow_rate": {
+        "name": "Flow 2 current usage"
+      },
+      "flow2_today_usage": {
+        "name": "Flow 2 usage today"
+      },
+      "flow2_week_usage": {
+        "name": "Flow 2 usage this week"
+      },
+      "flow2_month_usage": {
+        "name": "Flow 2 usage this month"
+      },
+      "flow2_year_usage": {
+        "name": "Flow 2 usage this year"
+      },
+      "flow2_leak_score": {
+        "name": "Flow 2 leak score"
+      },
+      "flow2_continuous_flow_duration": {
+        "name": "Flow 2 continuous flow duration"
+      },
+      "combined_flow_rate": {
+        "name": "Total current usage"
+      },
+      "combined_today_usage": {
+        "name": "Total usage today"
+      },
+      "combined_week_usage": {
+        "name": "Total usage this week"
+      },
+      "combined_month_usage": {
+        "name": "Total usage this month"
+      },
+      "combined_year_usage": {
+        "name": "Total usage this year"
       }
     },
     "binary_sensor": {
       "continuous_flow_leak": {
-        "name": "Continue flow lek"
+        "name": "Continuous flow leak"
       },
       "night_usage_detected": {
-        "name": "Nachtelijk verbruik"
+        "name": "Night usage"
       },
       "micro_leak_detected": {
-        "name": "Micro lek"
+        "name": "Micro leak"
       },
       "vacation_mode_leak": {
-        "name": "Vakantie lek"
+        "name": "Vacation leak"
       },
       "any_leak_alert": {
-        "name": "Lek alarm"
+        "name": "Leak alert"
       },
       "water_flowing": {
-        "name": "Water stroomt"
+        "name": "Water flowing"
+      },
+      "flow1_smart_leak_detected": {
+        "name": "Flow 1 smart leak detection"
+      },
+      "flow1_continuous_flow_leak": {
+        "name": "Flow 1 continuous flow leak"
+      },
+      "flow1_micro_leak_detected": {
+        "name": "Flow 1 micro leak"
+      },
+      "flow1_water_flowing": {
+        "name": "Flow 1 water flowing"
+      },
+      "flow1_baseline_ready": {
+        "name": "Flow 1 baseline learned"
+      },
+      "flow2_smart_leak_detected": {
+        "name": "Flow 2 smart leak detection"
+      },
+      "flow2_continuous_flow_leak": {
+        "name": "Flow 2 continuous flow leak"
+      },
+      "flow2_micro_leak_detected": {
+        "name": "Flow 2 micro leak"
+      },
+      "flow2_water_flowing": {
+        "name": "Flow 2 water flowing"
+      },
+      "flow2_baseline_ready": {
+        "name": "Flow 2 baseline learned"
+      },
+      "any_leak_detected": {
+        "name": "Leak detection (both flows)"
+      },
+      "any_water_flowing": {
+        "name": "Water flowing (both flows)"
       }
     }
   },

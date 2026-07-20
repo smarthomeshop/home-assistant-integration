@@ -97,6 +97,7 @@ def compute_plan(
     ready_by: str | None,
     earliest: str | None = None,
     interruptible: bool = True,
+    hours_done: float = 0.0,
 ) -> SchedulePlan:
     """Decide whether the load should run right now.
 
@@ -104,6 +105,8 @@ def compute_plan(
     typically today + tomorrow from the price coordinator.
     interruptible: if False, choose the cheapest CONTIGUOUS block (for loads
     like a dishwasher that cannot pause); if True, the cheapest hours overall.
+    hours_done: hours the load already ran in the current deadline cycle, so a
+    finished load is not forced on again as the deadline approaches.
     """
     if hours_needed <= 0:
         return SchedulePlan(hours_needed=hours_needed, reason="nothing_needed")
@@ -111,6 +114,16 @@ def compute_plan(
     deadline = _resolve_deadline(now, ready_by)
     if deadline is None:
         return SchedulePlan(hours_needed=hours_needed, reason="no_deadline")
+
+    # Subtract what already ran this cycle; done means done until the next
+    # deadline rolls the cycle over.
+    remaining_needed = hours_needed - int(hours_done)
+    if remaining_needed <= 0:
+        return SchedulePlan(
+            hours_needed=hours_needed,
+            reason="done",
+        )
+    hours_needed = remaining_needed
 
     earliest_dt = _resolve_earliest(now, earliest, deadline)
 
