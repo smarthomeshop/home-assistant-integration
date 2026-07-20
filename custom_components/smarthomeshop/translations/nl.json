@@ -20,7 +20,7 @@
       },
       "water_options": {
         "title": "Lekdetectie",
-        "description": "Deze sensoren zijn op je apparaat gevonden:\n- Waterverbruik: `{water_sensor}`\n- Doorstroom: `{flow_sensor}`\n\nDe lekdetectie bewaakt deze sensoren en voegt alarm-entiteiten toe aan Home Assistant. Kies instellingen die bij je huishouden passen — je kunt alles later aanpassen via **Configureren**.",
+        "description": "Deze sensoren zijn op je apparaat gevonden:\n- Waterverbruik: `{water_sensor}`\n- Doorstroom: `{flow_sensor}`\n\nDe lekdetectie bewaakt deze sensoren en voegt alarm-entiteiten toe aan Home Assistant. Kies instellingen die bij je huishouden passen. Je kunt alles later aanpassen via **Configureren**.",
         "data": {
           "continuous_flow_minutes": "Continu-stroom alarm na",
           "night_start": "Nachtbewaking start",
@@ -46,7 +46,10 @@
     },
     "abort": {
       "already_configured": "Dit apparaat is al ingesteld",
-      "no_devices_found": "Geen apparaten van dit type gevonden.\n\nControleer of je SmartHomeShop-apparaat via de ESPHome-integratie aan Home Assistant is toegevoegd en online is.\n\nInstallatie-instructies: docs.smarthomeshop.io"
+      "no_devices_found": "Geen apparaten van dit type gevonden.\n\nControleer of je SmartHomeShop-apparaat via de ESPHome-integratie aan Home Assistant is toegevoegd en online is.\n\nInstallatie-instructies: docs.smarthomeshop.io",
+      "invalid_link_request": "Dit koppelverzoek is niet geldig",
+      "device_not_found": "Apparaat niet gevonden",
+      "no_water_sensor": "Er is geen watersensor gevonden op dit apparaat. Controleer of het apparaat online is en of de watersensoren in Home Assistant zijn ingeschakeld en probeer het opnieuw."
     }
   },
   "options": {

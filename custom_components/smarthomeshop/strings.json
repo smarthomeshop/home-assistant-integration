@@ -20,7 +20,7 @@
       },
       "water_options": {
         "title": "Leak detection",
-        "description": "These sensors were found on your device:\n- Water usage: `{water_sensor}`\n- Flow rate: `{flow_sensor}`\n\nLeak detection watches these sensors and adds alert entities to Home Assistant. Pick settings that match your household — you can change everything later via **Configure**.",
+        "description": "These sensors were found on your device:\n- Water usage: `{water_sensor}`\n- Flow rate: `{flow_sensor}`\n\nLeak detection watches these sensors and adds alert entities to Home Assistant. Pick settings that match your household. You can change everything later via **Configure**.",
         "data": {
           "continuous_flow_minutes": "Continuous flow alarm after",
           "night_start": "Night monitoring starts",
@@ -46,7 +46,10 @@
     },
     "abort": {
       "already_configured": "This device is already configured",
-      "no_devices_found": "No devices of this type found.\n\nMake sure your SmartHomeShop device is added to Home Assistant via the ESPHome integration and is online.\n\nFor setup instructions, visit: docs.smarthomeshop.io"
+      "no_devices_found": "No devices of this type found.\n\nMake sure your SmartHomeShop device is added to Home Assistant via the ESPHome integration and is online.\n\nFor setup instructions, visit: docs.smarthomeshop.io",
+      "invalid_link_request": "This link request is not valid",
+      "device_not_found": "Device not found",
+      "no_water_sensor": "No water sensor was found on this device. Make sure the device is online and its water sensors are enabled in Home Assistant, then try again."
     }
   },
   "options": {

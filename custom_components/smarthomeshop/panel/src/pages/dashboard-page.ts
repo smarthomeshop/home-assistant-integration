@@ -30,6 +30,8 @@ export class DashboardPage extends LitElement {
   @state() private _showMeterForm = false;
   @state() private _meterInput = '';
   @state() private _detailTab: 'overview' | 'automations' | 'settings' = 'overview';
+  @state() private _linking = false;
+  @state() private _linkError = '';
   private _insightsTimer?: number;
 
   static styles = css`
@@ -397,6 +399,9 @@ export class DashboardPage extends LitElement {
     .detail-grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
     @media (min-width: 900px) { .detail-grid { grid-template-columns: 1fr 1fr; } }
     .not-configured { border: 1px dashed var(--divider-color); border-radius: var(--ha-card-border-radius, 12px); padding: 16px; font-size: 13.5px; color: var(--secondary-text-color); margin-bottom: 16px; }
+    .not-configured-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .not-configured .designer-btn:disabled { opacity: 0.6; cursor: default; }
+    .link-error { color: var(--error-color, #ef4444); font-size: 12.5px; margin-top: 10px; }
     .status-badge { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); text-transform: capitalize; }
     .status-badge.ok { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
     .status-badge.warn { background: rgba(245, 158, 11, 0.12); color: #f59e0b; }
@@ -498,6 +503,8 @@ export class DashboardPage extends LitElement {
     this._detailDevice = device;
     this._insights = null;
     this._detailTab = 'overview';
+    this._linking = false;
+    this._linkError = '';
     this._fetchInsights();
     this._insightsTimer = window.setInterval(() => this._fetchInsights(), 5000);
   }
@@ -527,6 +534,29 @@ export class DashboardPage extends LitElement {
       });
     } catch (err) {
       console.error('Failed to load insights:', err);
+    }
+  }
+
+  private async _linkDevice(): Promise<void> {
+    const device = this._detailDevice;
+    if (!device || this._linking) return;
+    const deviceId = device.id;
+    this._linking = true;
+    this._linkError = '';
+    try {
+      await this.hass.callWS({
+        type: 'smarthomeshop/device/link',
+        device_id: deviceId,
+      });
+      if (this._detailDevice?.id === deviceId) await this._fetchInsights();
+    } catch (err: any) {
+      // The call can settle after the user navigated to another device;
+      // never paint that device's banner with this one's outcome.
+      if (this._detailDevice?.id === deviceId) {
+        this._linkError = err?.message || 'Could not link this device. Check the Home Assistant logs.';
+      }
+    } finally {
+      if (this._detailDevice?.id === deviceId) this._linking = false;
     }
   }
 
@@ -700,12 +730,38 @@ export class DashboardPage extends LitElement {
         </a>
       </div>
 
-      ${ins && ins.configured === false ? html`
+      ${ins && ins.configured === false ? (ins.entry_exists ? html`
         <div class="not-configured">
-          This device is not linked to the SmartHomeShop integration yet.
-          Add it via <b>Settings → Devices & Services → Add integration → SmartHomeShop.io</b> to unlock ${this._integrationFeatures(device.product_type)}.
+          ${ins.entry_disabled ? html`
+            This device is linked, but its SmartHomeShop entry is disabled.
+            Enable it via <a href="/config/integrations/integration/smarthomeshop">Settings, Devices &amp; Services</a> to bring back ${this._integrationFeatures(device.product_type)}.
+          ` : html`
+            This device is linked, but the SmartHomeShop entry is not loaded yet.
+            It is usually still starting; if this does not resolve, check the Home Assistant logs.
+          `}
         </div>
-      ` : nothing}
+      ` : html`
+        <div class="not-configured">
+          <div class="not-configured-row">
+            <div style="flex: 1; min-width: 0;">
+              This device is not linked to the SmartHomeShop integration yet.
+              ${this.hass.user?.is_admin ? html`
+                Link it to unlock ${this._integrationFeatures(device.product_type)}.
+                Sensors are detected automatically and you can tune everything afterwards in the Settings tab.
+              ` : html`
+                Ask a Home Assistant administrator to link it and unlock ${this._integrationFeatures(device.product_type)}.
+              `}
+            </div>
+            ${this.hass.user?.is_admin ? html`
+              <button class="designer-btn" style="flex-shrink: 0;" ?disabled=${this._linking} @click=${this._linkDevice}>
+                <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 16px;"></ha-icon>
+                ${this._linking ? 'Linking...' : 'Link now'}
+              </button>
+            ` : nothing}
+          </div>
+          ${this._linkError ? html`<div class="link-error">${this._linkError}</div>` : nothing}
+        </div>
+      `) : nothing}
 
       <div class="detail-tabs">
         <button class="detail-tab ${this._detailTab === 'overview' ? 'active' : ''}" @click=${() => { this._detailTab = 'overview'; }}>

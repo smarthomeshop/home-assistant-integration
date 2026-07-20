@@ -7,7 +7,9 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
+from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
@@ -17,6 +19,7 @@ from .const import (
     PRODUCT_PATTERNS,
     PRODUCT_NAMES,
     product_for_device,
+    CONF_DEVICE_ID,
     CONF_PRODUCT_TYPE,
     CONF_PRICE_T1,
     CONF_PRICE_T2,
@@ -43,6 +46,18 @@ CONF_NIGHT_END = "night_end"
 CONF_VACATION_MODE_ENTITY = "vacation_mode_entity"
 
 _WATER_PRODUCTS = ("waterp1meterkit", "watermeterkit", "waterflowkit")
+# Entity-id pattern fallback ordered longest-first, so a specific pattern
+# ("ultimatesensor_mini") wins from a product whose pattern is its substring
+# ("ultimatesensor"). Mirrors the ordering rule of PRODUCT_MODEL_PREFIXES.
+_PATTERNS_MOST_SPECIFIC_FIRST = sorted(
+    (
+        (pattern, product)
+        for product, patterns in PRODUCT_PATTERNS.items()
+        for pattern in patterns
+    ),
+    key=lambda item: len(item[0]),
+    reverse=True,
+)
 _ENERGY_PRODUCTS = ("waterp1meterkit", "p1meterkit")
 _ACCOUNT_REFRESH_TIMEOUT = 35
 _ACCOUNT_REFRESH_TASK = "account_price_refresh_task"
@@ -63,6 +78,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_device_insights)
     websocket_api.async_register_command(hass, ws_get_device_config)
     websocket_api.async_register_command(hass, ws_set_device_config)
+    websocket_api.async_register_command(hass, ws_link_device)
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
     websocket_api.async_register_command(hass, ws_refresh_account)
@@ -156,12 +172,9 @@ def ws_get_devices(
 
                 if not detected_product:
                     entity_id_lower = entity.entity_id.lower()
-                    for product, patterns in PRODUCT_PATTERNS.items():
-                        for pattern in patterns:
-                            if pattern in entity_id_lower:
-                                detected_product = product
-                                break
-                        if detected_product:
+                    for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
+                        if pattern in entity_id_lower:
+                            detected_product = product
                             break
 
         if status_off_since is not None and not online:
@@ -312,9 +325,18 @@ def ws_get_device_insights(
     online, last_seen = _connectivity_for_device(hass, device_id)
 
     if entry is None or getattr(entry, "runtime_data", None) is None:
+        # Distinguish "no entry at all" (panel offers one-click link) from
+        # "entry exists but is not loaded" (disabled, or still setting up),
+        # so the panel never offers to link a device that already has one.
         connection.send_result(
             msg["id"],
-            {"configured": False, "online": online, "last_seen": last_seen},
+            {
+                "configured": False,
+                "online": online,
+                "last_seen": last_seen,
+                "entry_exists": entry is not None,
+                "entry_disabled": bool(entry.disabled_by) if entry else False,
+            },
         )
         return
 
@@ -616,6 +638,101 @@ async def ws_set_device_config(hass: HomeAssistant, connection, msg: dict) -> No
     connection.send_result(msg["id"], {"ok": True})
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/device/link",
+    vol.Required("device_id"): str,
+})
+@websocket_api.async_response
+async def ws_link_device(hass: HomeAssistant, connection, msg: dict) -> None:
+    """One-click link: create the config entry for a detected device.
+
+    The panel shows this for SmartHomeShop devices that are discovered via
+    ESPHome but have no config entry yet, so the user never has to walk
+    through Settings -> Devices & Services by hand.
+    """
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+
+    device_id = msg["device_id"]
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+
+    if _entry_for_device(hass, device_id) is not None:
+        connection.send_error(
+            msg["id"], "already_linked", "This device is already linked"
+        )
+        return
+
+    # Same product detection as the devices list: ESPHome project info
+    # first, entity-id patterns as fallback for older firmware. Patterns are
+    # checked most-specific-first (longest first): "ultimatesensor" is a
+    # substring of every "ultimatesensor_mini" entity id, so plain dict order
+    # would misdetect a Mini and persist the wrong product into the entry.
+    product_type = product_for_device(device.manufacturer, device.model)
+    if product_type is None:
+        entity_registry = er.async_get(hass)
+        for entity in er.async_entries_for_device(
+            entity_registry, device_id, include_disabled_entities=True
+        ):
+            entity_id_lower = entity.entity_id.lower()
+            for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
+                if pattern in entity_id_lower:
+                    product_type = product
+                    break
+            if product_type:
+                break
+    if product_type is None:
+        connection.send_error(
+            msg["id"],
+            "unknown_product",
+            "Could not detect which SmartHomeShop product this device is",
+        )
+        return
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": SOURCE_IMPORT},
+        data={CONF_PRODUCT_TYPE: product_type, CONF_DEVICE_ID: device_id},
+    )
+
+    if result.get("type") == FlowResultType.CREATE_ENTRY:
+        entry = result.get("result")
+        LOGGER.info(
+            "Linked device %s as %s from the panel",
+            device.name_by_user or device.name,
+            product_type,
+        )
+        connection.send_result(msg["id"], {
+            "ok": True,
+            "entry_id": entry.entry_id if entry else None,
+            "product_type": product_type,
+        })
+        return
+
+    reason = result.get("reason", "unknown")
+    messages = {
+        "already_configured": "This device is already linked",
+        "already_in_progress": (
+            "A setup for this device is already open. Finish or close the "
+            "dialog in Settings, then try again."
+        ),
+        "no_water_sensor": (
+            "No water sensor was found on this device. Make sure the device "
+            "is online and its water sensors are enabled in Home Assistant, "
+            "then try again."
+        ),
+        "device_not_found": "Device not found",
+    }
+    connection.send_error(
+        msg["id"],
+        "link_failed",
+        messages.get(reason, f"Could not link this device ({reason})"),
+    )
+
+
 def _account_result(hass: HomeAssistant) -> dict:
     """Build the account/price status payload for the panel."""
     domain_data = hass.data.get(DOMAIN, {})
@@ -634,7 +751,7 @@ def _account_result(hass: HomeAssistant) -> dict:
         "refreshing": bool(refresh_task and not refresh_task.done()),
     }
     # Resolve the price entity_ids so the panel can open their more-info dialog
-    # (robust against renames — looked up by unique_id, not a hardcoded id).
+    # (robust against renames: looked up by unique_id, not a hardcoded id).
     ent_reg = er.async_get(hass)
 
     def _price_entity(key: str) -> str | None:

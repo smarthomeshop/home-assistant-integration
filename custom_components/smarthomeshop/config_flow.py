@@ -276,6 +276,60 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
+    async def async_step_import(
+        self, import_data: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Create an entry programmatically (one-click link from the panel).
+
+        Runs the same device validation and sensor detection as the UI flow,
+        but without any forms. Water products get the default leak-detection
+        options; everything is tunable afterwards in the panel Settings tab.
+        """
+        product_type = import_data.get(CONF_PRODUCT_TYPE)
+        device_id = import_data.get(CONF_DEVICE_ID)
+        if not device_id or product_type not in PRODUCT_NAMES:
+            return self.async_abort(reason="invalid_link_request")
+
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return self.async_abort(reason="device_not_found")
+
+        self._product_type = product_type
+        self._device_id = device_id
+        self._device_name = device.name_by_user or device.name or "Device"
+
+        await self.async_set_unique_id(f"{product_type}_{device_id}")
+        self._abort_if_unique_id_configured()
+
+        if product_type == PRODUCT_WATERFLOWKIT:
+            sensors = self._find_waterflowkit_sensors(device_id)
+            if not sensors["flow1_water"] and not sensors["flow2_water"]:
+                return self.async_abort(reason="no_water_sensor")
+            self._flow1_water_sensor = sensors["flow1_water"]
+            self._flow1_flow_sensor = sensors["flow1_flow"]
+            self._flow2_water_sensor = sensors["flow2_water"]
+            self._flow2_flow_sensor = sensors["flow2_flow"]
+        else:
+            water_sensor, flow_sensor = self._find_sensors_for_device(device_id)
+            if not water_sensor and product_type in (
+                PRODUCT_WATERP1METERKIT, PRODUCT_WATERMETERKIT
+            ):
+                return self.async_abort(reason="no_water_sensor")
+            self._water_sensor = water_sensor
+            self._flow_sensor = flow_sensor
+
+        options: dict[str, Any] | None = None
+        if product_type in (
+            PRODUCT_WATERP1METERKIT, PRODUCT_WATERMETERKIT, PRODUCT_WATERFLOWKIT
+        ):
+            options = {
+                CONF_CONTINUOUS_FLOW_MINUTES: DEFAULT_CONTINUOUS_FLOW_MINUTES,
+                CONF_NIGHT_START: DEFAULT_NIGHT_START,
+                CONF_NIGHT_END: DEFAULT_NIGHT_END,
+            }
+
+        return self._create_entry(options=options)
+
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
