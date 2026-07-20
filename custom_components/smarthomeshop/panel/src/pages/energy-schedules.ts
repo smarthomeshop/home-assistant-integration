@@ -225,7 +225,8 @@ export class EnergySchedules extends LitElement {
         earliest: this._earliest || null,
         interruptible: this._interruptible,
         guard: guardOn,
-        load_power: guardOn ? Math.max(1, Math.round(this._loadPower)) : null,
+        load_power: Number.isFinite(this._loadPower) && this._loadPower > 0
+          ? Math.max(1, Math.round(this._loadPower)) : null,
       });
       const sched = res.schedule;
       this._editId = sched.id; // so a retry updates instead of duplicating
@@ -366,6 +367,12 @@ export class EnergySchedules extends LitElement {
                 Run in one continuous block (for loads that can't pause, e.g. a dishwasher)
               </label>
             </div>
+            <div class="field">
+              <label class="f">This load draws about (optional)</label>
+              <div class="row"><input type="number" min="100" max="25000" step="100" .value=${String(this._loadPower)}
+                @input=${(e: Event) => { this._loadPower = parseFloat((e.target as HTMLInputElement).value); }} /><span style="font-size:12px;color:var(--secondary-text-color);">W</span></div>
+              <div class="help">Used for the smart-savings estimate and the fuse guard below.</div>
+            </div>
             ${this._availableEntity() ? html`
               <div class="field">
                 <label class="check">
@@ -373,14 +380,9 @@ export class EnergySchedules extends LitElement {
                     @change=${(e: Event) => { this._guard = (e.target as HTMLInputElement).checked; }} />
                   Don't start if it would overload my main fuse
                 </label>
+                ${this._guard ? html`
+                  <div class="help">The schedule waits for enough free capacity on your P1 connection before switching this on. A load that is already running is never cut off. If there is never enough capacity, fuse safety wins and the deadline can be delayed or missed.</div>` : nothing}
               </div>
-              ${this._guard ? html`
-                <div class="field">
-                  <label class="f">This load draws about</label>
-                  <div class="row"><input type="number" min="100" max="25000" step="100" .value=${String(this._loadPower)}
-                    @input=${(e: Event) => { this._loadPower = parseFloat((e.target as HTMLInputElement).value); }} /><span style="font-size:12px;color:var(--secondary-text-color);">W</span></div>
-                  <div class="help">The schedule waits for enough free capacity on your P1 connection before switching this on. A load that is already running is never cut off. Note: if there is never enough capacity, fuse safety wins and the deadline can be delayed or missed.</div>
-                </div>` : nothing}
             ` : nothing}
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
           </div>

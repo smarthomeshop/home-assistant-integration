@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.const import Platform
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.config import ConfigType
-from homeassistant.components import panel_custom
+from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 
 from .const import (
@@ -38,8 +40,40 @@ PANEL_URL = "/smarthomeshop_panel"
 PANEL_TITLE = "SmartHomeShop.io"
 PANEL_ICON = "mdi:store"
 PANEL_NAME = "smarthomeshop-panel"
+_PANEL_STATIC_PATH_REGISTERED = "panel_static_path_registered"
 
 type SmartHomeShopConfigEntry = ConfigEntry
+
+_INITIAL_PRICE_REFRESH_TIMEOUT = 35
+_INITIAL_BATTERY_REFRESH_TIMEOUT = 10
+
+
+async def _async_initial_energy_refresh(prices, battery_plan) -> None:
+    """Warm the energy coordinators without delaying integration setup."""
+    try:
+        await asyncio.wait_for(
+            prices.async_refresh(), timeout=_INITIAL_PRICE_REFRESH_TIMEOUT
+        )
+    except TimeoutError:
+        LOGGER.warning(
+            "Initial energy price refresh timed out after %s seconds; "
+            "the integration will retry in the background",
+            _INITIAL_PRICE_REFRESH_TIMEOUT,
+        )
+    except Exception as err:
+        LOGGER.warning("Initial energy price refresh failed: %s", err)
+
+    try:
+        await asyncio.wait_for(
+            battery_plan.async_refresh(), timeout=_INITIAL_BATTERY_REFRESH_TIMEOUT
+        )
+    except TimeoutError:
+        LOGGER.warning(
+            "Initial battery plan refresh timed out after %s seconds",
+            _INITIAL_BATTERY_REFRESH_TIMEOUT,
+        )
+    except Exception as err:
+        LOGGER.warning("Initial battery plan refresh failed: %s", err)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -76,31 +110,57 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
         prices = PriceCoordinator(hass)
         hass.data[DOMAIN]["prices"] = prices
-        await prices.async_refresh()  # best-effort; no-op without an API key
+
+        from .savings_tracker import async_setup_savings
+
+        async_setup_savings(hass, prices)
+
+        from .battery_control import async_register_battery_services
+        from .battery_coordinator import BatteryPlanCoordinator
+
+        battery_plan = BatteryPlanCoordinator(hass, prices)
+        hass.data[DOMAIN]["battery_plan"] = battery_plan
+        previous_unsubscribe = hass.data[DOMAIN].pop(
+            "battery_price_unsubscribe", None
+        )
+        if previous_unsubscribe:
+            previous_unsubscribe()
+        hass.data[DOMAIN]["battery_price_unsubscribe"] = prices.async_add_listener(
+            lambda: hass.async_create_task(battery_plan.async_request_refresh())
+        )
+        await async_register_battery_services(hass)
+        hass.data[DOMAIN]["initial_energy_refresh_task"] = hass.async_create_task(
+            _async_initial_energy_refresh(prices, battery_plan),
+            f"{DOMAIN}_initial_energy_refresh",
+        )
     except Exception as err:
-        LOGGER.error("Failed to set up price coordinator: %s", err)
+        LOGGER.error("Failed to set up energy coordinators: %s", err)
 
     return True
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the SmartHomeShop Configurator panel."""
-    # Only register if not already registered
-    if DOMAIN in hass.data.get("frontend_panels", {}):
-        return
+    domain_data = hass.data.setdefault(DOMAIN, {})
 
-    # Register static path for panel files (served from www folder)
-    panel_path = hass.config.path("custom_components/smarthomeshop/www")
+    # Static routes live for the lifetime of Home Assistant and cannot be
+    # registered twice. The panel definition itself is replaced below so an
+    # integration reload also updates the versioned frontend module URL.
+    if not domain_data.get(_PANEL_STATIC_PATH_REGISTERED):
+        panel_path = hass.config.path("custom_components/smarthomeshop/www")
+        await hass.http.async_register_static_paths(
+            [
+                StaticPathConfig(
+                    PANEL_URL,
+                    path=panel_path,
+                    cache_headers=False,
+                )
+            ]
+        )
+        domain_data[_PANEL_STATIC_PATH_REGISTERED] = True
 
-    await hass.http.async_register_static_paths(
-        [
-            StaticPathConfig(
-                PANEL_URL,
-                path=panel_path,
-                cache_headers=False,
-            )
-        ]
-    )
+    if frontend.async_panel_exists(hass, DOMAIN):
+        frontend.async_remove_panel(hass, DOMAIN)
 
     # Register the panel
     await panel_custom.async_register_panel(

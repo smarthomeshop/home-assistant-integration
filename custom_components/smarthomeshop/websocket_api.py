@@ -71,6 +71,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_schedules)
     websocket_api.async_register_command(hass, ws_set_schedule)
     websocket_api.async_register_command(hass, ws_delete_schedule)
+    websocket_api.async_register_command(hass, ws_get_savings)
     websocket_api.async_register_command(hass, ws_get_battery)
     websocket_api.async_register_command(hass, ws_get_battery_plan)
     websocket_api.async_register_command(hass, ws_set_battery)
@@ -863,6 +864,16 @@ async def ws_delete_schedule(hass: HomeAssistant, connection, msg: dict) -> None
     ok = await store.async_delete_schedule(msg["schedule_id"])
     async_dispatcher_send(hass, SIGNAL_SCHEDULES_CHANGED)
     connection.send_result(msg["id"], {"ok": ok})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/savings"})
+@callback
+def ws_get_savings(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return the measured smart-energy savings totals."""
+    tracker = hass.data.get(DOMAIN, {}).get("savings")
+    connection.send_result(
+        msg["id"], {"savings": tracker.snapshot() if tracker else {}}
+    )
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/battery"})

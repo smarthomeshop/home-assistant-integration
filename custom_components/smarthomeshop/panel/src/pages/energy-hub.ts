@@ -80,6 +80,15 @@ export class EnergyHub extends LitElement {
   @state() private _hoverPowerTime?: number;
   @state() private _settingsOpen = false;
   @state() private _settingsFocus: 'account' | 'sources' | 'battery' | '' = '';
+  @state() private _savings: Record<string, number> = {};
+  @state() private _wizardDone = false;
+  @state() private _wizardKeyInput = '';
+  @state() private _wizardBusy = false;
+  @state() private _wizardError = '';
+  @state() private _wizardContracts: any[] = [];
+  @state() private _wizardContractSkipped = false;
+  @state() private _wizardEngaged = false;
+  private _wizardContractsRequested = false;
 
   private static readonly APP_STATS_URL = 'https://app.smarthomeshop.io/energy-prices';
   private static readonly INITIAL_LOAD_TIMEOUT = 6000;
@@ -176,6 +185,40 @@ export class EnergyHub extends LitElement {
     .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .cta-btn ha-icon { --mdc-icon-size: 15px; }
     .smart-item .cta-btn { margin-left: auto; }
+
+    /* Onboarding wizard */
+    .wizard { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 16px; padding: 20px; margin-bottom: 8px; }
+    .wizard-steps { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+    .wstep { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--secondary-text-color); }
+    .wstep i { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 12px; font-weight: 700; background: var(--secondary-background-color); color: var(--secondary-text-color); }
+    .wstep.on { color: var(--primary-text-color); font-weight: 600; }
+    .wstep.on i { background: var(--shs-blue, #4361ee); color: #fff; }
+    .wstep.done i { background: var(--shs-green, #22c55e); color: #fff; }
+    .wizard-title { font-size: 15.5px; font-weight: 700; color: var(--primary-text-color); }
+    .wizard-text { font-size: 13px; color: var(--secondary-text-color); line-height: 1.55; margin-top: 6px; }
+    .wizard-row { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+    .wizard-row input, .wizard-row select { flex: 1; min-width: 220px; padding: 10px 12px; border: 1px solid var(--divider-color); border-radius: 9px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    .wizard-row input:focus, .wizard-row select:focus { outline: none; border-color: var(--shs-blue, #4361ee); }
+    .wizard-links { margin-top: 12px; font-size: 12px; }
+    .wizard-links a, .wizard-links button { color: var(--shs-blue, #4361ee); background: none; border: none; padding: 0; font-size: 12px; font-family: inherit; cursor: pointer; text-decoration: none; }
+    .wizard-links a:hover, .wizard-links button:hover { text-decoration: underline; }
+    .wizard-err { margin-top: 10px; font-size: 12.5px; color: #ef4444; }
+
+    /* Savings */
+    .savings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+    .save-card { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 14px; padding: 16px; }
+    .save-label { font-size: 11.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--secondary-text-color); }
+    .save-val { font-size: 24px; font-weight: 750; margin-top: 8px; color: var(--primary-text-color); }
+    .save-val.pos { color: var(--shs-green, #16a34a); }
+    .save-sub { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 4px; }
+    .save-foot { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 10px; line-height: 1.5; }
+
+    /* Contract compare nudge */
+    .compare { display: flex; align-items: center; gap: 14px; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 14px; padding: 16px; }
+    .compare-icon { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; background: rgba(67,97,238,.1); color: var(--shs-blue, #4361ee); flex: 0 0 auto; }
+    .compare-main { flex: 1; min-width: 0; }
+    .compare-title { font-size: 14px; font-weight: 650; color: var(--primary-text-color); }
+    .compare-text { font-size: 12.5px; color: var(--secondary-text-color); margin-top: 3px; line-height: 1.45; }
 
     .section { margin-top: 26px; }
     .section-head {
@@ -554,7 +597,7 @@ export class EnergyHub extends LitElement {
     this._startAccountLoad('smarthomeshop/account');
 
     try {
-      const [sources, entities, schedules, battery] = await Promise.allSettled([
+      const [sources, entities, schedules, battery, savings] = await Promise.allSettled([
         this._callWS<{ sources: Sources }>(
           { type: 'smarthomeshop/energy_sources' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
@@ -571,12 +614,17 @@ export class EnergyHub extends LitElement {
           { type: 'smarthomeshop/battery' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
         ),
+        this._callWS<{ savings: Record<string, number> }>(
+          { type: 'smarthomeshop/savings' },
+          EnergyHub.INITIAL_LOAD_TIMEOUT,
+        ),
       ]);
 
       if (sources.status === 'fulfilled') this._sources = sources.value.sources || {};
       if (entities.status === 'fulfilled') this._priceEntity = entities.value.entities?.electricity_price || undefined;
       if (schedules.status === 'fulfilled') this._schedules = schedules.value.schedules || [];
       if (battery.status === 'fulfilled') this._battery = battery.value.battery || {};
+      if (savings.status === 'fulfilled') this._savings = savings.value.savings || {};
     } catch (err) {
       console.warn('Energy overview load failed', err);
     } finally {
@@ -1461,12 +1509,14 @@ export class EnergyHub extends LitElement {
         </div>
       </header>
 
-      ${!hasKey ? html`
+      ${this._wizardVisible(hasKey) ? this._renderOnboarding(hasKey, priceOk) : nothing}
+
+      ${!hasKey && !this._wizardVisible(hasKey) ? html`
         <div class="empty">
           <ha-icon icon="mdi:account-key-outline"></ha-icon>
           <div>Connect your SmartHomeShop account to get dynamic prices, cheapest-hours planning and automated control.</div>
           ${this.hass.user?.is_admin ? html`<button class="cta-btn" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
-        </div>` : !priceOk ? html`
+        </div>` : hasKey && !priceOk && !this._wizardVisible(hasKey) ? html`
         <div class="empty">
           <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
           <div>The price connection has a problem right now. Cached prices stay in use where available.</div>
@@ -1475,9 +1525,205 @@ export class EnergyHub extends LitElement {
 
       ${this._renderLive(house, grid, solar, battery, soc, contributorDead)}
       ${this._renderPriceSection(priceOk)}
+      ${this._renderSavings(priceOk)}
       ${this._renderPowerSection(grid)}
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
+      ${this._renderCompareNudge(priceOk)}
       ${this._renderSettingsDialog()}
+    `;
+  }
+
+  private static readonly WIZARD_KEY = 'shs-energy-onboarding-done';
+  private static readonly APP_TOKENS_URL = 'https://app.smarthomeshop.io/settings/api-tokens';
+
+  private _wizardVisible(hasKey: boolean): boolean {
+    if (!this.hass.user?.is_admin) return false;
+    if (this._wizardDone) return false;
+    try {
+      if (window.localStorage.getItem(EnergyHub.WIZARD_KEY)) return false;
+    } catch { /* storage unavailable */ }
+    // Fresh users only: once a key exists the wizard only continues if the
+    // user started it in this session (existing setups are not nagged).
+    return !hasKey || this._wizardEngaged;
+  }
+
+  private _finishWizard(): void {
+    try { window.localStorage.setItem(EnergyHub.WIZARD_KEY, '1'); } catch { /* ignore */ }
+    this._wizardDone = true;
+  }
+
+  private async _wizardConnect(): Promise<void> {
+    const key = this._wizardKeyInput.trim();
+    if (!key || this._wizardBusy) return;
+    this._wizardBusy = true;
+    this._wizardError = '';
+    try {
+      const account = await this._callWS<any>(
+        { type: 'smarthomeshop/account/set', api_key: key },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
+      this._account = account;
+      this._wizardKeyInput = '';
+      this._wizardEngaged = true;
+      this._watchAccountRefresh(account, true);
+      this._loadWizardContracts();
+    } catch (err: any) {
+      this._wizardError = `Could not connect: ${err?.message || 'unknown error'}`;
+    }
+    this._wizardBusy = false;
+  }
+
+  private async _loadWizardContracts(): Promise<void> {
+    if (this._wizardContractsRequested) return;
+    this._wizardContractsRequested = true;
+    try {
+      const res = await this._callWS<{ contracts: any[] }>(
+        { type: 'smarthomeshop/account/contracts' },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
+      this._wizardContracts = res.contracts || [];
+    } catch { this._wizardContracts = []; }
+  }
+
+  private async _wizardPickContract(id: string): Promise<void> {
+    if (this._wizardBusy) return;
+    this._wizardBusy = true;
+    try {
+      this._account = await this._callWS<any>(
+        { type: 'smarthomeshop/account/set', contract_id: id || null },
+        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+      );
+    } catch (err: any) {
+      this._wizardError = `Could not select the contract: ${err?.message || ''}`;
+    }
+    this._wizardBusy = false;
+  }
+
+  // First-run wizard: account key -> contract -> solar & battery. Replaces
+  // the connect banner until finished or skipped; each step is honest about
+  // being optional.
+  private _renderOnboarding(hasKey: boolean, priceOk: boolean) {
+    const step = !hasKey ? 1
+      : (!this._account?.contract_id && !this._wizardContractSkipped) ? 2 : 3;
+    if (step === 2 && this._wizardContracts.length === 0) this._loadWizardContracts();
+    const stepChip = (n: number, label: string) => html`
+      <span class="wstep ${step === n ? 'on' : ''} ${step > n ? 'done' : ''}">
+        <i>${step > n ? html`<ha-icon icon="mdi:check" style="--mdc-icon-size:13px;"></ha-icon>` : n}</i>${label}
+      </span>`;
+    return html`
+      <div class="wizard">
+        <div class="wizard-steps">
+          ${stepChip(1, 'Account')}${stepChip(2, 'Contract')}${stepChip(3, 'Solar & battery')}
+        </div>
+        ${step === 1 ? html`
+          <div class="wizard-title">Welcome! Connect your SmartHomeShop account</div>
+          <div class="wizard-text">
+            One connection unlocks live dynamic prices, cheapest-hours planning, deadline
+            schedules and battery control. Create a free API key in your account and paste it here.
+          </div>
+          <div class="wizard-row">
+            <input type="password" placeholder="Paste your API key" autocomplete="off"
+              .value=${this._wizardKeyInput}
+              @input=${(e: Event) => { this._wizardKeyInput = (e.target as HTMLInputElement).value; }}
+              @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this._wizardConnect(); }} />
+            <button class="cta-btn" ?disabled=${!this._wizardKeyInput.trim() || this._wizardBusy}
+              @click=${this._wizardConnect}>${this._wizardBusy ? 'Connecting...' : 'Connect'}</button>
+          </div>
+          <div class="wizard-links">
+            <a href=${EnergyHub.APP_TOKENS_URL} target="_blank" rel="noopener">Create a free API key</a>
+            <span style="color:var(--secondary-text-color);"> · </span>
+            <button @click=${this._finishWizard}>Skip setup for now</button>
+          </div>
+        ` : step === 2 ? html`
+          <div class="wizard-title">Pick your energy contract</div>
+          <div class="wizard-text">
+            Prices follow your own contract (fixed or dynamic). Manage contracts in your
+            SmartHomeShop account; pick one here or let it follow the active contract automatically.
+          </div>
+          <div class="wizard-row">
+            <select @change=${(e: Event) => this._wizardPickContract((e.target as HTMLSelectElement).value)}>
+              <option value="">Active contract (automatic)</option>
+              ${this._wizardContracts.map(c => html`
+                <option value=${String(c.id)}>${c.name}${c.supplier ? ` - ${c.supplier}` : ''}</option>`)}
+            </select>
+            <button class="cta-btn ghost" @click=${() => { this._wizardContractSkipped = true; }}>Use automatic</button>
+          </div>
+          <div class="wizard-links">
+            <a href=${EnergyHub.APP_STATS_URL} target="_blank" rel="noopener">Manage contracts in the app</a>
+            <span style="color:var(--secondary-text-color);"> · </span>
+            <button @click=${this._finishWizard}>Skip setup for now</button>
+          </div>
+        ` : html`
+          <div class="wizard-title">Almost done: solar and battery</div>
+          <div class="wizard-text">
+            Your P1 meter covers the grid. If you have solar panels or a home battery, connect
+            their sensors so the Energy tab shows real surplus and state of charge. You can
+            always do this later from Settings.
+          </div>
+          <div class="wizard-row">
+            <button class="cta-btn" @click=${() => this._openSettings('sources')}>Connect solar &amp; battery</button>
+            <button class="cta-btn ghost" @click=${this._finishWizard}>Finish</button>
+          </div>
+        `}
+        ${this._wizardError ? html`<div class="wizard-err">${this._wizardError}</div>` : nothing}
+        ${!priceOk && hasKey ? html`<div class="wizard-err">The price connection is not working yet; check the key or try Sync in Settings.</div>` : nothing}
+      </div>
+    `;
+  }
+
+  // Measured savings: battery flows and shifted schedule loads valued against
+  // the day-average price.
+  private _renderSavings(priceOk: boolean) {
+    const sv = this._savings || {};
+    const today = sv.today_eur ?? 0;
+    const month = sv.month_eur ?? 0;
+    const total = sv.total_eur ?? 0;
+    if (!priceOk && !total) return nothing;
+    const eur = (v: number) => `${v < 0 ? '-' : ''}€ ${Math.abs(v).toFixed(2)}`;
+    return html`
+      <section class="section">
+        <div class="section-head"><div class="section-title"><h2>Smart savings</h2><span>What smart energy earned</span></div></div>
+        <div class="savings-grid">
+          <div class="save-card">
+            <div class="save-label">Today</div>
+            <div class="save-val ${today > 0 ? 'pos' : ''}">${eur(today)}</div>
+            <div class="save-sub">battery ${eur(sv.today_battery_eur ?? 0)} · schedules ${eur(sv.today_schedule_eur ?? 0)}</div>
+          </div>
+          <div class="save-card">
+            <div class="save-label">This month</div>
+            <div class="save-val ${month > 0 ? 'pos' : ''}">${eur(month)}</div>
+          </div>
+          <div class="save-card">
+            <div class="save-label">All time</div>
+            <div class="save-val ${total > 0 ? 'pos' : ''}">${eur(total)}</div>
+          </div>
+        </div>
+        <div class="save-foot">
+          Measured every 15 minutes from your battery flows and running schedules, valued against
+          the day-average price. Give a schedule its load power to count it here.
+        </div>
+      </section>
+    `;
+  }
+
+  private _renderCompareNudge(priceOk: boolean) {
+    if (!priceOk) return nothing;
+    return html`
+      <section class="section">
+        <div class="compare">
+          <div class="compare-icon"><ha-icon icon="mdi:scale-balance"></ha-icon></div>
+          <div class="compare-main">
+            <div class="compare-title">Is another contract cheaper for you?</div>
+            <div class="compare-text">
+              Compare energy contracts against real spot prices and your own usage in your
+              SmartHomeShop account, including a full savings analysis.
+            </div>
+          </div>
+          <a class="cta-btn" href=${EnergyHub.APP_STATS_URL} target="_blank" rel="noopener">
+            Compare in the app <ha-icon icon="mdi:open-in-new"></ha-icon>
+          </a>
+        </div>
+      </section>
     `;
   }
 

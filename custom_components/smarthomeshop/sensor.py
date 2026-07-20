@@ -100,6 +100,12 @@ async def async_setup_entry(
             for description in PRICE_SENSORS
         )
 
+        savings = hass.data.get(DOMAIN, {}).get("savings")
+        if savings is not None:
+            from .savings_sensors import build_savings_sensors
+
+            entities.extend(build_savings_sensors(savings))
+
     battery_plan = hass.data.get(DOMAIN, {}).get("battery_plan")
     if is_account_host and battery_plan is not None:
         from .battery_entities import BATTERY_SENSORS, SmartHomeShopBatterySensor

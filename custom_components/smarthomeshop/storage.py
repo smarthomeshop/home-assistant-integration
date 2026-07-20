@@ -37,6 +37,7 @@ class SmartHomeShopStore:
         self._data.setdefault("energy_sources", {})
         self._data.setdefault("water_anchors", {})
         self._data.setdefault("schedule_runtime", {})
+        self._data.setdefault("savings", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -168,4 +169,15 @@ class SmartHomeShopStore:
     ) -> None:
         """Persist the runtime state for a schedule."""
         self._data.setdefault("schedule_runtime", {})[schedule_id] = runtime
+        await self.async_save()
+
+    # ---- Smart-energy savings totals ----
+
+    def get_savings(self) -> dict[str, Any]:
+        """Return the accumulated smart-energy savings."""
+        return dict(self._data.get("savings", {}))
+
+    async def async_set_savings(self, savings: dict[str, Any]) -> None:
+        """Persist the accumulated smart-energy savings."""
+        self._data["savings"] = savings
         await self.async_save()
