@@ -359,7 +359,7 @@ export class ZonesPage extends LitElement {
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
     .view-toggle-btn.active { background: #4361ee; color: white; }
     .view-toggle-btn ha-icon { --mdc-icon-size: 16px; }
-    .canvas3d { flex: 1; display: block; cursor: grab; background: #0a1628; }
+    .canvas3d { flex: 1; display: block; cursor: grab; background: var(--rd-deep); }
     .canvas3d:active { cursor: grabbing; }
     .view3d-info { position: absolute; bottom: 16px; left: 16px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 8px; padding: 10px 14px; z-index: 10; font-size: 12px; color: var(--rd-dim2); }
   `;
@@ -1845,18 +1845,66 @@ export class ZonesPage extends LitElement {
     return { x: 400 - x1 * factor, y: 300 - z2 * factor };
   }
 
+  // Canvas 2D cannot resolve CSS var() colors, so the 3D scene reads the
+  // resolved --rd-* theme tokens once per frame and paints with those.
+  private _pal3d = {
+    deep: '#0f172a',
+    panel: '#1e293b',
+    dim: '#64748b',
+    dimRgb: [100, 116, 139] as [number, number, number],
+  };
+
+  private _refresh3DPalette(): void {
+    const style = getComputedStyle(this);
+    const read = (token: string, fallback: string): string => {
+      const value = style.getPropertyValue(token).trim();
+      return value || fallback;
+    };
+    const toRgb = (
+      color: string,
+      fallback: [number, number, number],
+    ): [number, number, number] => {
+      const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+      if (hex) {
+        let digits = hex[1];
+        if (digits.length === 3) digits = digits.split('').map((c) => c + c).join('');
+        return [
+          parseInt(digits.slice(0, 2), 16),
+          parseInt(digits.slice(2, 4), 16),
+          parseInt(digits.slice(4, 6), 16),
+        ];
+      }
+      const rgb = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+      if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+      return fallback;
+    };
+    const dim = read('--rd-dim', '#64748b');
+    this._pal3d = {
+      deep: read('--rd-deep', '#0f172a'),
+      panel: read('--rd-panel', '#1e293b'),
+      dim,
+      dimRgb: toRgb(dim, [100, 116, 139]),
+    };
+  }
+
+  private _dim3d(alpha: number): string {
+    const [r, g, b] = this._pal3d.dimRgb;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   private _render3DScene(): void {
     if (!this._canvas3d) return;
     const ctx = this._canvas3d.getContext('2d');
     if (!ctx) return;
 
+    this._refresh3DPalette();
     const w = this._canvas3d.width;
     const h = this._canvas3d.height;
 
     // Clear with gradient background
     const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
-    bgGrad.addColorStop(0, '#1e293b');
-    bgGrad.addColorStop(1, '#0f172a');
+    bgGrad.addColorStop(0, this._pal3d.panel);
+    bgGrad.addColorStop(1, this._pal3d.deep);
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, w, h);
 
@@ -1873,7 +1921,7 @@ export class ZonesPage extends LitElement {
   }
 
   private _draw3DGrid(ctx: CanvasRenderingContext2D): void {
-    ctx.strokeStyle = 'rgba(71, 85, 105, 0.3)';
+    ctx.strokeStyle = this._dim3d(0.3);
     ctx.lineWidth = 1;
     const gridSize = 1000;
     const gridRange = 5000;
@@ -1943,11 +1991,11 @@ export class ZonesPage extends LitElement {
       (bl.x + br.x) / 2, Math.max(bl.y, br.y),
       (tl.x + tr.x) / 2, Math.min(tl.y, tr.y)
     );
-    wallGrad.addColorStop(0, `rgba(71, 85, 105, ${shade * 0.5})`);
-    wallGrad.addColorStop(1, `rgba(71, 85, 105, ${shade * 0.2})`);
+    wallGrad.addColorStop(0, this._dim3d(shade * 0.5));
+    wallGrad.addColorStop(1, this._dim3d(shade * 0.2));
 
     ctx.fillStyle = wallGrad;
-    ctx.strokeStyle = '#475569';
+    ctx.strokeStyle = this._dim3d(0.8);
     ctx.lineWidth = 2;
 
     ctx.beginPath();
@@ -1979,8 +2027,8 @@ export class ZonesPage extends LitElement {
       const top = topCorners3D.map(c => this._project3D(c));
 
       // Draw top face
-      ctx.fillStyle = 'rgba(148, 163, 184, 0.5)';
-      ctx.strokeStyle = '#64748b';
+      ctx.fillStyle = this._dim3d(0.5);
+      ctx.strokeStyle = this._pal3d.dim;
       ctx.lineWidth = 1;
 
       ctx.beginPath();
@@ -1993,7 +2041,7 @@ export class ZonesPage extends LitElement {
       // Draw sides
       for (let i = 0; i < 4; i++) {
         const ni = (i + 1) % 4;
-        ctx.fillStyle = 'rgba(148, 163, 184, 0.25)';
+        ctx.fillStyle = this._dim3d(0.25);
         ctx.beginPath();
         ctx.moveTo(bottom[i].x, bottom[i].y);
         ctx.lineTo(bottom[ni].x, bottom[ni].y);
@@ -2006,7 +2054,7 @@ export class ZonesPage extends LitElement {
 
       // Label
       const center = this._project3D({ x: f.x, y: f.y, z: furnitureHeight + 100 });
-      ctx.fillStyle = '#94a3b8';
+      ctx.fillStyle = this._pal3d.dim;
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(f.name, center.x, center.y);
