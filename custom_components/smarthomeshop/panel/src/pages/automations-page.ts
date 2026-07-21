@@ -90,13 +90,13 @@ const SCENARIOS: Scenario[] = [
   {
     key: 'presence_on', group: 'climate', title: 'Motion detected', color: '#4361ee',
     desc: 'Notify on presence - handy as an away alarm.',
-    icon: 'mdi:motion-sensor', match: { domain: 'binary_sensor', suffix: ['occupancy'], excl: ['zone'] },
+    icon: 'mdi:motion-sensor', match: { domain: 'binary_sensor', suffix: ['occupancy', 'presence'], excl: ['zone'] },
     kind: 'to_on', msgTitle: 'Motion in {room}', msg: '{room} detected presence.',
   },
   {
     key: 'vacant', group: 'climate', title: 'Room became empty', color: '#64748b',
     desc: 'Notify when nobody has been present for a while.',
-    icon: 'mdi:motion-sensor-off', match: { domain: 'binary_sensor', suffix: ['occupancy'], excl: ['zone'] },
+    icon: 'mdi:motion-sensor-off', match: { domain: 'binary_sensor', suffix: ['occupancy', 'presence'], excl: ['zone'] },
     kind: 'to_off', forMin: 10, msgTitle: '{room} is empty', msg: 'No presence in {room} for {min} minutes.',
   },
   // ---- Water ----

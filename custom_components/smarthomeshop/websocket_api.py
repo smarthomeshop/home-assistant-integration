@@ -422,6 +422,7 @@ def ws_get_device_insights(
                 {"key": "humidity", "label": "Humidity", "value": data.humidity, "unit": "%", "status": data.humidity_status},
             ],
             "illuminance": data.illuminance,
+            "sensors_present": list(getattr(data, "sensors_present", []) or []),
         }
 
     # Live radar overview for presence products (scanned from the device entities)

@@ -47,13 +47,16 @@ ROOM_QUALITY_SENSORS: tuple[RoomQualitySensorDescription, ...] = (
             "humidity": data.humidity,
             "humidity_status": data.humidity_status,
             "illuminance": data.illuminance,
+            "sensors_present": data.sensors_present,
         },
     ),
     RoomQualitySensorDescription(
         key="room_quality_label",
         name="Room Quality Label (CC)",
         icon="mdi:tag",
-        value_fn=lambda data: data.label,
+        # No score means no label: report nothing rather than the word
+        # "Unknown", which reads as a real state and shows up in cards.
+        value_fn=lambda data: data.label if data.score is not None else None,
         attr_fn=lambda data: {"color": data.color},
     ),
     RoomQualitySensorDescription(

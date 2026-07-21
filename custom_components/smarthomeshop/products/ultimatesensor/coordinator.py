@@ -59,6 +59,10 @@ class RoomQualityData:
     humidity: float | None
     humidity_status: str
     illuminance: float | None
+    # Which air-quality sensors this device actually has. Lets the panel say
+    # "this model has none" only when that is true, instead of when a sensor
+    # it does have happens to be offline or still warming up.
+    sensors_present: list[str]
 
 
 class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
@@ -524,7 +528,24 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
             humidity=humidity,
             humidity_status=humidity_status,
             illuminance=illuminance,
+            sensors_present=self._sensors_present(),
         )
+
+    def _sensors_present(self) -> list[str]:
+        """The air-quality sensors this device has, whether or not they read.
+
+        A resolved entity means the hardware is there; its value can still be
+        missing while the device is offline or the sensor is warming up.
+        """
+        present = []
+        for sensor_type in ("co2", "pm25", "voc", "temperature", "humidity"):
+            entity_id = self._sensor_ids.get(sensor_type) or self._find_sensor_entity(
+                sensor_type
+            )
+            if entity_id:
+                self._sensor_ids.setdefault(sensor_type, entity_id)
+                present.append(sensor_type)
+        return present
 
     async def _async_update_data(self) -> RoomQualityData:
         """Fetch and calculate room quality data."""

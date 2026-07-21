@@ -537,11 +537,11 @@ export class SmartHomeShopCeilSenseCard extends LitElement {
             </div>
           ` : nothing}
 
-          ${this._config.show_room_quality !== false && (qualityScore !== null || qualityLabel) ? html`
+          ${this._config.show_room_quality !== false && qualityScore !== null ? html`
             <div class="quality" @click=${() => entities.roomQualityScore && fireMoreInfo(this, entities.roomQualityScore)}>
               <div class="quality-icon"><ha-icon icon="mdi:home-heart"></ha-icon></div>
               <div>
-                <div class="quality-label">${qualityLabel && !['unknown', 'unavailable'].includes(qualityLabel) ? qualityLabel : 'Room quality'}</div>
+                <div class="quality-label">${qualityLabel && !['unknown', 'unavailable'].includes(qualityLabel.toLowerCase()) ? qualityLabel : 'Room quality'}</div>
                 <div class="quality-subtitle">Combined climate assessment</div>
               </div>
               <div class="quality-score">${formatMetric(qualityScore, 0)}<span>/100</span></div>

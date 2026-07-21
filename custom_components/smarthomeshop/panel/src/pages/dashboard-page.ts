@@ -1115,7 +1115,9 @@ export class DashboardPage extends LitElement {
               </div>
             ` : html`
               <div class="session-meta" style="margin: 8px 0;">
-                This model has no air-quality sensors, so there is no score to show.
+                ${(ins.room.sensors_present || []).length
+                  ? 'No readings right now, so there is no score. It returns when the sensors report again.'
+                  : 'This model has no air-quality sensors, so there is no score to show.'}
               </div>
             `}
             ${ins.room.score == null ? nothing : (ins.room.recommendations || []).length > 0
