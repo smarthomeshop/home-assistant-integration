@@ -15,6 +15,29 @@ from homeassistant.util import slugify
 
 from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
 
+# What each room-quality input actually measures. Home Assistant device
+# classes survive a rename, so they identify the right entity even when the
+# owner gave it a name of their own. The VOC index has no device class.
+_DEVICE_CLASSES: dict[str, str | None] = {
+    "co2": "carbon_dioxide",
+    "temperature": "temperature",
+    "humidity": "humidity",
+    "pm25": "pm25",
+    "illuminance": "illuminance",
+    "voc": None,
+}
+
+
+def _starts_a_word(key: str, pattern: str) -> bool:
+    """Whether the pattern begins at a word boundary inside the key.
+
+    A plain substring test is too loose: the Dutch word for humidity,
+    "luchtvochtigheid", contains "voc", which would score humidity on the
+    VOC index scale. The pattern still does not have to END on a boundary,
+    so "pm_2_5" keeps matching "pm_2_5um_weight_concentration".
+    """
+    return key.startswith(pattern) or f"_{pattern}" in key
+
 
 @dataclass
 class RoomQualityData:
@@ -87,13 +110,14 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         return self._device_info
 
     def _entity_match_key(self, entity) -> str:
-        """Slug of the entity's own name, without the device-name prefix.
+        """Slug of the entity's firmware name, without the device prefix.
 
-        ESPHome sets original_name to the configured entity name ("SCD41
-        Temperature"). Only when that is missing do we fall back to the
-        object_id with the device slug stripped off.
+        original_name is the name the firmware gave the entity ("SCD41
+        Temperature") and does not change when the owner renames the entity
+        in Home Assistant, so matching stays stable. Only when it is missing
+        do we fall back to a rename and then to the object_id.
         """
-        name = entity.name or entity.original_name
+        name = entity.original_name or entity.name
         if name:
             return slugify(name)
         object_id = entity.entity_id.split(".", 1)[1].lower()
@@ -186,7 +210,8 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         # entity_id also carries the device name, so a device called
         # "CO2 meter" or "ESP32 hal" would otherwise match or exclude every
         # entity it owns.
-        candidates: list[tuple[str, str]] = []
+        primary: list[tuple[str, str, str | None]] = []
+        fallback: list[tuple[str, str, str | None]] = []
         for entity in entity_registry.entities.values():
             if entity.device_id != self._device_id:
                 continue
@@ -195,23 +220,46 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
             key = self._entity_match_key(entity)
             if any(word in key for word in excluded):
                 continue
-            candidates.append((entity.entity_id, key))
+            row = (entity.entity_id, key, entity.original_device_class)
+            # Board diagnostics carry the diagnostic category whatever they
+            # are named, so this catches a renamed "CPU Temperature" too.
+            # Keep them as a last resort for firmware that labels every
+            # sensor that way.
+            if entity.entity_category is None:
+                primary.append(row)
+            else:
+                fallback.append(row)
         # Sorted so the choice is deterministic instead of registry-order
         # dependent.
-        candidates.sort()
+        primary.sort()
+        fallback.sort()
+        candidates = primary or fallback
+
+        # The device class is the strongest signal and survives a rename, so
+        # narrow to entities that actually measure this quantity first.
+        expected_class = _DEVICE_CLASSES.get(sensor_type)
+        typed = [row for row in candidates if expected_class and row[2] == expected_class]
+        pool = typed or candidates
 
         # Prefer an exact suffix match (e.g. ..._co2); fall back to a
         # substring match only when no suffix match exists.
         for pattern in patterns[sensor_type]:
-            for entity_id, key in candidates:
+            for entity_id, key, _class in pool:
                 if key.endswith(f"_{pattern}") or key == pattern:
                     LOGGER.debug("Found sensor %s: %s", sensor_type, entity_id)
                     return entity_id
         for pattern in patterns[sensor_type]:
-            for entity_id, key in candidates:
-                if pattern in key:
-                    LOGGER.debug("Found sensor %s (substring): %s", sensor_type, entity_id)
+            for entity_id, key, _class in pool:
+                if _starts_a_word(key, pattern):
+                    LOGGER.debug("Found sensor %s (partial): %s", sensor_type, entity_id)
                     return entity_id
+        # Custom firmware naming: no pattern fits, but exactly one entity
+        # measures this quantity, so it is unambiguous anyway.
+        if typed:
+            LOGGER.debug(
+                "Found sensor %s by device class: %s", sensor_type, typed[0][0]
+            )
+            return typed[0][0]
 
         LOGGER.debug("No sensor found for type %s on device %s", sensor_type, self._device_id)
         return None

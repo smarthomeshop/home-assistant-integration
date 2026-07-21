@@ -1265,9 +1265,11 @@ export class DashboardPage extends LitElement {
       const exact = candidates.find(e => e.entity_id.toLowerCase().endsWith(`_${pat}`));
       if (exact) return exact;
     }
+    // Partial matches must start on a word boundary, so a pattern cannot
+    // match halfway through an unrelated word.
     for (const pattern of patterns) {
       const pat = pattern.toLowerCase();
-      const partial = candidates.find(e => e.entity_id.toLowerCase().includes(pat));
+      const partial = candidates.find(e => e.entity_id.toLowerCase().includes(`_${pat}`));
       if (partial) return partial;
     }
     return undefined;

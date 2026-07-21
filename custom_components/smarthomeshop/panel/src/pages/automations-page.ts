@@ -284,9 +284,11 @@ export class AutomationsPage extends LitElement {
       if (hit) return hit.entity_id;
     }
     // Some firmware names an entity "PM <2.5um Weight concentration", which
-    // no suffix can match exactly; fall back to a substring match.
+    // no suffix can match exactly. Fall back to a partial match that has to
+    // start on a word boundary: a plain substring test would let "voc" match
+    // the Dutch "luchtvochtigheid" and build a VOC alert on humidity.
     for (const suf of s.match.suffix) {
-      const hit = cand.find(e => e.entity_id.toLowerCase().includes(suf));
+      const hit = cand.find(e => e.entity_id.toLowerCase().includes(`_${suf}`));
       if (hit) return hit.entity_id;
     }
     return null;
