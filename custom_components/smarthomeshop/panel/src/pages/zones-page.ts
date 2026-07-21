@@ -6,21 +6,52 @@ interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
 interface Camera3D { azimuth: number; elevation: number; distance: number; targetX: number; targetY: number; targetZ: number; }
 type ViewMode = '2d' | '3d';
-type ZoneType = 'detection' | 'exclusion' | 'entry';
-// Voor detection/exclusion: points is een polygon (3+ punten)
+type ZoneType = 'detection' | 'exclusion' | 'entry' | 'interference';
+type ZoneProfilePreset = 'default' | 'bed' | 'seating' | 'transit' | 'custom';
+// Voor detection/exclusion/interference: points is het eerste polygon (3+ punten)
 // Voor entry: points heeft exact 2 punten (een lijn) + inDirection geeft aan welke kant "in" is
+interface ZoneProfile {
+  preset: ZoneProfilePreset;
+  enterDelayMs: number;
+  leaveDelayMs: number;
+  minDwellMs: number;
+  minTargets: number;
+}
 interface ZoneData {
   id: number;
   points: Point[];
+  parts?: Point[][];
   type: ZoneType;
   name: string;
   inDirection?: 'left' | 'right';  // Alleen voor entry lijnen: welke kant is "de kamer in"
   sensorId?: string;               // Entry lines: which sensor counts this line
+  profile?: ZoneProfile;
 }
+interface RoomCalibration { enabled: boolean; corners: Point[]; gridSizeMm: 100 | 300; snapToGrid: boolean; }
+interface TrackingSettings { smoothingEnabled: boolean; smoothingAlpha: number; maxJumpMm: number; trackHoldMs: number; crossZoneTracking: boolean; }
 interface LocalFurnitureItem { id: string; type: string; name: string; x: number; y: number; width: number; height: number; rotation: number; }
 interface DoorItem { id: string; wallIndex: number; position: number; width: number; openDirection: 'inward' | 'outward'; openSide: 'left' | 'right'; }
 interface WindowItem { id: string; wallIndex: number; position: number; width: number; height: number; windowType: 'fixed' | 'open' | 'tilt'; }
-interface SensorInstance { id: string; deviceId: string | null; x: number; y: number; rotation: number; range: number; fov: number; heightMm: number; }
+type SensorMountingMode = 'wall' | 'ceiling';
+type RadarProductFamily = 'ceilsense' | 'ultimate-sensor' | 'unknown';
+interface SensorInstance { id: string; deviceId: string | null; x: number; y: number; rotation: number; range: number; fov: number; heightMm: number; mountingMode: SensorMountingMode; }
+interface RadarCapabilities {
+  targetCount: number;
+  coordinateMode: 'target' | 'tracking-target' | 'unknown';
+  polygonZones: boolean;
+  entryLines: boolean;
+  zoneProfiles: boolean;
+  interferenceZones: boolean;
+  smoothing: boolean;
+  crossZoneTracking: boolean;
+}
+interface RadarDevice {
+  id: string;
+  name: string;
+  capabilities: RadarCapabilities;
+  productFamily: RadarProductFamily;
+  recommendedMountingMode: SensorMountingMode;
+}
 
 const CANVAS_SIZE = 800;
 const HALF = CANVAS_SIZE / 2;
@@ -41,18 +72,64 @@ const ZONE_LIMITS = {
   detection: 4,
   exclusion: 2,
   entry: 2,
+  interference: 2,
 };
 
 const ZONE_COLORS: Record<ZoneType, { fill: string; stroke: string }> = {
   detection: { fill: 'rgba(34, 197, 94, 0.2)', stroke: '#22c55e' },     // Groen
   exclusion: { fill: 'rgba(239, 68, 68, 0.2)', stroke: '#ef4444' },     // Rood
   entry: { fill: 'rgba(16, 185, 129, 0.25)', stroke: '#10b981' },       // Emerald/Turquoise
+  interference: { fill: 'rgba(245, 158, 11, 0.2)', stroke: '#f59e0b' }, // Amber
 };
 
 const ZONE_LABELS: Record<ZoneType, { singular: string; plural: string; icon: string }> = {
   detection: { singular: 'Detection', plural: 'Detection', icon: '📍' },
   exclusion: { singular: 'Exclusion', plural: 'Exclusion', icon: '🚷' },
   entry: { singular: 'Entry Line', plural: 'Entry Lines', icon: '🚪' },
+  interference: { singular: 'Interference', plural: 'Interference', icon: '⚡' },
+};
+
+const PROFILE_DEFAULTS: Record<Exclude<ZoneProfilePreset, 'custom'>, ZoneProfile> = {
+  default: { preset: 'default', enterDelayMs: 0, leaveDelayMs: 1500, minDwellMs: 0, minTargets: 1 },
+  bed: { preset: 'bed', enterDelayMs: 500, leaveDelayMs: 15000, minDwellMs: 1000, minTargets: 1 },
+  seating: { preset: 'seating', enterDelayMs: 300, leaveDelayMs: 8000, minDwellMs: 750, minTargets: 1 },
+  transit: { preset: 'transit', enterDelayMs: 0, leaveDelayMs: 750, minDwellMs: 0, minTargets: 1 },
+};
+
+const DEFAULT_CALIBRATION: RoomCalibration = { enabled: false, corners: [], gridSizeMm: 100, snapToGrid: true };
+const DEFAULT_TRACKING: TrackingSettings = {
+  smoothingEnabled: true,
+  smoothingAlpha: 0.35,
+  maxJumpMm: 1200,
+  trackHoldMs: 1200,
+  crossZoneTracking: true,
+};
+
+const getZoneParts = (zone: ZoneData): Point[][] => {
+  const parts = zone.parts?.filter((part) => Array.isArray(part) && part.length >= 3) || [];
+  if (parts.length) return parts;
+  return zone.points.length ? [zone.points] : [];
+};
+
+const normalizeZone = (raw: Partial<ZoneData>, index: number): ZoneData => {
+  const rawParts = Array.isArray(raw.parts) ? raw.parts.filter((part) => Array.isArray(part) && part.length >= 3) : [];
+  const points = Array.isArray(raw.points) ? raw.points : [];
+  const parts = rawParts.length ? rawParts : (points.length >= 3 ? [points] : []);
+  const type: ZoneType = ['detection', 'exclusion', 'entry', 'interference'].includes(raw.type || '')
+    ? raw.type as ZoneType
+    : 'detection';
+  const preset = raw.profile?.preset || 'default';
+  const baseProfile = preset === 'custom' ? PROFILE_DEFAULTS.default : PROFILE_DEFAULTS[preset as Exclude<ZoneProfilePreset, 'custom'>] || PROFILE_DEFAULTS.default;
+  return {
+    id: Number.isFinite(Number(raw.id)) ? Number(raw.id) : Date.now() + index,
+    name: raw.name || `${ZONE_LABELS[type].singular} ${index + 1}`,
+    type,
+    points: type === 'entry' ? points.slice(0, 2) : (parts[0] || points),
+    parts: type === 'entry' ? undefined : parts,
+    inDirection: raw.inDirection,
+    sensorId: raw.sensorId,
+    profile: type === 'detection' ? { ...baseProfile, ...raw.profile, preset } : undefined,
+  };
 };
 
 // Note: We now use a stylized man icon instead of a detailed mesh
@@ -79,6 +156,10 @@ export class ZonesPage extends LitElement {
   // Zone state
   @state() private _zones: ZoneData[] = [];
   @state() private _selectedZoneIndex: number | null = null;
+  @state() private _selectedZonePartIndex = 0;
+  @state() private _appendToZoneIndex: number | null = null;
+  @state() private _calibration: RoomCalibration = { ...DEFAULT_CALIBRATION, corners: [] };
+  @state() private _tracking: TrackingSettings = { ...DEFAULT_TRACKING };
   @state() private _drawingZone: Point[] = [];
   @state() private _newZoneType: ZoneType = 'detection';
   @state() private _showZoneTypePicker = false;
@@ -225,8 +306,28 @@ export class ZonesPage extends LitElement {
     .setting-item { margin-bottom: 12px; }
     .setting-item label { display: block; font-size: 12px; color: var(--rd-dim2); margin-bottom: 4px; }
     .setting-item input[type="range"] { width: 100%; }
+    .settings-panel { padding: 12px; margin-bottom: 14px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 10px; }
+    .settings-panel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--rd-text); font-size: 13px; font-weight: 600; }
+    .settings-panel-header ha-icon { --mdc-icon-size: 18px; color: #4361ee; }
+    .settings-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-top: 10px; }
+    .settings-row label { color: var(--rd-dim2); font-size: 12px; }
+    .settings-row input[type="number"], .corner-row input { width: 82px; padding: 7px 8px; box-sizing: border-box; border: 1px solid var(--rd-line); border-radius: 6px; background: var(--rd-panel); color: var(--rd-text); }
+    .settings-row select { width: 120px; }
+    .settings-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #4361ee; }
+    .corner-grid { display: grid; gap: 6px; margin-top: 10px; }
+    .corner-row { display: grid; grid-template-columns: 28px 1fr 1fr; gap: 6px; align-items: center; color: var(--rd-dim2); font-size: 11px; }
+    .corner-row input { width: 100%; }
+    .secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 10px; padding: 8px; border: 1px solid var(--rd-line-strong); border-radius: 7px; background: transparent; color: var(--rd-text); cursor: pointer; font-size: 12px; }
+    .secondary-action:hover { border-color: #4361ee; color: #4361ee; }
+    .secondary-action ha-icon { --mdc-icon-size: 16px; }
     select { width: 100%; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; }
     .info-text { color: var(--rd-dim); font-size: 12px; line-height: 1.5; }
+    .firmware-status { margin-top: 10px; padding: 10px; border: 1px solid var(--rd-border); border-radius: 8px; background: var(--rd-deep); }
+    .firmware-status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
+    .firmware-status-row + .firmware-status-row { margin-top: 6px; }
+    .firmware-status-value { color: var(--rd-text); font-weight: 600; text-align: right; }
+    .firmware-status-note { margin: 8px 0 0; color: var(--rd-dim); font-size: 11px; line-height: 1.4; }
+    .firmware-status-note.warning { color: #f59e0b; }
     .sensor-list { display: flex; flex-direction: column; gap: 6px; }
     .sensor-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
     .sensor-item:hover { border-color: var(--rd-line-strong); }
@@ -341,6 +442,7 @@ export class ZonesPage extends LitElement {
     .zone-type-option.detection .badge { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
     .zone-type-option.exclusion .badge { background: rgba(248, 113, 113, 0.2); color: #f87171; }
     .zone-type-option.entry .badge { background: rgba(96, 165, 250, 0.2); color: #60a5fa; }
+    .zone-type-option.interference .badge { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
     .zone-type-option.disabled .badge { background: rgba(100, 116, 139, 0.18); color: var(--rd-dim); }
     .zone-type-picker-cancel { width: 100%; margin-top: 16px; padding: 12px; background: var(--rd-line); border: none; border-radius: 8px; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
     .zone-type-picker-cancel:hover { background: var(--rd-line-strong); color: var(--rd-text); }
@@ -402,6 +504,57 @@ export class ZonesPage extends LitElement {
     this._markDirty();
   }
 
+  private _radarIdentity(deviceId: string | null): string {
+    if (!deviceId || !this.hass) return '';
+    const parts = [deviceId];
+    Object.entries(this.hass.states).forEach(([entityId, state]: [string, any]) => {
+      if (entityId.includes(`.${deviceId}_`)) {
+        parts.push(String(state?.attributes?.friendly_name || ''));
+      }
+    });
+    return parts.join(' ').toLowerCase();
+  }
+
+  private _radarProductFamily(deviceId: string | null): RadarProductFamily {
+    const identity = this._radarIdentity(deviceId);
+    if (/ceil[\s_-]*sense|ceilsense/.test(identity)) return 'ceilsense';
+    if (/ultimate[\s_-]*sensor|ultimatesensor/.test(identity)) return 'ultimate-sensor';
+    return 'unknown';
+  }
+
+  private _recommendedMountingMode(deviceId: string | null): SensorMountingMode {
+    return this._radarProductFamily(deviceId) === 'ceilsense' ? 'ceiling' : 'wall';
+  }
+
+  private _coverageRadius(sensor: SensorInstance): number {
+    if (sensor.mountingMode !== 'ceiling') return sensor.range;
+    const halfFov = Math.min(85, Math.max(15, sensor.fov / 2)) * Math.PI / 180;
+    const projectedRadius = sensor.heightMm * Math.tan(halfFov);
+    return Math.min(sensor.range, Math.max(500, projectedRadius));
+  }
+
+  private _selectRadarDevice(index: number, deviceId: string | null) {
+    const mountingMode = this._recommendedMountingMode(deviceId);
+    this._updateSensor(index, {
+      deviceId,
+      mountingMode,
+      heightMm: mountingMode === 'ceiling'
+        ? Math.max(this._sensors[index]?.heightMm || 0, 2400)
+        : Math.min(this._sensors[index]?.heightMm || 1500, 2200),
+    });
+  }
+
+  private _setSensorMountingMode(index: number, mountingMode: SensorMountingMode) {
+    const sensor = this._sensors[index];
+    if (!sensor) return;
+    this._updateSensor(index, {
+      mountingMode,
+      heightMm: mountingMode === 'ceiling'
+        ? Math.max(sensor.heightMm || 0, 2400)
+        : Math.min(sensor.heightMm || 1500, 2200),
+    });
+  }
+
   private _addSensor() {
     // Place a new sensor at the room centroid
     let cx = 0, cy = 0;
@@ -418,6 +571,7 @@ export class ZonesPage extends LitElement {
       range: 6000,
       fov: 120,
       heightMm: 1500,
+      mountingMode: 'wall',
     };
     this._sensors = [...this._sensors, sensor];
     this._selectedSensorIndex = this._sensors.length - 1;
@@ -746,14 +900,14 @@ export class ZonesPage extends LitElement {
       if (!sensor.deviceId) continue;
       const targets: Array<{x: number, y: number, active: boolean}> = [];
       let trails = this._targetTrails[sensor.id];
-      if (!trails) { trails = [[], [], []]; this._targetTrails[sensor.id] = trails; }
+      if (!trails) { trails = Array.from({ length: 5 }, () => []); this._targetTrails[sensor.id] = trails; }
 
-      for (let i = 1; i <= 3; i++) {
-        const xEntity = this.hass.states[`sensor.${sensor.deviceId}_target_${i}_x`];
-        const yEntity = this.hass.states[`sensor.${sensor.deviceId}_target_${i}_y`];
+      for (let i = 1; i <= 5; i++) {
+        const xEntity = this._findTargetEntity(sensor.deviceId, i, 'x');
+        const yEntity = this._findTargetEntity(sensor.deviceId, i, 'y');
         if (!xEntity || !yEntity) continue;
-        const x = parseFloat(xEntity.state) || 0;
-        const y = parseFloat(yEntity.state) || 0;
+        const x = this._targetCoordinateMm(xEntity);
+        const y = this._targetCoordinateMm(yEntity);
         const active = x !== 0 || y !== 0;
         targets.push({ x, y, active });
 
@@ -779,23 +933,100 @@ export class ZonesPage extends LitElement {
     }
   }
 
-  private _getRadarDevices(): Array<{id: string, name: string}> {
+  private _targetEntityIds(deviceId: string, target: number, axis: 'x' | 'y'): string[] {
+    return [
+      `sensor.${deviceId}_target_${target}_${axis}`,
+      `sensor.${deviceId}_target${target}_${axis}`,
+      `sensor.${deviceId}_tracking_target_${target}_${axis}`,
+      `sensor.${deviceId}_tracking_target${target}_${axis}`,
+    ];
+  }
+
+  private _findTargetEntity(deviceId: string, target: number, axis: 'x' | 'y') {
+    for (const entityId of this._targetEntityIds(deviceId, target, axis)) {
+      const entity = this.hass.states[entityId];
+      if (entity) return entity;
+    }
+    return undefined;
+  }
+
+  private _targetCoordinateMm(entity: any): number {
+    const value = Number.parseFloat(entity?.state);
+    if (!Number.isFinite(value)) return 0;
+
+    const unit = String(entity?.attributes?.unit_of_measurement || '').trim().toLowerCase();
+    if (unit === 'm') return value * 1000;
+    if (unit === 'cm') return value * 10;
+    return value;
+  }
+
+  private _getRadarCapabilities(deviceId: string | null): RadarCapabilities {
+    if (!deviceId) {
+      return {
+        targetCount: 0,
+        coordinateMode: 'unknown',
+        polygonZones: false,
+        entryLines: false,
+        zoneProfiles: false,
+        interferenceZones: false,
+        smoothing: false,
+        crossZoneTracking: false,
+      };
+    }
+
+    let targetCount = 0;
+    for (let target = 1; target <= 5; target++) {
+      if (this._findTargetEntity(deviceId, target, 'x') && this._findTargetEntity(deviceId, target, 'y')) {
+        targetCount++;
+      }
+    }
+    const coordinateMode = this._entityExists(`sensor.${deviceId}_tracking_target_1_x`)
+      || this._entityExists(`sensor.${deviceId}_tracking_target1_x`)
+      ? 'tracking-target'
+      : this._entityExists(`sensor.${deviceId}_target_1_x`) || this._entityExists(`sensor.${deviceId}_target1_x`)
+        ? 'target'
+        : 'unknown';
+
+    return {
+      targetCount,
+      coordinateMode,
+      polygonZones: this._entityExists(`text.${deviceId}_polygon_zone_1`),
+      entryLines: this._entityExists(`text.${deviceId}_entry_line_1`),
+      zoneProfiles: this._entityExists(`text.${deviceId}_zone_profile_1`),
+      interferenceZones: this._entityExists(`text.${deviceId}_interference_zone_1`),
+      smoothing: this._entityExists(`switch.${deviceId}_target_smoothing_enabled`)
+        || this._entityExists(`number.${deviceId}_target_smoothing`),
+      crossZoneTracking: this._entityExists(`switch.${deviceId}_cross_zone_tracking`),
+    };
+  }
+
+  private _getRadarDevices(): RadarDevice[] {
     if (!this.hass) return [];
-    const devices: Array<{id: string, name: string}> = [];
+    const devices: RadarDevice[] = [];
     const seen = new Set<string>();
 
     Object.keys(this.hass.states).forEach(entityId => {
-      const match = entityId.match(/^sensor\.(.+)_target_1_x$/);
+      // Match the longer LD2460/modern Mini name first. A combined greedy
+      // expression would incorrectly treat "_tracking" as part of deviceId.
+      const match = entityId.match(/^sensor\.(.+)_tracking_target_?1_x$/)
+        || entityId.match(/^sensor\.(.+)_target_?1_x$/);
       if (match) {
         const deviceId = match[1];
         if (!seen.has(deviceId)) {
           seen.add(deviceId);
           const name = deviceId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-          devices.push({ id: deviceId, name });
+          const productFamily = this._radarProductFamily(deviceId);
+          devices.push({
+            id: deviceId,
+            name,
+            capabilities: this._getRadarCapabilities(deviceId),
+            productFamily,
+            recommendedMountingMode: productFamily === 'ceilsense' ? 'ceiling' : 'wall',
+          });
         }
       }
     });
-    return devices;
+    return devices.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   private async _loadRooms() {
@@ -849,6 +1080,7 @@ export class ZonesPage extends LitElement {
           range: sn.range ?? 6000,
           fov: sn.fov ?? 120,
           heightMm: sn.heightMm ?? 2000,
+          mountingMode: sn.mountingMode ?? this._recommendedMountingMode(sn.deviceId ?? null),
         }));
       } else if (legacySensor) {
         this._sensors = [{
@@ -859,19 +1091,40 @@ export class ZonesPage extends LitElement {
           range: legacySensor.range ?? 6000,
           fov: legacySensor.fov ?? 120,
           heightMm: legacySensor.heightMm ?? 2000,
+          mountingMode: legacySensor.mountingMode ?? this._recommendedMountingMode(legacySensor.deviceId ?? null),
         }];
       } else {
         this._sensors = [];
       }
       this._selectedSensorIndex = this._sensors.length > 0 ? 0 : null;
 
-      // Load zones
-      this._zones = (room as any).zones || [];
+      // New fields are optional so rooms saved by older releases remain usable.
+      this._zones = Array.isArray((room as any).zones)
+        ? (room as any).zones.map((zone: unknown, index: number) => normalizeZone((zone || {}) as Partial<ZoneData>, index))
+        : [];
+      const savedCalibration = (room as any).calibration || {};
+      this._calibration = {
+        enabled: Boolean(savedCalibration.enabled),
+        corners: Array.isArray(savedCalibration.corners)
+          ? savedCalibration.corners.filter((point: Point) => Number.isFinite(point?.x) && Number.isFinite(point?.y)).slice(0, 4)
+          : [],
+        gridSizeMm: savedCalibration.gridSizeMm === 300 ? 300 : 100,
+        snapToGrid: savedCalibration.snapToGrid !== false,
+      };
+      const savedTracking = (room as any).tracking || {};
+      this._tracking = {
+        smoothingEnabled: savedTracking.smoothingEnabled !== false,
+        smoothingAlpha: Math.min(1, Math.max(0.05, Number(savedTracking.smoothingAlpha) || DEFAULT_TRACKING.smoothingAlpha)),
+        maxJumpMm: Math.max(100, Number(savedTracking.maxJumpMm) || DEFAULT_TRACKING.maxJumpMm),
+        trackHoldMs: Math.max(0, Number(savedTracking.trackHoldMs) || DEFAULT_TRACKING.trackHoldMs),
+        crossZoneTracking: savedTracking.crossZoneTracking !== false,
+      };
 
       this._autoZoom();
     }
     this._toolMode = 'select';
     this._selectedZoneIndex = null;
+    this._selectedZonePartIndex = 0;
     this._drawingZone = [];
   }
 
@@ -890,6 +1143,8 @@ export class ZonesPage extends LitElement {
       range: firstSensor.range,
       fov: firstSensor.fov,
       deviceId: firstSensor.deviceId,
+      heightMm: firstSensor.heightMm,
+      mountingMode: firstSensor.mountingMode,
     } : null;
 
     try {
@@ -915,6 +1170,8 @@ export class ZonesPage extends LitElement {
         sensor,
         sensors: this._sensors,
         zones: this._zones,
+        calibration: this._calibration,
+        tracking: this._tracking,
       };
       await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
       this.rooms = this.rooms.map(r => r.id === this._selectedRoomId ? updatedRoom as any : r);
@@ -947,6 +1204,18 @@ export class ZonesPage extends LitElement {
     return true;
   }
 
+  private async _setSwitchIfPresent(entityId: string, enabled: boolean): Promise<boolean> {
+    if (!this._entityExists(entityId)) return false;
+    await this.hass.callService('switch', enabled ? 'turn_on' : 'turn_off', { entity_id: entityId });
+    return true;
+  }
+
+  private async _setNumberIfPresent(entityId: string, value: number): Promise<boolean> {
+    if (!this._entityExists(entityId)) return false;
+    await this.hass.callService('number', 'set_value', { entity_id: entityId, value });
+    return true;
+  }
+
   private async _pushToESPHome() {
     const linkedSensors = this._sensors.filter(sn => sn.deviceId);
     if (linkedSensors.length === 0) {
@@ -957,6 +1226,7 @@ export class ZonesPage extends LitElement {
 
     const detectionZones = this._zones.filter(z => z.type === 'detection');
     const exclusionZones = this._zones.filter(z => z.type === 'exclusion');
+    const interferenceZones = this._zones.filter(z => z.type === 'interference');
     const entryLines = this._zones.filter(z => z.type === 'entry');
     const defaultLineOwner = linkedSensors[0].id;
     const errors: string[] = [];
@@ -980,6 +1250,21 @@ export class ZonesPage extends LitElement {
         };
         const toPolygonStr = (points: Point[]): string =>
           points.map(pt => { const sp = toSensor(pt); return `${Math.round(sp.x)}:${Math.round(sp.y)}`; }).join(';');
+        const toZoneSlots = (zones: ZoneData[], maxSlots: number, label: string): Array<{ zone: ZoneData, polygon: string }> => {
+          const slots = zones.flatMap(zone =>
+            getZoneParts(zone).map(points => ({ zone, polygon: toPolygonStr(points) }))
+          );
+          if (slots.length > maxSlots) {
+            errors.push(`${deviceName}: ${label} uses ${slots.length} polygon parts, but this firmware supports ${maxSlots}; only the first ${maxSlots} were pushed`);
+          }
+          return slots.slice(0, maxSlots);
+        };
+        const detectionSlots = toZoneSlots(detectionZones, 4, 'detection zones');
+        const exclusionSlots = toZoneSlots(exclusionZones, 2, 'exclusion zones');
+        const toProfileStr = (zone: ZoneData | undefined): string => {
+          const profile = zone?.profile || PROFILE_DEFAULTS.default;
+          return `${profile.enterDelayMs},${profile.leaveDelayMs},${profile.minDwellMs},${profile.minTargets}`;
+        };
 
         const hasNativeZoneTextApi = [
           'polygon_zone_1',
@@ -991,18 +1276,33 @@ export class ZonesPage extends LitElement {
           await this._turnOnSwitchIfPresent(`switch.${deviceName}_polygon_zones_enabled`);
 
           for (let i = 0; i < 4; i++) {
-            const zone = detectionZones[i];
+            const slot = detectionSlots[i];
             const entityId = `text.${deviceName}_polygon_zone_${i + 1}`;
-            const pushed = await this._setTextEntityIfPresent(entityId, zone ? toPolygonStr(zone.points) : '');
+            const pushed = await this._setTextEntityIfPresent(entityId, slot?.polygon || '');
+            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+            await this._setTextEntityIfPresent(`text.${deviceName}_zone_profile_${i + 1}`, toProfileStr(slot?.zone));
+          }
+
+          for (let i = 0; i < 2; i++) {
+            const slot = exclusionSlots[i];
+            const entityId = `text.${deviceName}_polygon_exclusion_${i + 1}`;
+            const pushed = await this._setTextEntityIfPresent(entityId, slot?.polygon || '');
             if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
           }
 
           for (let i = 0; i < 2; i++) {
-            const zone = exclusionZones[i];
-            const entityId = `text.${deviceName}_polygon_exclusion_${i + 1}`;
-            const pushed = await this._setTextEntityIfPresent(entityId, zone ? toPolygonStr(zone.points) : '');
-            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+            const zone = interferenceZones[i];
+            const entityId = `text.${deviceName}_interference_zone_${i + 1}`;
+            const polygon = zone ? toPolygonStr(getZoneParts(zone)[0] || []) : '';
+            const pushed = await this._setTextEntityIfPresent(entityId, polygon);
+            if (zone && !pushed) errors.push(`${deviceName}: update firmware to use interference zones`);
           }
+
+          await this._setSwitchIfPresent(`switch.${deviceName}_target_smoothing_enabled`, this._tracking.smoothingEnabled);
+          await this._setSwitchIfPresent(`switch.${deviceName}_cross_zone_tracking`, this._tracking.crossZoneTracking);
+          await this._setNumberIfPresent(`number.${deviceName}_target_smoothing`, this._tracking.smoothingAlpha);
+          await this._setNumberIfPresent(`number.${deviceName}_tracking_max_jump`, this._tracking.maxJumpMm);
+          await this._setNumberIfPresent(`number.${deviceName}_tracking_hold_time`, this._tracking.trackHoldMs / 1000);
 
           const ownedLines = entryLines.filter(l => (l.sensorId || defaultLineOwner) === sensor.id);
           for (let i = 0; i < 2; i++) {
@@ -1027,11 +1327,11 @@ export class ZonesPage extends LitElement {
 
         // Detection zones: every sensor watches the same room zones
         for (let i = 0; i < 4; i++) {
-          const zone = detectionZones[i];
+          const slot = detectionSlots[i];
           try {
             await this.hass.callService('esphome', `${deviceName}_set_polygon_zone`, {
               zone_id: i + 1,
-              polygon: zone ? toPolygonStr(zone.points) : '',
+              polygon: slot?.polygon || '',
             });
           } catch (e) {
             errors.push(`${deviceName}: set_polygon_zone not available`);
@@ -1041,11 +1341,11 @@ export class ZonesPage extends LitElement {
 
         // Exclusion zones
         for (let i = 0; i < 2; i++) {
-          const zone = exclusionZones[i];
+          const slot = exclusionSlots[i];
           try {
             await this.hass.callService('esphome', `${deviceName}_set_polygon_exclusion`, {
               zone_id: i + 1,
-              polygon: zone ? toPolygonStr(zone.points) : '',
+              polygon: slot?.polygon || '',
             });
           } catch (e) {
             errors.push(`${deviceName}: set_polygon_exclusion not available`);
@@ -1129,9 +1429,108 @@ export class ZonesPage extends LitElement {
     return { x: svgPt.x, y: svgPt.y };
   }
 
-  private _snapToGrid(p: Point): Point {
-    const grid = 100; // 10cm snap
-    return { x: Math.round(p.x / grid) * grid, y: Math.round(p.y / grid) * grid };
+  private _calibrationPolygon(): Point[] {
+    return this._calibration.enabled && this._calibration.corners.length === 4
+      ? this._calibration.corners
+      : [];
+  }
+
+  private _isPointInPolygon(point: Point, polygon: Point[]): boolean {
+    if (polygon.length < 3) return true;
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const current = polygon[i];
+      const previous = polygon[j];
+      const intersects = ((current.y > point.y) !== (previous.y > point.y))
+        && point.x < ((previous.x - current.x) * (point.y - current.y))
+          / (previous.y - current.y) + current.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  private _nearestPointOnSegment(point: Point, start: Point, end: Point): Point {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared === 0) return { ...start };
+    const position = Math.max(0, Math.min(1,
+      ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+    return { x: start.x + position * dx, y: start.y + position * dy };
+  }
+
+  private _constrainToCalibration(point: Point): Point {
+    const polygon = this._calibrationPolygon();
+    if (polygon.length < 3 || this._isPointInPolygon(point, polygon)) return point;
+
+    let nearest = point;
+    let nearestDistance = Infinity;
+    polygon.forEach((start, index) => {
+      const end = polygon[(index + 1) % polygon.length];
+      const candidate = this._nearestPointOnSegment(point, start, end);
+      const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+      if (distance < nearestDistance) {
+        nearest = candidate;
+        nearestDistance = distance;
+      }
+    });
+    return nearest;
+  }
+
+  private _snapToGrid(p: Point, constrainToCalibration = false): Point {
+    const snapped = this._calibration.snapToGrid
+      ? {
+          x: Math.round(p.x / this._calibration.gridSizeMm) * this._calibration.gridSizeMm,
+          y: Math.round(p.y / this._calibration.gridSizeMm) * this._calibration.gridSizeMm,
+        }
+      : p;
+    return constrainToCalibration ? this._constrainToCalibration(snapped) : snapped;
+  }
+
+  private _activeZonePart(zone: ZoneData): Point[] {
+    const parts = getZoneParts(zone);
+    const index = Math.max(0, Math.min(this._selectedZonePartIndex, parts.length - 1));
+    return parts[index] || zone.points;
+  }
+
+  private _updateZonePart(zoneIndex: number, partIndex: number, points: Point[]) {
+    this._zones = this._zones.map((zone, index) => {
+      if (index !== zoneIndex) return zone;
+      const parts = getZoneParts(zone).map(part => [...part]);
+      parts[partIndex] = points;
+      return { ...zone, points: parts[0], parts };
+    });
+    this._markDirty();
+  }
+
+  private _selectZone(zoneIndex: number, partIndex = 0) {
+    this._selectedZoneIndex = zoneIndex;
+    this._selectedZonePartIndex = partIndex;
+    this._toolMode = 'zone';
+  }
+
+  private _startAddingZonePart(zoneIndex: number) {
+    const zone = this._zones[zoneIndex];
+    if (!zone || zone.type === 'entry') return;
+    this._appendToZoneIndex = zoneIndex;
+    this._selectedZoneIndex = zoneIndex;
+    this._selectedZonePartIndex = getZoneParts(zone).length;
+    this._drawingZone = [];
+    this._pendingZonePoints = [];
+    this._toolMode = 'zone';
+  }
+
+  private _removeZonePart(zoneIndex: number, partIndex: number) {
+    const zone = this._zones[zoneIndex];
+    if (!zone) return;
+    const parts = getZoneParts(zone);
+    if (parts.length <= 1) return;
+    const nextParts = parts.filter((_, index) => index !== partIndex);
+    this._zones = this._zones.map((item, index) => index === zoneIndex
+      ? { ...item, points: nextParts[0], parts: nextParts }
+      : item);
+    this._selectedZonePartIndex = Math.max(0, Math.min(partIndex, nextParts.length - 1));
+    this._markDirty();
   }
 
   // Point-in-polygon algorithm (ray casting) - check if point is inside room
@@ -1162,7 +1561,7 @@ export class ZonesPage extends LitElement {
     // Sensor placement: in sensor mode a click moves the selected sensor
     // (only allowed inside the room)
     if (this._toolMode === 'sensor' && this._selectedSensorIndex !== null) {
-      const snappedPt = this._snapToGrid(worldPt);
+      const snappedPt = this._snapToGrid(worldPt, true);
       if (this._isPointInRoom(snappedPt)) {
         this._updateSensor(this._selectedSensorIndex, { x: snappedPt.x, y: snappedPt.y });
       }
@@ -1207,7 +1606,7 @@ export class ZonesPage extends LitElement {
 
     // Zone drawing/editing
     if (this._toolMode === 'zone') {
-      const snappedPt = this._snapToGrid(worldPt);
+      const snappedPt = this._snapToGrid(worldPt, true);
 
       // Check if clicking on midpoint preview to add new point (only for polygon zones, not entry lines)
       if (this._zoneMidpointPreview) {
@@ -1220,10 +1619,9 @@ export class ZonesPage extends LitElement {
           // Add point to existing zone (only if it's a polygon, not entry line)
           const zone = this._zones[this._selectedZoneIndex];
           if (zone.type !== 'entry') {
-            const newPoints = [...zone.points];
+            const newPoints = [...this._activeZonePart(zone)];
             newPoints.splice(this._zoneMidpointPreview.segmentIndex + 1, 0, this._zoneMidpointPreview.point);
-            this._zones = this._zones.map((z, i) => i === this._selectedZoneIndex ? { ...z, points: newPoints } : z);
-            this._markDirty();
+            this._updateZonePart(this._selectedZoneIndex, this._selectedZonePartIndex, newPoints);
           }
         }
         this._zoneMidpointPreview = null;
@@ -1239,6 +1637,9 @@ export class ZonesPage extends LitElement {
       // Check if this is the second point - could be an entry line!
       if (this._drawingZone.length === 1) {
         this._drawingZone = [...this._drawingZone, snappedPt];
+        // A disconnected part already belongs to an existing polygon zone. It
+        // therefore never needs the zone-type picker and can continue drawing.
+        if (this._appendToZoneIndex !== null) return;
         // After 2 points, show type picker - user can choose entry line OR continue drawing polygon
         this._pendingZonePoints = [...this._drawingZone];
         this._showZoneTypePicker = true;
@@ -1250,6 +1651,20 @@ export class ZonesPage extends LitElement {
       if (this._drawingZone.length >= 3) {
         const first = this._drawingZone[0];
         if (Math.hypot(snappedPt.x - first.x, snappedPt.y - first.y) < 250) {
+          if (this._appendToZoneIndex !== null) {
+            const zoneIndex = this._appendToZoneIndex;
+            const zone = this._zones[zoneIndex];
+            const parts = [...getZoneParts(zone), [...this._drawingZone]];
+            this._zones = this._zones.map((item, index) => index === zoneIndex
+              ? { ...item, points: parts[0], parts }
+              : item);
+            this._selectedZoneIndex = zoneIndex;
+            this._selectedZonePartIndex = parts.length - 1;
+            this._appendToZoneIndex = null;
+            this._drawingZone = [];
+            this._markDirty();
+            return;
+          }
           // Zone is closed - show type picker for polygon
           this._pendingZonePoints = [...this._drawingZone];
           this._drawingZone = [];
@@ -1290,11 +1705,10 @@ export class ZonesPage extends LitElement {
     // Delete selected zone point
     if (this._selectedZoneIndex !== null) {
       const zone = this._zones[this._selectedZoneIndex];
-      const idx = zone.points.findIndex(p => Math.hypot(p.x - worldPt.x, p.y - worldPt.y) < 200);
-      if (idx !== -1 && zone.points.length > 3) {
-        const newPoints = zone.points.filter((_, i) => i !== idx);
-        this._zones = this._zones.map((z, i) => i === this._selectedZoneIndex ? { ...z, points: newPoints } : z);
-        this._markDirty();
+      const activePart = this._activeZonePart(zone);
+      const idx = activePart.findIndex(p => Math.hypot(p.x - worldPt.x, p.y - worldPt.y) < 200);
+      if (idx !== -1 && activePart.length > 3) {
+        this._updateZonePart(this._selectedZoneIndex, this._selectedZonePartIndex, activePart.filter((_, i) => i !== idx));
       }
     }
   }
@@ -1307,7 +1721,7 @@ export class ZonesPage extends LitElement {
 
     // Dragging a sensor - only allow inside room
     if (this._draggingSensorIndex !== null) {
-      const snappedPt = this._snapToGrid(worldPt);
+      const snappedPt = this._snapToGrid(worldPt, true);
       if (this._isPointInRoom(snappedPt)) {
         this._updateSensor(this._draggingSensorIndex, { x: snappedPt.x, y: snappedPt.y });
       }
@@ -1410,12 +1824,11 @@ export class ZonesPage extends LitElement {
 
     // Dragging zone point in selected zone
     if (this._draggingZonePointIndex !== null && this._selectedZoneIndex !== null) {
-      const snappedPt = this._snapToGrid(worldPt);
+      const snappedPt = this._snapToGrid(worldPt, true);
       const zone = this._zones[this._selectedZoneIndex];
-      const newPoints = [...zone.points];
+      const newPoints = [...this._activeZonePart(zone)];
       newPoints[this._draggingZonePointIndex] = snappedPt;
-      this._zones = this._zones.map((z, i) => i === this._selectedZoneIndex ? { ...z, points: newPoints } : z);
-      this._markDirty();
+      this._updateZonePart(this._selectedZoneIndex, this._selectedZonePartIndex, newPoints);
       return;
     }
 
@@ -1424,8 +1837,12 @@ export class ZonesPage extends LitElement {
       const dx = worldPt.x - this._dragStartPos.x;
       const dy = worldPt.y - this._dragStartPos.y;
       const zone = this._zones[this._draggingWholeZoneIndex];
-      const newPoints = zone.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
-      this._zones = this._zones.map((z, i) => i === this._draggingWholeZoneIndex ? { ...z, points: newPoints } : z);
+      const parts = getZoneParts(zone).map(part => part.map(p => ({ x: p.x + dx, y: p.y + dy })));
+      const calibration = this._calibrationPolygon();
+      if (calibration.length > 0 && parts.some(part => part.some(point => !this._isPointInPolygon(point, calibration)))) {
+        return;
+      }
+      this._zones = this._zones.map((z, i) => i === this._draggingWholeZoneIndex ? { ...z, points: parts[0], parts } : z);
       this._dragStartPos = worldPt;
       this._markDirty();
       return;
@@ -1433,7 +1850,7 @@ export class ZonesPage extends LitElement {
 
     // Dragging drawing zone point
     if (this._draggingDrawingPointIndex !== null) {
-      const snappedPt = this._snapToGrid(worldPt);
+      const snappedPt = this._snapToGrid(worldPt, true);
       const newPoints = [...this._drawingZone];
       newPoints[this._draggingDrawingPointIndex] = snappedPt;
       this._drawingZone = newPoints;
@@ -1463,9 +1880,10 @@ export class ZonesPage extends LitElement {
     // Check for midpoint hover on selected zone (only when not drawing)
     if (this._toolMode === 'zone' && this._selectedZoneIndex !== null && this._drawingZone.length === 0 && !this._zoneMidpointPreview) {
       const zone = this._zones[this._selectedZoneIndex];
-      for (let i = 0; i < zone.points.length; i++) {
-        const p1 = zone.points[i];
-        const p2 = zone.points[(i + 1) % zone.points.length];
+      const activePart = this._activeZonePart(zone);
+      for (let i = 0; i < activePart.length; i++) {
+        const p1 = activePart[i];
+        const p2 = activePart[(i + 1) % activePart.length];
         const midX = (p1.x + p2.x) / 2;
         const midY = (p1.y + p2.y) / 2;
         if (Math.hypot(worldPt.x - midX, worldPt.y - midY) < 200) {
@@ -1530,7 +1948,8 @@ export class ZonesPage extends LitElement {
     // Check for selected zone point drag start
     if (this._selectedZoneIndex !== null && this._toolMode === 'zone') {
       const zone = this._zones[this._selectedZoneIndex];
-      const idx = zone.points.findIndex(p => Math.hypot(p.x - worldPt.x, p.y - worldPt.y) < 200);
+      const activePart = this._activeZonePart(zone);
+      const idx = activePart.findIndex(p => Math.hypot(p.x - worldPt.x, p.y - worldPt.y) < 200);
       if (idx !== -1) {
         this._draggingZonePointIndex = idx;
         return;
@@ -1558,7 +1977,9 @@ export class ZonesPage extends LitElement {
       }
 
       // Check if clicking inside the selected polygon zone to drag whole zone
-      if (zone.points.length >= 3 && this._isPointInZone(worldPt, zone.points)) {
+      const clickedPart = getZoneParts(zone).findIndex(part => this._isPointInZone(worldPt, part));
+      if (clickedPart !== -1) {
+        this._selectedZonePartIndex = clickedPart;
         this._draggingWholeZoneIndex = this._selectedZoneIndex;
         this._dragStartPos = worldPt;
         return;
@@ -1612,8 +2033,16 @@ export class ZonesPage extends LitElement {
   private _deleteZone(index: number) {
     this._zones = this._zones.filter((_, i) => i !== index);
     this._markDirty();
-    if (this._selectedZoneIndex === index) this._selectedZoneIndex = null;
+    if (this._selectedZoneIndex === index) {
+      this._selectedZoneIndex = null;
+      this._selectedZonePartIndex = 0;
+    } else if (this._selectedZoneIndex !== null && this._selectedZoneIndex > index) {
+      this._selectedZoneIndex -= 1;
+    }
     if (this._editingZoneIndex === index) this._editingZoneIndex = null;
+    else if (this._editingZoneIndex !== null && this._editingZoneIndex > index) this._editingZoneIndex -= 1;
+    if (this._appendToZoneIndex === index) this._appendToZoneIndex = null;
+    else if (this._appendToZoneIndex !== null && this._appendToZoneIndex > index) this._appendToZoneIndex -= 1;
   }
 
   private _updateZoneName(index: number, name: string) {
@@ -1622,7 +2051,11 @@ export class ZonesPage extends LitElement {
   }
 
   private _updateZoneType(index: number, type: ZoneType) {
-    this._zones = this._zones.map((z, i) => i === index ? { ...z, type } : z);
+    this._zones = this._zones.map((z, i) => i === index ? {
+      ...z,
+      type,
+      profile: type === 'detection' ? (z.profile || { ...PROFILE_DEFAULTS.default }) : z.profile,
+    } : z);
     this._markDirty();
   }
 
@@ -1638,17 +2071,23 @@ export class ZonesPage extends LitElement {
     if (!this._canAddZone(type)) return;
     this._newZoneType = type;
     this._drawingZone = [];
+    this._pendingZonePoints = [];
+    this._appendToZoneIndex = null;
     this._toolMode = 'zone';
     this._selectedZoneIndex = null;
+    this._selectedZonePartIndex = 0;
   }
 
   private _startDrawingAnyZone() {
     // Check if any type is available
-    const hasAvailable = (['detection', 'exclusion', 'entry'] as ZoneType[]).some(t => this._canAddZone(t));
+    const hasAvailable = (['detection', 'exclusion', 'entry', 'interference'] as ZoneType[]).some(t => this._canAddZone(t));
     if (!hasAvailable) return;
     this._drawingZone = [];
+    this._pendingZonePoints = [];
+    this._appendToZoneIndex = null;
     this._toolMode = 'zone';
     this._selectedZoneIndex = null;
+    this._selectedZonePartIndex = 0;
   }
 
   private _selectZoneType(type: ZoneType) {
@@ -1684,11 +2123,14 @@ export class ZonesPage extends LitElement {
 
     const countOfType = this._zones.filter(z => z.type === type).length + 1;
     const label = ZONE_LABELS[type];
+    const points = [...this._pendingZonePoints];
     this._zones = [...this._zones, {
       id: Date.now(),
-      points: [...this._pendingZonePoints],
+      points,
+      parts: [points],
       type: type,
       name: `${label.singular} Zone ${countOfType}`,
+      profile: type === 'detection' ? { ...PROFILE_DEFAULTS.default } : undefined,
     }];
     this._showZoneTypePicker = false;
     this._pendingZonePoints = [];
@@ -1712,6 +2154,63 @@ export class ZonesPage extends LitElement {
     if (zone.type !== 'entry') return;
     const newDir = zone.inDirection === 'left' ? 'right' : 'left';
     this._zones = this._zones.map((z, i) => i === index ? { ...z, inDirection: newDir } : z);
+    this._markDirty();
+  }
+
+  private _applyZoneProfile(index: number, preset: ZoneProfilePreset) {
+    const defaults = PROFILE_DEFAULTS[preset === 'custom' ? 'default' : preset];
+    this._zones = this._zones.map((zone, zoneIndex) => zoneIndex === index ? {
+      ...zone,
+      profile: preset === 'custom'
+        ? { ...(zone.profile || PROFILE_DEFAULTS.default), preset }
+        : { ...defaults },
+    } : zone);
+    this._markDirty();
+  }
+
+  private _updateZoneProfile(index: number, patch: Partial<Omit<ZoneProfile, 'preset'>>) {
+    this._zones = this._zones.map((zone, zoneIndex) => zoneIndex === index ? {
+      ...zone,
+      profile: {
+        ...(zone.profile || PROFILE_DEFAULTS.default),
+        ...patch,
+        preset: 'custom',
+      },
+    } : zone);
+    this._markDirty();
+  }
+
+  private _updateCalibration(patch: Partial<RoomCalibration>) {
+    this._calibration = { ...this._calibration, ...patch };
+    this._markDirty();
+  }
+
+  private _useRoomCornersForCalibration() {
+    if (this._roomPoints.length < 3) return;
+    let corners: Point[];
+    if (this._roomPoints.length === 4) {
+      corners = this._roomPoints.map(point => ({ ...point }));
+    } else {
+      const xs = this._roomPoints.map(point => point.x);
+      const ys = this._roomPoints.map(point => point.y);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      corners = [
+        { x: minX, y: minY }, { x: maxX, y: minY },
+        { x: maxX, y: maxY }, { x: minX, y: maxY },
+      ];
+    }
+    this._updateCalibration({ enabled: true, corners });
+  }
+
+  private _updateCalibrationCorner(index: number, patch: Partial<Point>) {
+    const corners = [...this._calibration.corners];
+    corners[index] = { ...(corners[index] || { x: 0, y: 0 }), ...patch };
+    this._updateCalibration({ corners });
+  }
+
+  private _updateTracking(patch: Partial<TrackingSettings>) {
+    this._tracking = { ...this._tracking, ...patch };
     this._markDirty();
   }
 
@@ -1756,7 +2255,9 @@ export class ZonesPage extends LitElement {
       `;
     }
 
-    // Polygon zones (detection/exclusion)
+    // Polygon zones (detection/exclusion/interference)
+    const parts = getZoneParts(zone);
+    const profile = zone.profile || PROFILE_DEFAULTS.default;
     return html`
       <div class="zone-edit-form">
         <label>Zone name</label>
@@ -1772,7 +2273,67 @@ export class ZonesPage extends LitElement {
                   @click="${() => this._updateZoneType(i, 'exclusion')}">
             🚷 Exclusion
           </button>
+          <button class="interference ${zone.type === 'interference' ? 'active' : ''}"
+                  @click="${() => this._updateZoneType(i, 'interference')}">
+            ⚡ Interference
+          </button>
         </div>
+
+        <label>Zone parts</label>
+        <div class="direction-toggle">
+          ${parts.map((_, partIndex) => html`
+            <button class="${this._selectedZonePartIndex === partIndex ? 'active' : ''}"
+                    @click="${() => this._selectZone(i, partIndex)}">
+              Part ${partIndex + 1}
+            </button>
+          `)}
+        </div>
+        <div class="edit-actions" style="justify-content: flex-start;">
+          <button class="cancel-btn" @click="${() => this._startAddingZonePart(i)}">
+            <ha-icon icon="mdi:vector-polygon-plus"></ha-icon> Add separate part
+          </button>
+          ${parts.length > 1 ? html`
+            <button class="delete-btn" @click="${() => this._removeZonePart(i, this._selectedZonePartIndex)}">
+              <ha-icon icon="mdi:delete-outline"></ha-icon> Remove part
+            </button>
+          ` : nothing}
+        </div>
+        <p class="help-text">Separate parts belong to the same zone and share its presence state.</p>
+
+        ${zone.type === 'detection' ? html`
+          <label>Detection profile</label>
+          <select .value="${profile.preset}" @change="${(e: Event) => this._applyZoneProfile(i, (e.target as HTMLSelectElement).value as ZoneProfilePreset)}">
+            <option value="default">Default</option>
+            <option value="bed">Bed / sleeping</option>
+            <option value="seating">Seating area</option>
+            <option value="transit">Transit / hallway</option>
+            <option value="custom">Custom</option>
+          </select>
+          <div class="input-row">
+            <div>
+              <label>Enter delay (ms)</label>
+              <input type="number" min="0" step="100" .value="${String(profile.enterDelayMs)}"
+                     @change="${(e: Event) => this._updateZoneProfile(i, { enterDelayMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+            </div>
+            <div>
+              <label>Leave delay (ms)</label>
+              <input type="number" min="0" step="250" .value="${String(profile.leaveDelayMs)}"
+                     @change="${(e: Event) => this._updateZoneProfile(i, { leaveDelayMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+            </div>
+          </div>
+          <div class="input-row">
+            <div>
+              <label>Minimum dwell (ms)</label>
+              <input type="number" min="0" step="100" .value="${String(profile.minDwellMs)}"
+                     @change="${(e: Event) => this._updateZoneProfile(i, { minDwellMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+            </div>
+            <div>
+              <label>Minimum targets</label>
+              <input type="number" min="1" max="3" .value="${String(profile.minTargets)}"
+                     @change="${(e: Event) => this._updateZoneProfile(i, { minTargets: Math.max(1, Math.min(3, Number((e.target as HTMLInputElement).value) || 1)) })}"/>
+            </div>
+          </div>
+        ` : nothing}
         <div class="edit-actions">
           <button class="cancel-btn" @click="${() => this._editingZoneIndex = null}">Close</button>
         </div>
@@ -2307,27 +2868,58 @@ private _draw3DZones(ctx: CanvasRenderingContext2D): void {
     for (const sn of this._sensors) {
       const sensorZ = sn.heightMm ?? 2000;
       const pos = this._project3D({ x: sn.x, y: sn.y, z: sensorZ });
-      const fovRad = (sn.fov / 2) * Math.PI / 180;
-      const rotRad = (sn.rotation - 90) * Math.PI / 180;
-      const leftAngle = rotRad - fovRad;
-      const rightAngle = rotRad + fovRad;
-      const leftX = sn.x + Math.cos(leftAngle) * sn.range;
-      const leftY = sn.y + Math.sin(leftAngle) * sn.range;
-      const rightX = sn.x + Math.cos(rightAngle) * sn.range;
-      const rightY = sn.y + Math.sin(rightAngle) * sn.range;
       const origin = this._project3D({ x: sn.x, y: sn.y, z: 0 });
-      const left = this._project3D({ x: leftX, y: leftY, z: 0 });
-      const right = this._project3D({ x: rightX, y: rightY, z: 0 });
 
-      ctx.fillStyle = 'rgba(67, 97, 238, 0.15)';
-      ctx.strokeStyle = '#4361ee';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(origin.x, origin.y);
-      ctx.lineTo(left.x, left.y);
-      ctx.lineTo(right.x, right.y);
-      ctx.closePath();
-      ctx.fill(); ctx.stroke();
+      if (sn.mountingMode === 'ceiling') {
+        const radius = this._coverageRadius(sn);
+        const floorPoints = Array.from({ length: 33 }, (_, index) => {
+          const angle = (index / 32) * Math.PI * 2;
+          return this._project3D({
+            x: sn.x + Math.cos(angle) * radius,
+            y: sn.y + Math.sin(angle) * radius,
+            z: 0,
+          });
+        });
+
+        ctx.fillStyle = 'rgba(67, 97, 238, 0.13)';
+        ctx.strokeStyle = '#4361ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        floorPoints.forEach((point, index) => index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(67, 97, 238, 0.35)';
+        ctx.lineWidth = 1;
+        for (let index = 0; index < 32; index += 8) {
+          ctx.beginPath();
+          ctx.moveTo(pos.x, pos.y);
+          ctx.lineTo(floorPoints[index].x, floorPoints[index].y);
+          ctx.stroke();
+        }
+      } else {
+        const fovRad = (sn.fov / 2) * Math.PI / 180;
+        const rotRad = (sn.rotation - 90) * Math.PI / 180;
+        const leftAngle = rotRad - fovRad;
+        const rightAngle = rotRad + fovRad;
+        const leftX = sn.x + Math.cos(leftAngle) * sn.range;
+        const leftY = sn.y + Math.sin(leftAngle) * sn.range;
+        const rightX = sn.x + Math.cos(rightAngle) * sn.range;
+        const rightY = sn.y + Math.sin(rightAngle) * sn.range;
+        const left = this._project3D({ x: leftX, y: leftY, z: 0 });
+        const right = this._project3D({ x: rightX, y: rightY, z: 0 });
+
+        ctx.fillStyle = 'rgba(67, 97, 238, 0.15)';
+        ctx.strokeStyle = '#4361ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(origin.x, origin.y);
+        ctx.lineTo(left.x, left.y);
+        ctx.lineTo(right.x, right.y);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
 
       // Drop line from the sensor to its floor position (shows the height)
       ctx.strokeStyle = 'rgba(67, 97, 238, 0.5)';
@@ -2611,9 +3203,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
   private _renderGrid() {
     const lines: unknown[] = [];
-    // World-based grid: 50cm minor, 1m major lines, moves with pan/zoom
-    for (let mm = -10000; mm <= 10000; mm += 500) {
-      const major = mm % 1000 === 0;
+    const step = this._calibration.gridSizeMm;
+    const majorStep = step === 300 ? 900 : 1000;
+    for (let mm = -10000; mm <= 10000; mm += step) {
+      const major = mm % majorStep === 0;
       const v1 = this._toCanvas({ x: mm, y: -10000 });
       const v2 = this._toCanvas({ x: mm, y: 10000 });
       const h1 = this._toCanvas({ x: -10000, y: mm });
@@ -2621,7 +3214,24 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       lines.push(svg`<line class="grid-line ${major ? 'major' : ''}" x1="${v1.x}" y1="${v1.y}" x2="${v2.x}" y2="${v2.y}"/>`);
       lines.push(svg`<line class="grid-line ${major ? 'major' : ''}" x1="${h1.x}" y1="${h1.y}" x2="${h2.x}" y2="${h2.y}"/>`);
     }
-    return lines;
+    const calibration = this._calibrationPolygon();
+    if (calibration.length < 3) return lines;
+
+    const clipPath = calibration
+      .map((point, index) => {
+        const canvasPoint = this._toCanvas(point);
+        return `${index === 0 ? 'M' : 'L'} ${canvasPoint.x} ${canvasPoint.y}`;
+      })
+      .join(' ') + ' Z';
+
+    return svg`
+      <defs>
+        <clipPath id="room-calibration-clip">
+          <path d="${clipPath}"></path>
+        </clipPath>
+      </defs>
+      <g clip-path="url(#room-calibration-clip)">${lines}</g>
+    `;
   }
 
   private _renderRoom() {
@@ -2873,6 +3483,28 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
   private _renderZones() {
     const elements: unknown[] = [];
 
+    if (this._calibration.enabled && this._calibration.corners.length === 4) {
+      const calibrationPoints = this._calibration.corners.map(point => this._toCanvas(point));
+      const calibrationPath = `M ${calibrationPoints.map(point => `${point.x} ${point.y}`).join(' L ')} Z`;
+      elements.push(svg`
+        <g style="pointer-events: none;">
+          <path
+            d="${calibrationPath}"
+            fill="rgba(14, 165, 233, 0.04)"
+            stroke="#0ea5e9"
+            stroke-width="2"
+            stroke-dasharray="5 5"
+          />
+          ${calibrationPoints.map((point, index) => svg`
+            <circle cx="${point.x}" cy="${point.y}" r="7" fill="#0ea5e9" stroke="white" stroke-width="2" />
+            <text x="${point.x}" y="${point.y - 12}" fill="#0284c7" font-size="10" font-weight="700" text-anchor="middle">
+              C${index + 1}
+            </text>
+          `)}
+        </g>
+      `);
+    }
+
     // Render existing zones
     this._zones.forEach((zone, index) => {
       const colors = ZONE_COLORS[zone.type];
@@ -2908,7 +3540,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             stroke-width="${isSelected ? 4 : 3}"
             stroke-linecap="round"
             style="cursor: pointer;"
-            @click="${(e: MouseEvent) => { e.stopPropagation(); this._selectedZoneIndex = index; this._toolMode = 'zone'; }}"
+            @click="${(e: MouseEvent) => { e.stopPropagation(); this._selectZone(index); this._toolMode = 'zone'; }}"
           />
         `);
 
@@ -2984,78 +3616,81 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         return;
       }
 
-      // Polygon zones (detection/exclusion) - bestaande logica
-      if (zone.points.length < 3) return;
+      const parts = getZoneParts(zone);
+      parts.forEach((part, partIndex) => {
+        if (part.length < 3) return;
 
-      const pathPoints = zone.points.map(p => this._toCanvas(p));
-      const pathD = `M ${pathPoints.map(p => `${p.x} ${p.y}`).join(' L ')} Z`;
+        const isActivePart = isSelected && this._selectedZonePartIndex === partIndex;
+        const pathPoints = part.map(point => this._toCanvas(point));
+        const pathD = `M ${pathPoints.map(point => `${point.x} ${point.y}`).join(' L ')} Z`;
+        const dashArray = zone.type === 'exclusion'
+          ? '8 4'
+          : zone.type === 'interference'
+            ? '3 4'
+            : 'none';
 
-      // Exclusion gets dashed, detection gets solid
-      const dashArray = zone.type === 'exclusion' ? '8 4' : 'none';
-      elements.push(svg`
-        <path
-          d="${pathD}"
-          fill="${colors.fill}"
-          stroke="${colors.stroke}"
-          stroke-width="${isSelected ? 3 : 2}"
-          stroke-dasharray="${dashArray}"
-          style="cursor: ${isSelected && this._toolMode === 'zone' ? 'move' : 'pointer'};"
-          @click="${(e: MouseEvent) => { e.stopPropagation(); this._selectedZoneIndex = index; this._toolMode = 'zone'; }}"
-        />
-      `);
+        elements.push(svg`
+          <path
+            d="${pathD}"
+            fill="${colors.fill}"
+            stroke="${colors.stroke}"
+            stroke-width="${isActivePart ? 3 : 2}"
+            stroke-dasharray="${dashArray}"
+            style="cursor: ${isActivePart && this._toolMode === 'zone' ? 'move' : 'pointer'};"
+            @click="${(event: MouseEvent) => {
+              event.stopPropagation();
+              this._selectZone(index, partIndex);
+            }}"
+          />
+        `);
 
-      // Zone segment lengths (when selected)
-      if (isSelected) {
-        for (let i = 0; i < zone.points.length; i++) {
-          const p1 = zone.points[i];
-          const p2 = zone.points[(i + 1) % zone.points.length];
-          const lengthMm = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-          const lengthM = (lengthMm / 1000).toFixed(2);
-          const cp1 = this._toCanvas(p1);
-          const cp2 = this._toCanvas(p2);
-          const midX = (cp1.x + cp2.x) / 2;
-          const midY = (cp1.y + cp2.y) / 2;
-          const angle = Math.atan2(cp2.y - cp1.y, cp2.x - cp1.x) * 180 / Math.PI;
+        if (!isActivePart) return;
+
+        for (let pointIndex = 0; pointIndex < part.length; pointIndex++) {
+          const point1 = part[pointIndex];
+          const point2 = part[(pointIndex + 1) % part.length];
+          const lengthMm = Math.hypot(point2.x - point1.x, point2.y - point1.y);
+          const canvasPoint1 = this._toCanvas(point1);
+          const canvasPoint2 = this._toCanvas(point2);
+          const midpointX = (canvasPoint1.x + canvasPoint2.x) / 2;
+          const midpointY = (canvasPoint1.y + canvasPoint2.y) / 2;
+          const angle = Math.atan2(canvasPoint2.y - canvasPoint1.y, canvasPoint2.x - canvasPoint1.x) * 180 / Math.PI;
           const adjustedAngle = (angle > 90 || angle < -90) ? angle + 180 : angle;
           elements.push(svg`
             <text
-              x="${midX}" y="${midY - 8}"
+              x="${midpointX}" y="${midpointY - 8}"
               fill="${colors.stroke}"
               font-size="11"
               font-weight="600"
               text-anchor="middle"
-              transform="rotate(${adjustedAngle} ${midX} ${midY - 8})"
+              transform="rotate(${adjustedAngle} ${midpointX} ${midpointY - 8})"
               style="pointer-events: none;"
-            >${lengthM}m</text>
+            >${(lengthMm / 1000).toFixed(2)}m</text>
           `);
         }
-      }
 
-      // Zone points (draggable when selected)
-      if (isSelected) {
-        zone.points.forEach((p, pointIdx) => {
-          const cp = this._toCanvas(p);
+        part.forEach(point => {
+          const canvasPoint = this._toCanvas(point);
           elements.push(svg`
             <circle
-              cx="${cp.x}" cy="${cp.y}" r="8"
+              cx="${canvasPoint.x}" cy="${canvasPoint.y}" r="8"
               fill="${colors.stroke}" stroke="white" stroke-width="2"
               style="cursor: ${this._toolMode === 'zone' ? 'grab' : 'default'};"
             />
           `);
         });
 
-        // Render midpoint preview on 50% of each segment (not for entry lines)
-        if (this._toolMode === 'zone' && this._zoneMidpointPreview && this._zoneMidpointPreview.zoneIndex === index) {
-          const midCanvas = this._toCanvas(this._zoneMidpointPreview.point);
+        if (this._toolMode === 'zone' && this._zoneMidpointPreview?.zoneIndex === index) {
+          const midpoint = this._toCanvas(this._zoneMidpointPreview.point);
           elements.push(svg`
             <circle
-              cx="${midCanvas.x}" cy="${midCanvas.y}" r="8"
+              cx="${midpoint.x}" cy="${midpoint.y}" r="8"
               fill="#22c55e" stroke="white" stroke-width="2"
               style="cursor: pointer;"
             />
           `);
         }
-      }
+      });
     });
 
     // Render drawing zone
@@ -3145,8 +3780,27 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     this._sensors.forEach((sn, index) => {
       const isSelected = index === this._selectedSensorIndex;
       const cp = this._toCanvas({ x: sn.x, y: sn.y });
-      const rangePx = sn.range * scale;
+      const coverageRange = this._coverageRadius(sn);
+      const rangePx = coverageRange * scale;
       const rotRad = (sn.rotation - 90) * Math.PI / 180;
+      const alpha = isSelected ? 1 : 0.45;
+
+      if (sn.mountingMode === 'ceiling') {
+        wedges.push(svg`
+          <circle cx="${cp.x}" cy="${cp.y}" r="${rangePx}"
+            fill="rgba(34, 197, 94, ${0.1 * alpha})" stroke="#22c55e"
+            stroke-opacity="${alpha}" stroke-width="1.5" style="pointer-events: none;"/>
+        `);
+        if (isSelected) {
+          for (let r = 1000; r <= coverageRange; r += 1000) {
+            const rPx = r * scale;
+            wedges.push(svg`<circle cx="${cp.x}" cy="${cp.y}" r="${rPx}" fill="none" stroke="rgba(34, 197, 94, 0.25)" stroke-width="1" style="pointer-events: none;"/>`);
+            wedges.push(svg`<text x="${cp.x}" y="${cp.y - rPx - 4}" fill="rgba(34, 197, 94, 0.65)" font-size="9" text-anchor="middle" style="pointer-events: none;">${r / 1000}m</text>`);
+          }
+        }
+        return;
+      }
+
       const halfFov = sn.fov * Math.PI / 360;
       const a1 = rotRad - halfFov, a2 = rotRad + halfFov;
       const arcPts: Point[] = [];
@@ -3155,8 +3809,6 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         arcPts.push({ x: cp.x + Math.cos(angle) * rangePx, y: cp.y + Math.sin(angle) * rangePx });
       }
       const fovPath = `M ${cp.x} ${cp.y} L ${arcPts.map(pt => `${pt.x} ${pt.y}`).join(' L ')} Z`;
-      const alpha = isSelected ? 1 : 0.45;
-
       wedges.push(svg`<path d="${fovPath}" fill="rgba(34, 197, 94, ${0.12 * alpha})" stroke="#22c55e" stroke-opacity="${alpha}" stroke-width="1.5" style="pointer-events: none;"/>`);
 
       // Distance rings + angle guides for the selected sensor only (keeps the view calm)
@@ -3192,13 +3844,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     return svg`${this._sensors.map((sn, index) => {
       const cp = this._toCanvas({ x: sn.x, y: sn.y });
       const rotRad = (sn.rotation - 90) * Math.PI / 180;
-      const dirX = cp.x + Math.cos(rotRad) * 25, dirY = cp.y + Math.sin(rotRad) * 25;
+      const directionLength = sn.mountingMode === 'ceiling' ? 13 : 25;
+      const dirX = cp.x + Math.cos(rotRad) * directionLength, dirY = cp.y + Math.sin(rotRad) * directionLength;
       const isDraggingThis = this._draggingSensorIndex === index;
       const isSelected = this._selectedSensorIndex === index;
       const color = isDraggingThis ? '#22c55e' : this._sensorColor(index);
 
       return svg`
         ${isSelected ? svg`<circle cx="${cp.x}" cy="${cp.y}" r="25" fill="none" stroke="${color}" stroke-width="2" stroke-dasharray="4 3" style="pointer-events: none;"/>` : nothing}
+        ${sn.mountingMode === 'ceiling' ? svg`<circle cx="${cp.x}" cy="${cp.y}" r="22" fill="none" stroke="white" stroke-opacity="0.65" stroke-width="1" style="pointer-events: none;"/>` : nothing}
         <circle
           cx="${cp.x}" cy="${cp.y}" r="18"
           fill="${color}" stroke="white" stroke-width="2"
@@ -3235,9 +3889,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     svgEl.querySelectorAll('.live-target').forEach(el => el.remove());
 
     const TARGET_COLORS = [
-      ['#ef4444', '#4361ee', '#eab308'],
-      ['#f97316', '#8b5cf6', '#06b6d4'],
-      ['#ec4899', '#22c55e', '#94a3b8'],
+      ['#ef4444', '#4361ee', '#eab308', '#22c55e', '#a855f7'],
+      ['#f97316', '#8b5cf6', '#06b6d4', '#84cc16', '#ec4899'],
+      ['#ec4899', '#22c55e', '#94a3b8', '#f59e0b', '#3b82f6'],
     ];
 
     this._sensors.forEach((sensor, sensorIdx) => {
@@ -3446,6 +4100,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const selectedRoom = this.rooms.find(r => r.id === this._selectedRoomId);
     const instr = this._getInstructions();
     const radarDevices = this._getRadarDevices();
+    const selectedRadar = radarDevices.find(device => device.id === this._selectedSensor?.deviceId);
+    const selectedRadarCapabilities = this._getRadarCapabilities(this._selectedSensor?.deviceId ?? null);
     const activeTargets = Object.values(this._liveTargets).reduce((sum, targets) => sum + targets.filter(t => t.active).length, 0);
 
     return html`
@@ -3621,7 +4277,11 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                   <span class="sensor-dot" style="background: ${this._sensorColor(i)};">${i + 1}</span>
                   <div class="sensor-item-info">
                     <div class="sensor-item-name">${this._sensorLabel(sn, i)}</div>
-                    <div class="sensor-item-sub">${sn.deviceId ? 'Linked' : 'No device linked'}</div>
+                    <div class="sensor-item-sub">
+                      ${sn.deviceId
+                        ? `${sn.mountingMode === 'ceiling' ? 'Ceiling' : 'Wall'} mounted · Linked`
+                        : 'No device linked'}
+                    </div>
                   </div>
                   <button class="delete-btn" title="Remove sensor" @click="${(e: Event) => { e.stopPropagation(); this._removeSensor(i); }}">
                     <ha-icon icon="mdi:delete"></ha-icon>
@@ -3639,31 +4299,90 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <div class="section-title">SENSOR ${this._selectedSensorIndex! + 1} SETTINGS</div>
               <div class="setting-item">
                 <label>Device</label>
-                <select @change="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { deviceId: (e.target as HTMLSelectElement).value || null })}">
+                <select @change="${(e: Event) => this._selectRadarDevice(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value || null)}">
                   <option value="">-- Select device --</option>
-                  ${radarDevices.map(d => html`<option value="${d.id}" ?selected="${this._selectedSensor?.deviceId === d.id}">${d.name}</option>`)}
+                  ${radarDevices.map(d => html`
+                    <option value="${d.id}" ?selected="${this._selectedSensor?.deviceId === d.id}">
+                      ${d.name}${d.productFamily === 'ceilsense' ? ' · CeilSense LD2450' : ''}
+                    </option>
+                  `)}
                 </select>
+                ${this._selectedSensor.deviceId ? html`
+                  <div class="firmware-status">
+                    <div class="firmware-status-row">
+                      <span>Live tracking</span>
+                      <span class="firmware-status-value">
+                        ${selectedRadarCapabilities.targetCount > 0
+                          ? `${selectedRadarCapabilities.targetCount} target${selectedRadarCapabilities.targetCount === 1 ? '' : 's'}`
+                          : 'Not detected'}
+                      </span>
+                    </div>
+                    <div class="firmware-status-row">
+                      <span>Zone sync</span>
+                      <span class="firmware-status-value">
+                        ${selectedRadarCapabilities.zoneProfiles || selectedRadarCapabilities.interferenceZones || selectedRadarCapabilities.smoothing
+                          ? 'Advanced'
+                          : selectedRadarCapabilities.polygonZones
+                            ? 'Base LD2450'
+                            : 'Visualization only'}
+                      </span>
+                    </div>
+                    ${!selectedRadarCapabilities.polygonZones ? html`
+                      <p class="firmware-status-note warning">
+                        Live room tracking is available, but this firmware does not expose polygon zones to Home Assistant.
+                      </p>
+                    ` : !selectedRadarCapabilities.zoneProfiles || !selectedRadarCapabilities.interferenceZones || !selectedRadarCapabilities.smoothing ? html`
+                      <p class="firmware-status-note">
+                        Base detection, exclusion and entry zones are supported. Profiles, interference zones and smoothing require updated firmware.
+                      </p>
+                    ` : html`
+                      <p class="firmware-status-note">All Room Designer zone and tracking controls are available.</p>
+                    `}
+                    ${selectedRadar?.productFamily === 'ceilsense' ? html`
+                      <p class="firmware-status-note">
+                        CeilSense LD2450 is ceiling mounted. Its three X/Y targets are projected onto the floor; tracking orientation aligns those coordinates with this room.
+                      </p>
+                    ` : nothing}
+                  </div>
+                ` : nothing}
               </div>
               <div class="setting-item">
-                <label>Rotation: ${this._selectedSensor.rotation}°</label>
+                <label>Mounting type</label>
+                <select .value="${this._selectedSensor.mountingMode}"
+                        @change="${(e: Event) => this._setSensorMountingMode(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value as SensorMountingMode)}">
+                  <option value="wall">Wall mounted</option>
+                  <option value="ceiling">Ceiling mounted</option>
+                </select>
+                ${selectedRadar?.productFamily === 'ceilsense' && this._selectedSensor.mountingMode !== 'ceiling' ? html`
+                  <p class="firmware-status-note warning">CeilSense is designed for ceiling mounting. Use wall mode only for a custom installation.</p>
+                ` : nothing}
+              </div>
+              <div class="setting-item">
+                <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Tracking orientation' : 'Rotation'}: ${this._selectedSensor.rotation}°</label>
                 <input type="range" min="0" max="359" .value="${String(this._selectedSensor.rotation)}"
                        @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { rotation: parseInt((e.target as HTMLInputElement).value) })}"/>
               </div>
               <div class="setting-item">
-                <label>Range: ${(this._selectedSensor.range / 1000).toFixed(1)}m</label>
+                <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Maximum floor radius' : 'Range'}: ${(this._selectedSensor.range / 1000).toFixed(1)}m</label>
                 <input type="range" min="1" max="10" step="0.5" .value="${String(this._selectedSensor.range / 1000)}"
                        @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { range: parseFloat((e.target as HTMLInputElement).value) * 1000 })}"/>
               </div>
               <div class="setting-item">
-                <label>FOV: ${this._selectedSensor.fov}°</label>
+                <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Coverage angle' : 'FOV'}: ${this._selectedSensor.fov}°</label>
                 <input type="range" min="30" max="180" .value="${String(this._selectedSensor.fov)}"
                        @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { fov: parseInt((e.target as HTMLInputElement).value) })}"/>
               </div>
               <div class="setting-item">
-                <label>Mounting height: ${((this._selectedSensor.heightMm ?? 2000) / 1000).toFixed(1)}m</label>
-                <input type="range" min="0.2" max="3" step="0.1" .value="${String((this._selectedSensor.heightMm ?? 2000) / 1000)}"
+                <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Ceiling height' : 'Mounting height'}: ${((this._selectedSensor.heightMm ?? 2000) / 1000).toFixed(1)}m</label>
+                <input type="range" min="${this._selectedSensor.mountingMode === 'ceiling' ? '2' : '0.2'}" max="${this._selectedSensor.mountingMode === 'ceiling' ? '5' : '3'}" step="0.1" .value="${String((this._selectedSensor.heightMm ?? 2000) / 1000)}"
                        @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { heightMm: Math.round(parseFloat((e.target as HTMLInputElement).value) * 1000) })}"/>
+                ${this._selectedSensor.mountingMode === 'ceiling' ? html`
+                  <p class="firmware-status-note">Effective floor radius: ${(this._coverageRadius(this._selectedSensor) / 1000).toFixed(1)}m.</p>
+                ` : nothing}
               </div>
+              <p class="firmware-status-note">
+                CeilSense LD2412 is presence-only and is intentionally not listed here because it does not expose X/Y target positions.
+              </p>
             </div>
           ` : nothing}
         ` : this._toolMode === 'zone' && this._drawingZone.length > 0 ? html`
@@ -3677,6 +4396,81 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
         ` : ''}
 
+        <div class="settings-panel">
+          <div class="settings-panel-header">
+            <ha-icon icon="mdi:vector-square"></ha-icon>
+            <span>Room calibration</span>
+          </div>
+          <p class="info-text">Calibrate all four room corners and choose the grid used while drawing zones.</p>
+          <div class="settings-row">
+            <label>Enable calibration</label>
+            <input type="checkbox" .checked="${this._calibration.enabled}"
+                   @change="${(e: Event) => this._updateCalibration({ enabled: (e.target as HTMLInputElement).checked })}"/>
+          </div>
+          <div class="settings-row">
+            <label>Grid size</label>
+            <select .value="${String(this._calibration.gridSizeMm)}"
+                    @change="${(e: Event) => this._updateCalibration({ gridSizeMm: parseInt((e.target as HTMLSelectElement).value, 10) as 100 | 300 })}">
+              <option value="100">10 cm</option>
+              <option value="300">30 cm</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <label>Snap points to grid</label>
+            <input type="checkbox" .checked="${this._calibration.snapToGrid}"
+                   @change="${(e: Event) => this._updateCalibration({ snapToGrid: (e.target as HTMLInputElement).checked })}"/>
+          </div>
+          <button class="secondary-action" @click="${this._useRoomCornersForCalibration}" ?disabled="${this._roomPoints.length < 3}">
+            <ha-icon icon="mdi:selection-marker"></ha-icon>
+            Use room outline
+          </button>
+          ${this._calibration.enabled && this._calibration.corners.length === 4 ? html`
+            <div class="corner-grid">
+              ${this._calibration.corners.map((corner, index) => html`
+                <div class="corner-row">
+                  <strong>C${index + 1}</strong>
+                  <input type="number" step="10" .value="${String(corner.x)}" title="X coordinate in millimetres"
+                         @change="${(e: Event) => this._updateCalibrationCorner(index, { x: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
+                  <input type="number" step="10" .value="${String(corner.y)}" title="Y coordinate in millimetres"
+                         @change="${(e: Event) => this._updateCalibrationCorner(index, { y: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
+                </div>
+              `)}
+            </div>
+          ` : nothing}
+        </div>
+
+        <div class="settings-panel">
+          <div class="settings-panel-header">
+            <ha-icon icon="mdi:radar"></ha-icon>
+            <span>Target tracking</span>
+          </div>
+          <div class="settings-row">
+            <label>Smooth target movement</label>
+            <input type="checkbox" .checked="${this._tracking.smoothingEnabled}"
+                   @change="${(e: Event) => this._updateTracking({ smoothingEnabled: (e.target as HTMLInputElement).checked })}"/>
+          </div>
+          <div class="setting-item">
+            <label>Smoothing: ${Math.round(this._tracking.smoothingAlpha * 100)}%</label>
+            <input type="range" min="0.05" max="1" step="0.05" .value="${String(this._tracking.smoothingAlpha)}"
+                   @input="${(e: Event) => this._updateTracking({ smoothingAlpha: parseFloat((e.target as HTMLInputElement).value) })}"/>
+          </div>
+          <div class="settings-row">
+            <label>Maximum jump</label>
+            <input type="number" min="100" max="5000" step="100" .value="${String(this._tracking.maxJumpMm)}"
+                   @change="${(e: Event) => this._updateTracking({ maxJumpMm: parseInt((e.target as HTMLInputElement).value, 10) || 1200 })}"/>
+          </div>
+          <div class="settings-row">
+            <label>Track hold (ms)</label>
+            <input type="number" min="0" max="10000" step="100" .value="${String(this._tracking.trackHoldMs)}"
+                   @change="${(e: Event) => this._updateTracking({ trackHoldMs: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
+          </div>
+          <div class="settings-row">
+            <label>Keep identity across zones</label>
+            <input type="checkbox" .checked="${this._tracking.crossZoneTracking}"
+                   @change="${(e: Event) => this._updateTracking({ crossZoneTracking: (e.target as HTMLInputElement).checked })}"/>
+          </div>
+        </div>
+
         <!-- Detection Zones Section -->
         <div>
           <div class="section-title" style="color: #22c55e;">📍 DETECTION ZONES (${this._getZoneCountByType('detection')}/${ZONE_LIMITS.detection})</div>
@@ -3687,13 +4481,13 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               ${this._zones.map((zone, i) => zone.type !== 'detection' ? '' : html`
                 <div>
                   <div class="zone-item ${this._selectedZoneIndex === i ? 'selected' : ''}"
-                       @click="${() => { this._selectedZoneIndex = i; this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
+                       @click="${() => { this._selectZone(i); this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
                     <div class="zone-color" style="background: ${ZONE_COLORS[zone.type].stroke};"></div>
                     <div class="zone-info">
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectedZoneIndex = i; }}">
+                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
                       <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
@@ -3718,13 +4512,44 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               ${this._zones.map((zone, i) => zone.type !== 'exclusion' ? '' : html`
                 <div>
                   <div class="zone-item ${this._selectedZoneIndex === i ? 'selected' : ''}"
-                       @click="${() => { this._selectedZoneIndex = i; this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
+                       @click="${() => { this._selectZone(i); this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
                     <div class="zone-color" style="background: ${ZONE_COLORS[zone.type].stroke};"></div>
                     <div class="zone-info">
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectedZoneIndex = i; }}">
+                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
+                        <ha-icon icon="mdi:pencil"></ha-icon>
+                      </button>
+                      <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
+                        <ha-icon icon="mdi:delete"></ha-icon>
+                      </button>
+                    </div>
+                  </div>
+                  ${this._renderZoneEditForm(zone, i)}
+                </div>
+              `)}
+            </div>
+          `}
+        </div>
+
+        <!-- Interference Zones Section -->
+        <div style="margin-top: 16px;">
+          <div class="section-title" style="color: #f59e0b;">⚡ INTERFERENCE ZONES (${this._getZoneCountByType('interference')}/${ZONE_LIMITS.interference})</div>
+          ${this._zones.filter(z => z.type === 'interference').length === 0 ? html`
+            <p class="info-text">No interference zones yet. Use these for fans, curtains and other moving objects that may create false targets.</p>
+          ` : html`
+            <div class="zone-list">
+              ${this._zones.map((zone, i) => zone.type !== 'interference' ? '' : html`
+                <div>
+                  <div class="zone-item ${this._selectedZoneIndex === i ? 'selected' : ''}"
+                       @click="${() => { this._selectZone(i); this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
+                    <div class="zone-color" style="background: ${ZONE_COLORS[zone.type].stroke};"></div>
+                    <div class="zone-info">
+                      <div class="zone-name">${zone.name}</div>
+                    </div>
+                    <div class="zone-actions">
+                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
                       <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
@@ -3749,13 +4574,13 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               ${this._zones.map((zone, i) => zone.type !== 'entry' ? '' : html`
                 <div>
                   <div class="zone-item ${this._selectedZoneIndex === i ? 'selected' : ''}"
-                       @click="${() => { this._selectedZoneIndex = i; this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
+                       @click="${() => { this._selectZone(i); this._editingZoneIndex = null; this._toolMode = 'zone'; }}">
                     <div class="zone-color" style="background: ${ZONE_COLORS[zone.type].stroke};"></div>
                     <div class="zone-info">
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectedZoneIndex = i; }}">
+                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
                       <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
@@ -3845,6 +4670,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     <div class="desc">Ignores motion in this area</div>
                   </div>
                   <span class="badge">${this._getZoneCountByType('exclusion')}/${ZONE_LIMITS.exclusion}</span>
+                </div>
+                <div class="zone-type-option interference ${!this._canAddZone('interference') ? 'disabled' : ''}"
+                     @click="${() => this._canAddZone('interference') && this._selectZoneType('interference')}">
+                  <span class="icon">⚡</span>
+                  <div class="info">
+                    <div class="name">Interference Zone</div>
+                    <div class="desc">Filters fans, curtains and other moving objects</div>
+                  </div>
+                  <span class="badge">${this._getZoneCountByType('interference')}/${ZONE_LIMITS.interference}</span>
                 </div>
               </div>
             `}

@@ -684,14 +684,20 @@ export class SmartHomeShopZoneEditor extends LitElement {
     if (!this.hass || !this.entityPrefix) return;
 
     const targets: Target[] = [];
-    for (let i = 1; i <= 3; i++) {
+    for (let i = 1; i <= 5; i++) {
       const xEntity = `sensor.${this.entityPrefix}_target_${i}_x`;
       const yEntity = `sensor.${this.entityPrefix}_target_${i}_y`;
-      const activeEntity = `binary_sensor.${this.entityPrefix}_target_${i}`;
+      if (!this.hass.states[xEntity] || !this.hass.states[yEntity]) continue;
 
       const x = parseFloat(this.hass.states[xEntity]?.state || '0');
       const y = parseFloat(this.hass.states[yEntity]?.state || '0');
-      const active = this.hass.states[activeEntity]?.state === 'on';
+      const activeEntity = [
+        `binary_sensor.${this.entityPrefix}_target_${i}_active`,
+        `binary_sensor.${this.entityPrefix}_target_${i}`,
+      ].find((entityId) => this.hass?.states[entityId]);
+      const active = activeEntity
+        ? this.hass.states[activeEntity].state === 'on'
+        : x !== 0 || y !== 0;
 
       targets.push({ id: i, x, y, active: active && (x !== 0 || y !== 0) });
     }

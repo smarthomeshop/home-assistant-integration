@@ -63,6 +63,45 @@ export interface Point {
   y: number;
 }
 
+export type ZoneType = 'detection' | 'exclusion' | 'entry' | 'interference';
+export type ZoneProfilePreset = 'default' | 'bed' | 'seating' | 'transit' | 'custom';
+
+export interface ZoneProfile {
+  preset: ZoneProfilePreset;
+  enterDelayMs: number;
+  leaveDelayMs: number;
+  minDwellMs: number;
+  minTargets: number;
+}
+
+export interface RoomZone {
+  id: string | number;
+  name: string;
+  points: Point[];
+  /** Additional disconnected polygon parts. `points` remains the first part for backwards compatibility. */
+  parts?: Point[][];
+  color?: string;
+  type: ZoneType;
+  inDirection?: 'left' | 'right';
+  sensorId?: string;
+  profile?: ZoneProfile;
+}
+
+export interface RoomCalibration {
+  enabled: boolean;
+  corners: Point[];
+  gridSizeMm: 100 | 300;
+  snapToGrid: boolean;
+}
+
+export interface RadarTrackingSettings {
+  smoothingEnabled: boolean;
+  smoothingAlpha: number;
+  maxJumpMm: number;
+  trackHoldMs: number;
+  crossZoneTracking: boolean;
+}
+
 export interface RoomShell {
   points: Point[];
 }
@@ -86,11 +125,15 @@ export interface FurnitureInstance {
 }
 
 export interface Zone {
-  id: string;
+  id: string | number;
   name: string;
   points: Point[];
-  color: string;
-  type: 'detection' | 'exclusion';
+  parts?: Point[][];
+  color?: string;
+  type: ZoneType;
+  inDirection?: 'left' | 'right';
+  sensorId?: string;
+  profile?: ZoneProfile;
 }
 
 export interface RoomConfig {
@@ -100,6 +143,8 @@ export interface RoomConfig {
   devicePlacement?: DevicePlacement;
   furniture: FurnitureInstance[];
   zones: Zone[];
+  calibration?: RoomCalibration;
+  tracking?: RadarTrackingSettings;
   widthMm: number;
   heightMm: number;
   floorMaterial?: string;
@@ -155,6 +200,8 @@ export interface Room {
   furniture: FurnitureInstance[];
   devices: DevicePlacement[];
   zones: Zone[];
+  calibration?: RoomCalibration;
+  tracking?: RadarTrackingSettings;
 }
 
 export interface FurnitureItem {

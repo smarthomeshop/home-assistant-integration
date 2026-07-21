@@ -1138,23 +1138,31 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     return state && state !== 'unavailable' ? parseFloat(state) : 0;
   }
 
-  private _getBinaryState(suffix: string): boolean {
-    if (!this.hass || !this._entityPrefix) return false;
-    const entityId = `binary_sensor.${this._entityPrefix}_${suffix}`;
-    return this.hass.states[entityId]?.state === 'on';
-  }
-
   private _updateData(): void {
     if (!this.hass || !this._entityPrefix) return;
 
     // Update targets
     const targets: Target[] = [];
-    for (let i = 1; i <= 3; i++) {
+    const targetEntityIds: string[] = [];
+    for (let i = 1; i <= 5; i++) {
+      const xEntity = `sensor.${this._entityPrefix}_target_${i}_x`;
+      const yEntity = `sensor.${this._entityPrefix}_target_${i}_y`;
+      if (!this.hass.states[xEntity] || !this.hass.states[yEntity]) continue;
+
       const x = this._getSensorState(`target_${i}_x`) ?? 0;
       const y = this._getSensorState(`target_${i}_y`) ?? 0;
-      const active = this._getBinaryState(`target_${i}_active`);
-      const distance = this._getSensorState(`target_${i}_distance`) ?? 0;
+      const activeEntity = [
+        `binary_sensor.${this._entityPrefix}_target_${i}_active`,
+        `binary_sensor.${this._entityPrefix}_target_${i}`,
+      ].find((entityId) => this.hass?.states[entityId]);
+      const active = activeEntity
+        ? this.hass.states[activeEntity].state === 'on'
+        : x !== 0 || y !== 0;
+      const distanceEntity = `sensor.${this._entityPrefix}_target_${i}_distance`;
+      const distance = this._getSensorState(`target_${i}_distance`) ?? Math.hypot(x, y);
+
       targets.push({ x, y, active, distance });
+      targetEntityIds.push(this.hass.states[distanceEntity] ? distanceEntity : xEntity);
     }
     this._targets = targets;
 
@@ -1214,11 +1222,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       pm4_0: this._findSensorEntityId(['pm_4mm_weight_concentration', 'pm_4_0']),
       pm10: this._findSensorEntityId(['pm_10mm_weight_concentration', 'pm_10']),
       typical_particle_size: this._findSensorEntityId(['typical_particle_size']),
-      targets: [
-        `sensor.${this._entityPrefix}_target_1_distance`,
-        `sensor.${this._entityPrefix}_target_2_distance`,
-        `sensor.${this._entityPrefix}_target_3_distance`,
-      ],
+      targets: targetEntityIds,
     };
 
     this._drawRadar();
