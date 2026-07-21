@@ -396,7 +396,9 @@ export class SmartHomeShopCeilSenseCard extends LitElement {
       target3Y: find({ domains: ['sensor'], suffixes: ['target_3_y'] }),
       zoneCounts: [1, 2, 3, 4].map((index) => find({ domains: ['sensor'], suffixes: [`zone_${index}_target_count`] })),
       zoneOccupancy: [1, 2, 3, 4].map((index) => find({ domains: ['binary_sensor'], suffixes: [`zone_${index}_occupancy`, `zone_${index}_presence`] })),
-      temperature: find({ domains: ['sensor'], suffixes: ['scd41_temperature', 'temperature'], deviceClasses: ['temperature'], excludes: ['cpu'] }),
+      // The BMP3xx temperature is a die reading for pressure compensation,
+      // not room climate: a Basic has no climate sensor and shows none.
+      temperature: find({ domains: ['sensor'], suffixes: ['scd41_temperature', 'temperature'], deviceClasses: ['temperature'], excludes: ['cpu', 'bmp'] }),
       humidity: find({ domains: ['sensor'], suffixes: ['scd41_humidity', 'humidity'], deviceClasses: ['humidity'] }),
       co2: find({ domains: ['sensor'], suffixes: ['scd41_co2', 'co2'], deviceClasses: ['carbon_dioxide'] }),
       illuminance: find({ domains: ['sensor'], suffixes: ['bh1750_illuminance', 'illuminance'], deviceClasses: ['illuminance'] }),

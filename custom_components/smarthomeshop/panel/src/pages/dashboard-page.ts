@@ -1099,18 +1099,26 @@ export class DashboardPage extends LitElement {
         `;
       }) : nothing}
 
-      ${ins?.room ? html`
+      ${ins?.room && this._hasRoomReadings(ins.room) ? html`
         <div class="detail-grid">
           <div class="insight-card">
             <div class="insight-title">
               Room quality
-              <span class="status-badge" style="background: ${ins.room.color}22; color: ${ins.room.color};">${ins.room.label}</span>
+              ${ins.room.score != null ? html`
+                <span class="status-badge" style="background: ${ins.room.color}22; color: ${ins.room.color};">${ins.room.label}</span>
+              ` : nothing}
             </div>
-            <div class="room-score-big">
-              <span class="room-score-num" style="color: ${ins.room.color};">${Number(ins.room.score).toFixed(1)}</span>
-              <span class="session-meta">/ 10 · ${ins.room.score_percentage}%</span>
-            </div>
-            ${(ins.room.recommendations || []).length > 0
+            ${ins.room.score != null ? html`
+              <div class="room-score-big">
+                <span class="room-score-num" style="color: ${ins.room.color};">${Number(ins.room.score).toFixed(1)}</span>
+                <span class="session-meta">/ 10 · ${ins.room.score_percentage}%</span>
+              </div>
+            ` : html`
+              <div class="session-meta" style="margin: 8px 0;">
+                This model has no air-quality sensors, so there is no score to show.
+              </div>
+            `}
+            ${ins.room.score == null ? nothing : (ins.room.recommendations || []).length > 0
               ? ins.room.recommendations.map((reco: string) => html`
                   <div class="reco-row"><ha-icon icon="mdi:lightbulb-on-outline"></ha-icon>${reco}</div>
                 `)
@@ -1240,9 +1248,19 @@ export class DashboardPage extends LitElement {
   // Entities that share a word with a measurement but do not measure the
   // room: configuration numbers (offsets, calibration) and the board's own
   // diagnostics, where "CPU temperature" would be read as room temperature.
+  // "bmp" is the pressure sensor whose temperature is a die reading for
+  // compensation, not room climate.
   private static readonly NON_MEASUREMENT_WORDS = [
-    'offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp',
+    'offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp', 'bmp',
   ];
+
+  // A model without climate sensors (CeilSense Basic) has nothing to score,
+  // so the whole block is hidden rather than showing an empty 0.0 / 10.
+  private _hasRoomReadings(room: any): boolean {
+    return room.score != null
+      || room.illuminance != null
+      || (room.metrics || []).some((metric: any) => metric.value != null);
+  }
 
   private _getSensorEntity(entities: DeviceEntity[] | undefined, patterns: string[]): DeviceEntity | undefined {
     if (!entities) return undefined;

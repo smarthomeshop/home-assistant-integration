@@ -76,14 +76,14 @@ const SCENARIOS: Scenario[] = [
   {
     key: 'temp_high', group: 'climate', title: 'Too warm', color: '#ef4444',
     desc: 'Notify when the temperature climbs too high.',
-    icon: 'mdi:thermometer-high', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'bmp3xx_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp'] },
+    icon: 'mdi:thermometer-high', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp', 'bmp'] },
     kind: 'above', threshold: 27, unit: '°C', forMin: 10,
     msgTitle: 'It is warm in {room}', msg: 'Temperature is {value}°C.',
   },
   {
     key: 'temp_low', group: 'climate', title: 'Too cold', color: '#38bdf8',
     desc: 'Notify when it gets cold in the room.',
-    icon: 'mdi:thermometer-low', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'bmp3xx_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp'] },
+    icon: 'mdi:thermometer-low', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp', 'bmp'] },
     kind: 'below', threshold: 16, unit: '°C', forMin: 10,
     msgTitle: 'It is cold in {room}', msg: 'Temperature is {value}°C.',
   },

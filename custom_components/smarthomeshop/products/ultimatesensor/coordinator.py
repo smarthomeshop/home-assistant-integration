@@ -203,6 +203,11 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
             "chip_temp",
             "internal_temp",
             "board_temp",
+            # The BMP3xx is a pressure sensor whose temperature reading is a
+            # die temperature for compensation, so it runs warm and is not
+            # room climate. A CeilSense Basic has no climate sensor at all
+            # and must report no temperature rather than the board value.
+            "bmp",
             # Particle counts (#/cm3) are never the air-quality value we score.
             "number_concentration",
         )
