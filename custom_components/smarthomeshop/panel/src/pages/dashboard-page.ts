@@ -1237,15 +1237,29 @@ export class DashboardPage extends LitElement {
     }
   }
 
+  // Entities that share a word with a measurement but do not measure the
+  // room: configuration numbers (offsets, calibration) and the board's own
+  // diagnostics, where "CPU temperature" would be read as room temperature.
+  private static readonly NON_MEASUREMENT_WORDS = [
+    'offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp',
+  ];
+
   private _getSensorEntity(entities: DeviceEntity[] | undefined, patterns: string[]): DeviceEntity | undefined {
     if (!entities) return undefined;
-    // Only measurement entities; config numbers like "Temperature Offset"
-    // would otherwise match patterns such as "temperature"
-    const candidates = entities.filter(e =>
-      (e.entity_id.startsWith('sensor.') || e.entity_id.startsWith('binary_sensor.')) &&
-      !e.entity_id.includes('offset') &&
-      !e.entity_id.includes('calibrat')
-    );
+    const candidates = entities
+      .filter(e =>
+        (e.entity_id.startsWith('sensor.') || e.entity_id.startsWith('binary_sensor.')) &&
+        !DashboardPage.NON_MEASUREMENT_WORDS.some(word => e.entity_id.toLowerCase().includes(word))
+      )
+      // Sorted so the choice never depends on entity-registry order, with
+      // numeric sensors ahead of binary ones: a value tile must not fall
+      // back to an on/off entity while a measurement exists.
+      .sort((a, b) => {
+        const rank = (id: string) => (id.startsWith('sensor.') ? 0 : 1);
+        return rank(a.entity_id) - rank(b.entity_id) || a.entity_id.localeCompare(b.entity_id);
+      });
+    // Patterns are tried in order, so callers put the specific sensor chip
+    // (scd41_temperature) before the generic name (temperature).
     for (const pattern of patterns) {
       const pat = pattern.toLowerCase();
       const exact = candidates.find(e => e.entity_id.toLowerCase().endsWith(`_${pat}`));
@@ -1259,8 +1273,8 @@ export class DashboardPage extends LitElement {
     return undefined;
   }
 
-  private _getSensorValue(entities: DeviceEntity[] | undefined, pattern: string): string | null {
-    const entity = this._getSensorEntity(entities, [pattern]);
+  private _getSensorValue(entities: DeviceEntity[] | undefined, pattern: string | string[]): string | null {
+    const entity = this._getSensorEntity(entities, Array.isArray(pattern) ? pattern : [pattern]);
     if (!entity || !entity.state || entity.state === 'unavailable' || entity.state === 'unknown') return null;
     return entity.state;
   }
@@ -1313,11 +1327,12 @@ export class DashboardPage extends LitElement {
     const entities = device.entities || [];
 
     if (device.product_type === 'waterp1meterkit') {
-      const flow = this._getSensorValue(entities, 'current_flow_rate')
-        || this._getSensorValue(entities, 'water_current_usage')
-        || this._getSensorValue(entities, 'flow_rate');
-      const waterToday = this._getSensorValue(entities, 'today_usage')
-        || this._getSensorValue(entities, 'water_daily');
+      const flow = this._getSensorValue(entities, [
+        'current_water_usage_cc', 'water_current_usage', 'current_flow_rate', 'flow_rate',
+      ]);
+      const waterToday = this._getSensorValue(entities, [
+        'usage_today_cc', 'water_daily_cc', 'today_usage', 'water_daily',
+      ]);
       const netGrid = this._getPowerWatts(entities, ['net_grid_power_cc', 'net_grid_power']);
       const importedPower = this._getPowerWatts(entities, ['power_consumed']);
       const exportedPower = this._getPowerWatts(entities, ['power_produced']);
@@ -1361,9 +1376,11 @@ export class DashboardPage extends LitElement {
     }
 
     if (config.category === 'water') {
-      const flow = this._getSensorValue(entities, 'flow_rate') || this._getSensorValue(entities, 'flow');
-      const total = this._getSensorValue(entities, 'total_consumption') || this._getSensorValue(entities, 'total');
-      const daily = this._getSensorValue(entities, 'daily');
+      // Our own live-flow sensor first, then the firmware one; the generic
+      // "flow" fallback also matches leak and duration entities.
+      const flow = this._getSensorValue(entities, ['current_water_usage_cc', 'water_current_usage', 'flow_rate', 'flow']);
+      const total = this._getSensorValue(entities, ['water_meter_total', 'water_total_consumption', 'total_consumption', 'total']);
+      const daily = this._getSensorValue(entities, ['water_daily_cc', 'usage_today_cc', 'daily']);
 
       return html`
         <div class="sensor-grid">
@@ -1387,10 +1404,16 @@ export class DashboardPage extends LitElement {
     }
 
     if (config.category === 'sensor') {
-      const temp = this._getSensorValue(entities, 'temperature');
-      const humidity = this._getSensorValue(entities, 'humidity');
-      const co2 = this._getSensorValue(entities, 'co2');
-      const illuminance = this._getSensorValue(entities, 'illuminance') || this._getSensorValue(entities, 'lux');
+      // Climate sensor first: our devices also expose board diagnostics and
+      // other chips whose entity ids end in the same word.
+      const temp = this._getSensorValue(entities, [
+        'scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'temperature',
+      ]);
+      const humidity = this._getSensorValue(entities, [
+        'scd41_humidity', 'scd4x_humidity', 'sht4x_humidity', 'bme280_humidity', 'humidity',
+      ]);
+      const co2 = this._getSensorValue(entities, ['scd41_co2', 'scd4x_co2', 'co2']);
+      const illuminance = this._getSensorValue(entities, ['bh1750_illuminance', 'illuminance', 'lux']);
       const presence = this._getSensorValue(entities, 'presence') || this._getSensorValue(entities, 'occupancy');
 
       const sensors: { icon: string; value: string; label: string }[] = [];
@@ -1426,9 +1449,13 @@ export class DashboardPage extends LitElement {
     }
 
     if (config.category === 'energy') {
-      const power = this._getSensorValue(entities, 'power');
-      const energy = this._getSensorValue(entities, 'energy') || this._getSensorValue(entities, 'total');
-      const voltage = this._getSensorValue(entities, 'voltage');
+      // Named entities first: a meter exposes several ids containing "power"
+      // (fuse headroom, standby, per phase) and "energy" (a Luxembourg-only
+      // DSMR field), which must not win from the actual consumption.
+      const power = this._getSensorValue(entities, ['power_consumed', 'net_grid_power_cc', 'power']);
+      const energy = this._getSensorValue(entities, ['energy_consumed_tariff_1', 'energy_consumed', 'energy'])
+        || this._getSensorValue(entities, ['water_total_consumption', 'total_consumption', 'total']);
+      const voltage = this._getSensorValue(entities, ['voltage_phase_1', 'voltage']);
 
       return html`
         <div class="sensor-grid">

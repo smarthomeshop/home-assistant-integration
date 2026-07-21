@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import slugify
 
 from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
 
@@ -85,16 +86,71 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         """Return device info - links to existing ESPHome device."""
         return self._device_info
 
+    def _entity_match_key(self, entity) -> str:
+        """Slug of the entity's own name, without the device-name prefix.
+
+        ESPHome sets original_name to the configured entity name ("SCD41
+        Temperature"). Only when that is missing do we fall back to the
+        object_id with the device slug stripped off.
+        """
+        name = entity.name or entity.original_name
+        if name:
+            return slugify(name)
+        object_id = entity.entity_id.split(".", 1)[1].lower()
+        device_slug = self._device_slug()
+        if device_slug and object_id.startswith(f"{device_slug}_"):
+            return object_id[len(device_slug) + 1:]
+        return object_id
+
+    def _device_slug(self) -> str:
+        """Slug of this device's name, used to strip the entity_id prefix."""
+        if self._device_id is None:
+            return ""
+        device = dr.async_get(self.hass).async_get(self._device_id)
+        if device is None:
+            return ""
+        return slugify(device.name_by_user or device.name or "")
+
     def _find_sensor_entity(self, sensor_type: str) -> str | None:
         """Find the entity_id for a specific sensor type."""
         # Common patterns for UltimateSensor entities
+        # Most specific pattern first: a device exposes several entities that
+        # end in "_temperature" (the SCD41 climate sensor and the ESP32 chip
+        # temperature), and the climate sensor is the one that measures the
+        # room. Generic patterns stay last as a fallback for other hardware.
         patterns = {
-            "co2": ["co2", "scd41_co2", "scd4x_co2"],
-            "temperature": ["temperature", "scd41_temperature", "scd4x_temperature"],
-            "humidity": ["humidity", "scd41_humidity", "scd4x_humidity"],
-            "pm25": ["pm_2_5", "pm2_5", "pm25"],
+            "co2": ["scd41_co2", "scd4x_co2", "co2"],
+            "temperature": [
+                "scd41_temperature",
+                "scd4x_temperature",
+                "sht4x_temperature",
+                "bme280_temperature",
+                "aht10_temperature",
+                "temperature",
+            ],
+            "humidity": [
+                "scd41_humidity",
+                "scd4x_humidity",
+                "sht4x_humidity",
+                "bme280_humidity",
+                "aht10_humidity",
+                "humidity",
+            ],
+            # Air quality is scored in ug/m3, so the weight concentration is
+            # the one to read; the particle count is a different unit. The
+            # v1 firmware writes "PM <2.5um ..." with a micro sign, which
+            # slugifies to "2_5mm", while v2 writes a plain "um".
+            "pm25": [
+                "pm_2_5mm_weight_concentration",
+                "pm_2_5um_weight_concentration",
+                "pm_2_5_weight_concentration",
+                "pm2_5_weight_concentration",
+                "pm_2_5",
+                "pm2_5",
+                "pm25",
+            ],
             "voc": ["voc_index", "voc"],
-            "illuminance": ["illuminance", "bh1750_illuminance", "lux"],
+            "illuminance": ["bh1750_illuminance", "illuminance", "lux"],
         }
 
         if sensor_type not in patterns:
@@ -109,30 +165,51 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
 
         # Collect this device's sensor entities, skipping settings/diagnostic
         # entities that share the same words (offsets, calibration targets).
-        excluded = ("offset", "calibrat", "target", "interval", "threshold", "manual")
-        candidates: list[str] = []
+        # Board diagnostics ("CPU temperature") measure the chip, not the
+        # room, and must never be read as a climate value.
+        excluded = (
+            "offset",
+            "calibrat",
+            "target",
+            "interval",
+            "threshold",
+            "manual",
+            "cpu",
+            "esp32",
+            "chip_temp",
+            "internal_temp",
+            "board_temp",
+            # Particle counts (#/cm3) are never the air-quality value we score.
+            "number_concentration",
+        )
+        # Match on the entity's OWN name, never on the full entity_id: the
+        # entity_id also carries the device name, so a device called
+        # "CO2 meter" or "ESP32 hal" would otherwise match or exclude every
+        # entity it owns.
+        candidates: list[tuple[str, str]] = []
         for entity in entity_registry.entities.values():
             if entity.device_id != self._device_id:
                 continue
             if entity.domain != "sensor":
                 continue
-            object_id = entity.entity_id.split(".", 1)[1].lower()
-            if any(word in object_id for word in excluded):
+            key = self._entity_match_key(entity)
+            if any(word in key for word in excluded):
                 continue
-            candidates.append(entity.entity_id)
+            candidates.append((entity.entity_id, key))
+        # Sorted so the choice is deterministic instead of registry-order
+        # dependent.
+        candidates.sort()
 
         # Prefer an exact suffix match (e.g. ..._co2); fall back to a
-        # substring match only when no suffix match exists. Sorted candidates
-        # keep the choice deterministic instead of registry-order dependent.
+        # substring match only when no suffix match exists.
         for pattern in patterns[sensor_type]:
-            for entity_id in sorted(candidates):
-                object_id = entity_id.split(".", 1)[1].lower()
-                if object_id.endswith(f"_{pattern}") or object_id == pattern:
+            for entity_id, key in candidates:
+                if key.endswith(f"_{pattern}") or key == pattern:
                     LOGGER.debug("Found sensor %s: %s", sensor_type, entity_id)
                     return entity_id
         for pattern in patterns[sensor_type]:
-            for entity_id in sorted(candidates):
-                if pattern in entity_id.lower():
+            for entity_id, key in candidates:
+                if pattern in key:
                     LOGGER.debug("Found sensor %s (substring): %s", sensor_type, entity_id)
                     return entity_id
 
@@ -160,9 +237,18 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
             return None
 
         try:
-            return float(state.state)
+            value = float(state.state)
         except (ValueError, TypeError):
             return None
+
+        # Home Assistant serves sensor states in the user's display unit, so
+        # a household on Fahrenheit would be scored against Celsius comfort
+        # bands. Bring temperature back to Celsius before scoring.
+        if sensor_type == "temperature":
+            unit = str(state.attributes.get("unit_of_measurement") or "")
+            if unit.strip().upper().endswith("F"):
+                value = (value - 32) * 5 / 9
+        return value
 
     def _calculate_room_quality(self) -> RoomQualityData:
         """Calculate room quality score using weighted average method.

@@ -41,14 +41,14 @@ const SCENARIOS: Scenario[] = [
   {
     key: 'co2_high', group: 'climate', title: 'High CO₂', color: '#22c55e',
     desc: 'Notify when CO₂ stays too high - time to ventilate.',
-    icon: 'mdi:molecule-co2', match: { domain: 'sensor', suffix: ['co2'], excl: ['calibrat', 'manual', 'offset', 'target'] },
+    icon: 'mdi:molecule-co2', match: { domain: 'sensor', suffix: ['scd41_co2', 'scd4x_co2', 'co2'], excl: ['calibrat', 'manual', 'offset', 'target'] },
     kind: 'above', threshold: 1000, unit: 'ppm', forMin: 5,
     msgTitle: 'High CO₂ in {room}', msg: 'CO₂ is {value} ppm. Open a window to get some fresh air.',
   },
   {
     key: 'pm25_high', group: 'climate', title: 'Poor air quality (PM2.5)', color: '#f59e0b',
     desc: 'Notify when fine dust rises above a healthy level.',
-    icon: 'mdi:air-filter', match: { domain: 'sensor', suffix: ['pm_2_5', 'pm2_5', 'pm25'], excl: ['number', 'count'] },
+    icon: 'mdi:air-filter', match: { domain: 'sensor', suffix: ['pm_2_5mm_weight_concentration', 'pm_2_5um_weight_concentration', 'pm_2_5', 'pm2_5', 'pm25'], excl: ['number', 'count'] },
     kind: 'above', threshold: 35, unit: 'µg/m³', forMin: 5,
     msgTitle: 'Poor air quality in {room}', msg: 'Fine dust (PM2.5) is {value} µg/m³.',
   },
@@ -62,28 +62,28 @@ const SCENARIOS: Scenario[] = [
   {
     key: 'humid_high', group: 'climate', title: 'Too humid', color: '#0096c7',
     desc: 'Notify at high humidity (risk of mould).',
-    icon: 'mdi:water-percent', match: { domain: 'sensor', suffix: ['humidity'], excl: ['offset', 'calibrat'] },
+    icon: 'mdi:water-percent', match: { domain: 'sensor', suffix: ['scd41_humidity', 'scd4x_humidity', 'sht4x_humidity', 'bme280_humidity', 'humidity'], excl: ['offset', 'calibrat'] },
     kind: 'above', threshold: 70, unit: '%', forMin: 15,
     msgTitle: 'High humidity in {room}', msg: 'Humidity is {value}%. Ventilate to prevent mould.',
   },
   {
     key: 'humid_low', group: 'climate', title: 'Too dry', color: '#94a3b8',
     desc: 'Notify when the air gets very dry.',
-    icon: 'mdi:water-off', match: { domain: 'sensor', suffix: ['humidity'], excl: ['offset', 'calibrat'] },
+    icon: 'mdi:water-off', match: { domain: 'sensor', suffix: ['scd41_humidity', 'scd4x_humidity', 'sht4x_humidity', 'bme280_humidity', 'humidity'], excl: ['offset', 'calibrat'] },
     kind: 'below', threshold: 30, unit: '%', forMin: 15,
     msgTitle: 'Dry air in {room}', msg: 'Humidity is only {value}%.',
   },
   {
     key: 'temp_high', group: 'climate', title: 'Too warm', color: '#ef4444',
     desc: 'Notify when the temperature climbs too high.',
-    icon: 'mdi:thermometer-high', match: { domain: 'sensor', suffix: ['temperature'], excl: ['offset', 'calibrat'] },
+    icon: 'mdi:thermometer-high', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'bmp3xx_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp'] },
     kind: 'above', threshold: 27, unit: '°C', forMin: 10,
     msgTitle: 'It is warm in {room}', msg: 'Temperature is {value}°C.',
   },
   {
     key: 'temp_low', group: 'climate', title: 'Too cold', color: '#38bdf8',
     desc: 'Notify when it gets cold in the room.',
-    icon: 'mdi:thermometer-low', match: { domain: 'sensor', suffix: ['temperature'], excl: ['offset', 'calibrat'] },
+    icon: 'mdi:thermometer-low', match: { domain: 'sensor', suffix: ['scd41_temperature', 'scd4x_temperature', 'sht4x_temperature', 'bme280_temperature', 'bmp3xx_temperature', 'temperature'], excl: ['offset', 'calibrat', 'cpu', 'esp32', 'chip_temp', 'internal_temp', 'board_temp'] },
     kind: 'below', threshold: 16, unit: '°C', forMin: 10,
     msgTitle: 'It is cold in {room}', msg: 'Temperature is {value}°C.',
   },
@@ -269,12 +269,24 @@ export class AutomationsPage extends LitElement {
 
   private _findEntity(s: Scenario): string | null {
     const excl = s.match.excl || [];
-    const cand = this._entities.filter(e =>
-      e.entity_id.startsWith(s.match.domain + '.') &&
-      !excl.some(x => e.entity_id.toLowerCase().includes(x))
-    );
+    const cand = this._entities
+      .filter(e =>
+        e.entity_id.startsWith(s.match.domain + '.') &&
+        !excl.some(x => e.entity_id.toLowerCase().includes(x))
+      )
+      // Sorted so the automation is always built on the same entity, instead
+      // of whichever one happens to come first in the entity registry.
+      .sort((a, b) => a.entity_id.localeCompare(b.entity_id));
+    // Suffixes are tried in order: the specific sensor chip wins from the
+    // generic name it shares with board diagnostics.
     for (const suf of s.match.suffix) {
       const hit = cand.find(e => e.entity_id.toLowerCase().endsWith(`_${suf}`));
+      if (hit) return hit.entity_id;
+    }
+    // Some firmware names an entity "PM <2.5um Weight concentration", which
+    // no suffix can match exactly; fall back to a substring match.
+    for (const suf of s.match.suffix) {
+      const hit = cand.find(e => e.entity_id.toLowerCase().includes(suf));
       if (hit) return hit.entity_id;
     }
     return null;
