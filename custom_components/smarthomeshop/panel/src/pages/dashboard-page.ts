@@ -8,15 +8,24 @@ interface DeviceWithEntities extends SmartHomeShopDevice {
   entities?: DeviceEntity[];
 }
 
-// Product categories with icon and accent color per product
-const PRODUCT_CONFIG: Record<string, { icon: string; category: string; color: string }> = {
-  ultimatesensor: { icon: 'mdi:radar', category: 'sensor', color: '#4361ee' },
-  ultimatesensor_mini: { icon: 'mdi:radar', category: 'sensor', color: '#4361ee' },
-  waterp1meterkit: { icon: 'mdi:water-pump', category: 'water', color: '#0096c7' },
-  watermeterkit: { icon: 'mdi:water-circle', category: 'water', color: '#0096c7' },
-  waterflowkit: { icon: 'mdi:waves', category: 'water', color: '#0096c7' },
-  p1meterkit: { icon: 'mdi:flash', category: 'energy', color: '#f72585' },
-  ceilsense: { icon: 'mdi:ceiling-light', category: 'sensor', color: '#7209b7' },
+interface ProductConfig {
+  asset?: string;
+  icon: string;
+  category: string;
+  color: string;
+}
+
+const PRODUCT_ICON_BASE = '/smarthomeshop_files/product-icons';
+
+// Official SmartHomeShop product artwork with an MDI fallback for unknown products.
+const PRODUCT_CONFIG: Record<string, ProductConfig> = {
+  ultimatesensor: { asset: `${PRODUCT_ICON_BASE}/icon-ultimatesensor.svg`, icon: 'mdi:radar', category: 'sensor', color: '#4361ee' },
+  ultimatesensor_mini: { asset: `${PRODUCT_ICON_BASE}/icon-ultimatesensor-mini.svg`, icon: 'mdi:radar', category: 'sensor', color: '#4361ee' },
+  waterp1meterkit: { asset: `${PRODUCT_ICON_BASE}/icon-waterp1meterkit.svg`, icon: 'mdi:water-pump', category: 'water', color: '#0096c7' },
+  watermeterkit: { asset: `${PRODUCT_ICON_BASE}/icon-watermeterkit.svg`, icon: 'mdi:water-circle', category: 'water', color: '#0096c7' },
+  waterflowkit: { asset: `${PRODUCT_ICON_BASE}/icon-waterflowkit.svg`, icon: 'mdi:waves', category: 'water', color: '#0096c7' },
+  p1meterkit: { asset: `${PRODUCT_ICON_BASE}/icon-p1meterkit.svg`, icon: 'mdi:flash', category: 'energy', color: '#f59e0b' },
+  ceilsense: { asset: `${PRODUCT_ICON_BASE}/icon-ceilsense.svg`, icon: 'mdi:ceiling-light', category: 'sensor', color: '#7209b7' },
 };
 
 @customElement('shs-dashboard-page')
@@ -127,6 +136,15 @@ export class DashboardPage extends LitElement {
 
     .device-icon ha-icon {
       --mdc-icon-size: 22px;
+    }
+
+    .product-icon {
+      display: block;
+      width: 24px;
+      height: 24px;
+      background: currentColor;
+      -webkit-mask: var(--product-icon) center / contain no-repeat;
+      mask: var(--product-icon) center / contain no-repeat;
     }
 
     .device-info {
@@ -250,8 +268,14 @@ export class DashboardPage extends LitElement {
       margin-bottom: 4px;
     }
 
-    .sensor-item.water-metric .sensor-icon { color: #0096c7; }
-    .sensor-item.energy-metric .sensor-icon { color: #d8890b; }
+    .sensor-item.water-metric .sensor-icon,
+    .sensor-item.humidity-metric .sensor-icon { color: #0096c7; }
+    .sensor-item.energy-metric .sensor-icon,
+    .sensor-item.temperature-metric .sensor-icon { color: #e58b0a; }
+    .sensor-item.air-metric .sensor-icon { color: #16a06b; }
+    .sensor-item.light-metric .sensor-icon { color: #d6a20d; }
+    .sensor-item.presence-metric .sensor-icon { color: #7c5bd6; }
+    .sensor-item.voltage-metric .sensor-icon { color: #4361ee; }
 
 
     /* Tools */
@@ -288,6 +312,10 @@ export class DashboardPage extends LitElement {
       color: var(--shs-primary);
       --mdc-icon-size: 22px;
       flex-shrink: 0;
+    }
+
+    .tool-icon.energy {
+      color: #e58b0a;
     }
 
     .tool-text {
@@ -1229,6 +1257,12 @@ export class DashboardPage extends LitElement {
     };
   }
 
+  private _renderProductIcon(config: ProductConfig) {
+    return config.asset
+      ? html`<span class="product-icon" style="--product-icon: url('${config.asset}')" aria-hidden="true"></span>`
+      : html`<ha-icon icon="${config.icon}"></ha-icon>`;
+  }
+
   private _integrationFeatures(productType?: string): string {
     switch (productType) {
       case 'waterp1meterkit':
@@ -1406,17 +1440,17 @@ export class DashboardPage extends LitElement {
 
       return html`
         <div class="sensor-grid">
-          <div class="sensor-item">
+          <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:water"></ha-icon>
             <span class="sensor-value">${this._formatValue(flow, ' L/m')}</span>
             <div class="sensor-label">Flow</div>
           </div>
-          <div class="sensor-item">
+          <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:counter"></ha-icon>
             <span class="sensor-value">${this._formatValue(total, ' L', 0)}</span>
             <div class="sensor-label">Total</div>
           </div>
-          <div class="sensor-item">
+          <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
             <span class="sensor-value">${this._formatValue(daily, ' L', 0)}</span>
             <div class="sensor-label">Today</div>
@@ -1438,12 +1472,12 @@ export class DashboardPage extends LitElement {
       const illuminance = this._getSensorValue(entities, ['bh1750_illuminance', 'illuminance', 'lux']);
       const presence = this._getSensorValue(entities, 'presence') || this._getSensorValue(entities, 'occupancy');
 
-      const sensors: { icon: string; value: string; label: string }[] = [];
-      if (temp) sensors.push({ icon: 'mdi:thermometer', value: this._formatValue(temp, '°C'), label: 'Temp' });
-      if (humidity) sensors.push({ icon: 'mdi:water-percent', value: this._formatValue(humidity, '%', 0), label: 'Humidity' });
-      if (co2) sensors.push({ icon: 'mdi:molecule-co2', value: this._formatValue(co2, ' ppm', 0), label: 'CO₂' });
-      if (illuminance) sensors.push({ icon: 'mdi:brightness-6', value: this._formatValue(illuminance, ' lx', 0), label: 'Light' });
-      if (presence) sensors.push({ icon: 'mdi:motion-sensor', value: presence === 'on' ? 'Yes' : 'No', label: 'Motion' });
+      const sensors: { icon: string; value: string; label: string; metricClass: string }[] = [];
+      if (temp) sensors.push({ icon: 'mdi:thermometer', value: this._formatValue(temp, '°C'), label: 'Temp', metricClass: 'temperature-metric' });
+      if (humidity) sensors.push({ icon: 'mdi:water-percent', value: this._formatValue(humidity, '%', 0), label: 'Humidity', metricClass: 'humidity-metric' });
+      if (co2) sensors.push({ icon: 'mdi:molecule-co2', value: this._formatValue(co2, ' ppm', 0), label: 'CO₂', metricClass: 'air-metric' });
+      if (illuminance) sensors.push({ icon: 'mdi:brightness-6', value: this._formatValue(illuminance, ' lx', 0), label: 'Light', metricClass: 'light-metric' });
+      if (presence) sensors.push({ icon: 'mdi:motion-sensor', value: presence === 'on' ? 'Yes' : 'No', label: 'Motion', metricClass: 'presence-metric' });
 
       const displaySensors = sensors.slice(0, 3);
       if (displaySensors.length === 0) {
@@ -1460,7 +1494,7 @@ export class DashboardPage extends LitElement {
       return html`
         <div class="sensor-grid">
           ${displaySensors.map(s => html`
-            <div class="sensor-item">
+            <div class="sensor-item ${s.metricClass}">
               <ha-icon class="sensor-icon" icon="${s.icon}"></ha-icon>
               <span class="sensor-value">${s.value}</span>
               <div class="sensor-label">${s.label}</div>
@@ -1481,17 +1515,17 @@ export class DashboardPage extends LitElement {
 
       return html`
         <div class="sensor-grid">
-          <div class="sensor-item">
+          <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:flash"></ha-icon>
             <span class="sensor-value">${this._formatValue(power, ' W', 0)}</span>
             <div class="sensor-label">Power</div>
           </div>
-          <div class="sensor-item">
+          <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:lightning-bolt"></ha-icon>
             <span class="sensor-value">${this._formatValue(energy, ' kWh')}</span>
             <div class="sensor-label">Energy</div>
           </div>
-          <div class="sensor-item">
+          <div class="sensor-item voltage-metric">
             <ha-icon class="sensor-icon" icon="mdi:sine-wave"></ha-icon>
             <span class="sensor-value">${this._formatValue(voltage, ' V', 0)}</span>
             <div class="sensor-label">Voltage</div>
@@ -1554,7 +1588,7 @@ export class DashboardPage extends LitElement {
               >
                 <div class="device-header">
                   <div class="device-icon" style="background: ${config.color}1f; color: ${config.color}">
-                    <ha-icon icon="${config.icon}"></ha-icon>
+                    ${this._renderProductIcon(config)}
                   </div>
                   <div class="device-info">
                     <h3 class="device-name">${device.name}</h3>
@@ -1594,6 +1628,14 @@ export class DashboardPage extends LitElement {
           <span class="tool-text">
             <span class="tool-title">Room Designer</span>
             <p class="tool-desc">Draw your room, place sensors and configure zones and entry lines</p>
+          </span>
+          <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
+        </button>
+        <button class="tool-row" @click=${() => this._navigateTo('energy')}>
+          <span class="tool-icon energy"><ha-icon icon="mdi:lightning-bolt"></ha-icon></span>
+          <span class="tool-text">
+            <span class="tool-title">Energy</span>
+            <p class="tool-desc">Monitor live energy, dynamic prices, solar, batteries and smart control</p>
           </span>
           <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
         </button>

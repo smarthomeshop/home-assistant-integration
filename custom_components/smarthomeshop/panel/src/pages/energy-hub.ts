@@ -1,9 +1,10 @@
 import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import type { HomeAssistant } from '../types';
+import type { DeviceEntity, HomeAssistant } from '../types';
 import '../components/account-prices';
 import './energy-sources';
 import './energy-battery';
+import './energy-automations';
 
 interface Sources {
   p1_device?: string;
@@ -80,6 +81,7 @@ export class EnergyHub extends LitElement {
   @state() private _netEntityId?: string;
   @state() private _p1Saving = false;
   private _netByDevice: Record<string, string> = {};
+  private _entitiesByDevice: Record<string, DeviceEntity[]> = {};
   private _historyQueued = false;
   @state() private _account: any = null;
   @state() private _schedules: any[] = [];
@@ -92,7 +94,7 @@ export class EnergyHub extends LitElement {
   @state() private _powerChartWidth = 760;
   @state() private _hoverPowerTime?: number;
   @state() private _settingsOpen = false;
-  @state() private _settingsFocus: 'account' | 'sources' | 'battery' | '' = '';
+  @state() private _settingsFocus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = '';
   @state() private _savings: Record<string, number> = {};
   @state() private _wizardDone = false;
   @state() private _wizardKeyInput = '';
@@ -663,22 +665,24 @@ export class EnergyHub extends LitElement {
         // would silently show another meter's readings.
         const probed = await Promise.all(candidates.map(async (device: any) => {
           try {
-            const response = await this._callWS<{ entities: Array<{ entity_id: string }> }>(
+            const response = await this._callWS<{ entities: DeviceEntity[] }>(
               { type: 'smarthomeshop/device/entities', device_id: device.id },
               EnergyHub.INITIAL_LOAD_TIMEOUT,
             );
             const match = (response.entities || []).find(entity =>
               entity.entity_id.startsWith('sensor.') && entity.entity_id.includes('_net_grid_power'));
-            return match ? { device, netEntity: match.entity_id } : null;
+            return match ? { device, netEntity: match.entity_id, entities: response.entities || [] } : null;
           } catch {
             return null;
           }
         }));
         const netByDevice: Record<string, string> = {};
+        const entitiesByDevice: Record<string, DeviceEntity[]> = {};
         this._p1Devices = probed
-          .filter((item): item is { device: any; netEntity: string } => item !== null)
-          .map(({ device, netEntity }) => {
+          .filter((item): item is { device: any; netEntity: string; entities: DeviceEntity[] } => item !== null)
+          .map(({ device, netEntity, entities }) => {
             netByDevice[device.id] = netEntity;
+            entitiesByDevice[device.id] = entities;
             return {
               id: device.id,
               name: device.name,
@@ -687,6 +691,7 @@ export class EnergyHub extends LitElement {
             };
           });
         this._netByDevice = netByDevice;
+        this._entitiesByDevice = entitiesByDevice;
       }
       this._resolveNetEntity();
     } catch (err) {
@@ -1849,7 +1854,11 @@ export class EnergyHub extends LitElement {
     `;
   }
 
-  private _openSettings(focus: 'account' | 'sources' | 'battery' | '' = ''): void {
+  public openSettings(focus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = ''): void {
+    this._openSettings(focus);
+  }
+
+  private _openSettings(focus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = ''): void {
     this._settingsFocus = focus;
     this._settingsOpen = true;
     this._lockPageScroll(true);
@@ -1922,6 +1931,7 @@ export class EnergyHub extends LitElement {
   // control. The cards keep their own edit dialogs, which layer on top.
   private _renderSettingsDialog() {
     if (!this._settingsOpen) return nothing;
+    const selectedP1 = this._effectiveP1();
     return html`
       <div class="dlg-backdrop"
         @pointerdown=${this._onBackdropPointerDown}
@@ -1984,6 +1994,30 @@ export class EnergyHub extends LitElement {
                 .hass=${this.hass}
                 @shs-energy-sources-changed=${this._handleEnergySourcesChanged}>
               </shs-energy-sources>
+            </div>
+            <div class="dlg-sec ${this._settingsFocus === 'solar-control' ? 'focus' : ''}" data-sec="solar-control">
+              <div class="p1-card">
+                <div class="p1-head">
+                  <ha-icon icon="mdi:solar-power-variant-outline"></ha-icon>
+                  <div style="flex: 1; min-width: 0;">
+                    <div class="p1-title">Smart energy automations</div>
+                    <div class="p1-sub">Configure price, solar, EV and inverter automations once for the whole home.</div>
+                  </div>
+                </div>
+                ${selectedP1 ? html`
+                  <shs-energy-automations
+                    .hass=${this.hass}
+                    .deviceId=${selectedP1.id}
+                    .deviceName=${selectedP1.name}
+                    .deviceEntities=${this._entitiesByDevice[selectedP1.id] || []}
+                    .showHeader=${false}>
+                  </shs-energy-automations>
+                ` : html`
+                  <div class="p1-sub" style="margin-top: 10px;">
+                    Connect or select a P1 meter first to configure smart energy automations.
+                  </div>
+                `}
+              </div>
             </div>
             <div class="dlg-sec ${this._settingsFocus === 'battery' ? 'focus' : ''}" data-sec="battery">
               <shs-energy-battery

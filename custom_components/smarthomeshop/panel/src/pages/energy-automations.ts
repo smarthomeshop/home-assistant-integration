@@ -17,12 +17,13 @@ import type { HomeAssistant, DeviceEntity } from '../types';
 //  - solar surplus uses hysteresis + dwell so devices don't flap.
 
 type Domain = 'switch' | 'input_boolean' | 'climate' | 'number' | 'water_heater';
-type Requires = 'contract' | 'solar';
+type Requires = 'contract' | 'solar' | 'contract_solar';
 
 interface EParam {
   key: string;
   label: string;
   default: number;
+  domains?: Domain[];
   min?: number;
   max?: number;
   step?: number;
@@ -106,6 +107,10 @@ const setVal = (target: string, value: number) => {
   if (d === 'water_heater') return { service: 'water_heater.set_temperature', target: { entity_id: target }, data: { temperature: value } };
   return { service: 'climate.set_temperature', target: { entity_id: target }, data: { temperature: value } };
 };
+const setNumberTemplate = (target: string, value: string) => ({
+  service: 'number.set_value', target: { entity_id: target }, data: { value },
+});
+const templateCond = (value_template: string) => ({ condition: 'template', value_template });
 const contractCond = (px: Record<string, string | null>) => ({
   condition: 'state', entity_id: px.contract_active, state: 'on',
 });
@@ -138,6 +143,130 @@ function steerOnFlag(o: {
       { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [o.stopAct] },
       { conditions: [{ condition: 'state', entity_id: o.flag, state: 'on' }, o.contract], sequence: [o.startAct] },
     ], default: [o.stopAct] }],
+  };
+}
+
+// Prefer a writable inverter output-limit number over hard on/off control. The
+// controller nudges the limit down while exporting and back up while importing.
+// This keeps local self-consumption available and avoids frequent relay cycles.
+function buildNumberCurtailment(o: {
+  alias: string;
+  target: string;
+  net: string;
+  p: Record<string, number>;
+  activeTemplate?: string;
+  extraTriggers?: Record<string, unknown>[];
+}) {
+  const active = o.activeTemplate || 'true';
+  const p = o.p;
+  return {
+    alias: o.alias, description: DESCRIPTION, mode: 'single', max_exceeded: 'silent',
+    trigger: [
+      { platform: 'time_pattern', seconds: '/30', id: 'regulate' },
+      ...(o.extraTriggers || []),
+      BOOT,
+    ],
+    condition: [],
+    variables: {
+      shs_grid_power: `{{ states('${o.net}') | float(0) }}`,
+      shs_current_limit: `{{ states('${o.target}') | float(${p.normal_limit}) }}`,
+    },
+    action: [{ choose: [
+      {
+        conditions: [templateCond(`{{ has_value('${o.target}') and (not (${active}) or not has_value('${o.net}')) and (shs_current_limit | float) != ${p.normal_limit} }}`)],
+        sequence: [setNumberTemplate(o.target, `{{ ${p.normal_limit} }}`)],
+      },
+      {
+        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and shs_grid_power < -${p.export_threshold} and (shs_current_limit | float) > ${p.minimum_limit} }}`)],
+        sequence: [setNumberTemplate(o.target, `{{ [${p.minimum_limit}, shs_current_limit - ${p.step_size}] | max }}`)],
+      },
+      {
+        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and shs_grid_power > ${p.import_threshold} and shs_current_limit < ${p.normal_limit} }}`)],
+        sequence: [setNumberTemplate(o.target, `{{ [${p.normal_limit}, shs_current_limit + ${p.step_size}] | min }}`)],
+      },
+    ] }],
+  };
+}
+
+// Last-resort controller for inverters that only expose an enable switch. Once
+// switched off, the grid meter can no longer tell how much PV is available. A
+// short periodic probe is therefore essential: turn on, measure, and turn off
+// again only when export persists. Missing telemetry fails safe to ON.
+function buildSwitchExportGuard(o: {
+  alias: string;
+  target: string;
+  net: string;
+  p: Record<string, number>;
+  activeTemplate?: string;
+  restoreTemplate?: string;
+  extraTriggers?: Record<string, unknown>[];
+}) {
+  const active = o.activeTemplate || 'true';
+  const restore = o.restoreTemplate || 'false';
+  const exporting = `(${active}) and has_value('${o.net}') and (states('${o.net}') | float(0)) < -${o.p.export_threshold}`;
+  const importing = `(${active}) and has_value('${o.net}') and (states('${o.net}') | float(0)) > ${o.p.import_threshold}`;
+  const retryDue = `is_state('${o.target}', 'off') and (as_timestamp(now()) - as_timestamp(states['${o.target}'].last_changed)) >= ${o.p.retry_minutes * 60}`;
+  const evaluate = {
+    choose: [
+      {
+        conditions: [templateCond(`{{ ${restore} and not is_state('${o.target}', 'on') }}`)],
+        sequence: [turn(o.target, true)],
+      },
+      {
+        conditions: [templateCond(`{{ not has_value('${o.net}') and not is_state('${o.target}', 'on') }}`)],
+        sequence: [turn(o.target, true)],
+      },
+      {
+        conditions: [templateCond(`{{ not is_state('${o.target}', 'on') and ${importing} }}`)],
+        sequence: [turn(o.target, true)],
+      },
+      {
+        conditions: [templateCond(`{{ is_state('${o.target}', 'on') and ${exporting} }}`)],
+        sequence: [
+          { delay: { minutes: o.p.export_delay } },
+          { choose: [{ conditions: [templateCond(`{{ ${exporting} }}`)], sequence: [turn(o.target, false)] }] },
+        ],
+      },
+      {
+        conditions: [templateCond(`{{ (${active}) and ${retryDue} }}`)],
+        sequence: [
+          turn(o.target, true),
+          { delay: { seconds: o.p.probe_seconds } },
+          { choose: [{ conditions: [templateCond(`{{ ${exporting} }}`)], sequence: [turn(o.target, false)] }] },
+        ],
+      },
+    ],
+  };
+  return {
+    alias: o.alias, description: DESCRIPTION, mode: 'single', max_exceeded: 'silent',
+    trigger: [
+      { platform: 'numeric_state', entity_id: o.net, below: -o.p.export_threshold, for: { minutes: o.p.export_delay }, id: 'export' },
+      { platform: 'numeric_state', entity_id: o.net, above: o.p.import_threshold, id: 'import' },
+      { platform: 'state', entity_id: o.target, to: 'on', id: 'target_on' },
+      { platform: 'time_pattern', minutes: '/1', id: 'evaluate' },
+      { platform: 'template', value_template: `{{ not has_value('${o.net}') }}`, for: { minutes: o.p.sensor_timeout }, id: 'sensor_failure' },
+      ...(o.extraTriggers || []),
+      BOOT,
+    ],
+    condition: [],
+    action: [{ choose: [
+      {
+        conditions: [{ condition: 'trigger', id: 'export' }, templateCond(`{{ ${active} }}`)],
+        sequence: [turn(o.target, false)],
+      },
+      {
+        conditions: [{ condition: 'trigger', id: 'sensor_failure' }],
+        sequence: [{ choose: [{ conditions: [templateCond(`{{ not is_state('${o.target}', 'on') }}`)], sequence: [turn(o.target, true)] }] }],
+      },
+      {
+        conditions: [{ condition: 'trigger', id: 'import' }, templateCond(`{{ (${active}) and not is_state('${o.target}', 'on') }}`)],
+        sequence: [turn(o.target, true)],
+      },
+      {
+        conditions: [{ condition: 'trigger', id: ['target_on', 'evaluate', 'boot', 'source_changed'] }],
+        sequence: [evaluate],
+      },
+    ] }],
   };
 }
 
@@ -280,6 +409,79 @@ const SCENARIOS: EnergyScenario[] = [
     },
   },
   {
+    key: 'keep_solar_export_near_zero',
+    title: 'Keep solar export near zero',
+    desc: 'Reduce inverter output while exporting and restore it when the home needs power. A writable limit is adjusted gradually; an enable switch uses safe periodic test starts.',
+    icon: 'mdi:solar-power-variant-outline', color: '#0d9488',
+    requires: 'solar', targetDomains: ['number', 'switch', 'input_boolean'], targetLabel: 'Writable inverter limit or safe enable control',
+    aliasStem: 'Keep solar export near zero',
+    params: [
+      { key: 'export_threshold', label: 'Allowed export', default: 100, min: 0, max: 5000, step: 25, unit: 'W', help: 'Control starts only when export exceeds this margin.' },
+      { key: 'import_threshold', label: 'Restore above import', default: 150, min: 25, max: 5000, step: 25, unit: 'W', help: 'Raise the limit, or immediately restart a paused inverter, when grid import exceeds this value.' },
+      { key: 'normal_limit', label: 'Normal output limit', default: 100, min: 1, max: 100000, step: 1, unit: 'target value', domains: ['number'], help: 'Usually 100 for a percentage entity, or the inverter maximum for a watt-based entity.' },
+      { key: 'minimum_limit', label: 'Minimum output limit', default: 5, min: 0, max: 100000, step: 1, unit: 'target value', domains: ['number'], help: 'Use the lowest value accepted by the inverter. A small non-zero limit is safer for many models.' },
+      { key: 'step_size', label: 'Adjustment per 30 seconds', default: 5, min: 0.1, max: 10000, step: 0.1, unit: 'target value', domains: ['number'], help: 'Smaller steps react more smoothly and reduce oscillation.' },
+      { key: 'export_delay', label: 'Switch off after', default: 2, min: 1, max: 30, step: 1, unit: 'min', domains: ['switch', 'input_boolean'], help: 'Export must persist this long before an inverter enable switch is turned off.' },
+      { key: 'retry_minutes', label: 'Test start every', default: 15, min: 2, max: 120, step: 1, unit: 'min', domains: ['switch', 'input_boolean'], help: 'The inverter is briefly restarted because an off inverter cannot show whether solar production is useful again.' },
+      { key: 'probe_seconds', label: 'Test duration', default: 45, min: 15, max: 300, step: 5, unit: 'sec', domains: ['switch', 'input_boolean'], help: 'Time allowed for the inverter and grid meter to settle during a test start.' },
+      { key: 'sensor_timeout', label: 'Grid sensor fail-safe', default: 2, min: 1, max: 30, step: 1, unit: 'min', domains: ['switch', 'input_boolean'], help: 'If grid telemetry is missing this long, the inverter is restored instead of being left off.' },
+    ],
+    note: 'Preferred: select a writable inverter active-power/output-limit number. Only use the switch fallback with the inverter manufacturer\'s safe enable control or a dedicated helper that calls that control. Never switch the inverter\'s AC supply with a smart plug, relay or contactor. The fallback can briefly export during every test start.',
+    build: ({ target, p, net, min, deviceName }) => {
+      const safeParams = { ...p, minimum_limit: Math.max(p.minimum_limit, min) };
+      if (dom(target) === 'number') {
+        return buildNumberCurtailment({
+          alias: `${deviceName} - Keep solar export near zero`, target, net: net ?? '', p: safeParams,
+        });
+      }
+      return buildSwitchExportGuard({
+        alias: `${deviceName} - Keep solar export near zero`, target, net: net ?? '', p: safeParams,
+      });
+    },
+  },
+  {
+    key: 'avoid_negative_price_solar_export',
+    title: 'Avoid negative-price solar export',
+    desc: 'Curtail or pause solar only while the live feed-in price is below your limit and the home is exporting. Full production is restored automatically when the price recovers.',
+    icon: 'mdi:solar-power-variant-outline', color: '#dc2626',
+    requires: 'contract_solar', targetDomains: ['number', 'switch', 'input_boolean'], targetLabel: 'Writable inverter limit or safe enable control',
+    aliasStem: 'Avoid negative-price solar export',
+    params: [
+      { key: 'feed_in_threshold', label: 'Curtail below feed-in price', default: 0, min: -5, max: 5, step: 0.001, unit: 'EUR/kWh', help: 'Production is unrestricted again as soon as the feed-in price reaches this value.' },
+      { key: 'export_threshold', label: 'Allowed export', default: 100, min: 0, max: 5000, step: 25, unit: 'W', help: 'No curtailment while the home uses the solar power itself.' },
+      { key: 'import_threshold', label: 'Restore above import', default: 150, min: 25, max: 5000, step: 25, unit: 'W', help: 'Raise the limit, or immediately restart a paused inverter, when grid import exceeds this value.' },
+      { key: 'normal_limit', label: 'Normal output limit', default: 100, min: 1, max: 100000, step: 1, unit: 'target value', domains: ['number'] },
+      { key: 'minimum_limit', label: 'Minimum output limit', default: 5, min: 0, max: 100000, step: 1, unit: 'target value', domains: ['number'] },
+      { key: 'step_size', label: 'Adjustment per 30 seconds', default: 5, min: 0.1, max: 10000, step: 0.1, unit: 'target value', domains: ['number'] },
+      { key: 'export_delay', label: 'Switch off after', default: 2, min: 1, max: 30, step: 1, unit: 'min', domains: ['switch', 'input_boolean'] },
+      { key: 'retry_minutes', label: 'Test start every', default: 15, min: 2, max: 120, step: 1, unit: 'min', domains: ['switch', 'input_boolean'] },
+      { key: 'probe_seconds', label: 'Test duration', default: 45, min: 15, max: 300, step: 5, unit: 'sec', domains: ['switch', 'input_boolean'] },
+      { key: 'sensor_timeout', label: 'Grid sensor fail-safe', default: 2, min: 1, max: 30, step: 1, unit: 'min', domains: ['switch', 'input_boolean'] },
+    ],
+    note: 'The controller only limits exported energy: solar used by the home remains available. A switch-only inverter is periodically test-started while prices remain negative, and is immediately restored on sufficient grid import, price recovery, contract disconnect or missing grid telemetry. Only use a manufacturer-provided safe enable control; never interrupt the inverter AC supply with a smart plug, relay or contactor.',
+    build: ({ target, p, px, net, min, deviceName }) => {
+      const feed = px.feed_in_price ?? '';
+      const contract = px.contract_active ?? '';
+      const active = `is_state('${contract}', 'on') and has_value('${feed}') and (states('${feed}') | float(0)) < ${p.feed_in_threshold}`;
+      const restore = `not is_state('${contract}', 'on') or not has_value('${feed}') or (states('${feed}') | float(0)) >= ${p.feed_in_threshold}`;
+      const extraTriggers = [
+        { platform: 'state', entity_id: px.feed_in_price, id: 'source_changed' },
+        { platform: 'state', entity_id: px.contract_active, id: 'source_changed' },
+      ];
+      const safeParams = { ...p, minimum_limit: Math.max(p.minimum_limit, min) };
+      if (dom(target) === 'number') {
+        return buildNumberCurtailment({
+          alias: `${deviceName} - Avoid negative-price solar export`, target, net: net ?? '', p: safeParams,
+          activeTemplate: active, extraTriggers,
+        });
+      }
+      return buildSwitchExportGuard({
+        alias: `${deviceName} - Avoid negative-price solar export`, target, net: net ?? '', p: safeParams,
+        activeTemplate: active, restoreTemplate: restore, extraTriggers,
+      });
+    },
+  },
+  {
     key: 'dump_load_on_negative_feed_in',
     title: 'Self-consume on negative feed-in',
     desc: 'When the feed-in price goes negative (you would pay to export), switch on a diversion load to self-consume instead. Off again when feed-in is positive.',
@@ -333,6 +535,8 @@ export class EnergyAutomations extends LitElement {
   @property() public deviceId = '';
   @property() public deviceName = '';
   @property({ attribute: false }) public deviceEntities: DeviceEntity[] = [];
+  @property({ attribute: false }) public scenarioKeys?: string[];
+  @property({ type: Boolean }) public showHeader = true;
 
   @state() private _priceEntities: Record<string, string | null> = {};
   @state() private _contractActive = false;
@@ -352,6 +556,8 @@ export class EnergyAutomations extends LitElement {
     .head-sub { font-size: 12.5px; color: var(--secondary-text-color); line-height: 1.5; margin-top: 4px; }
     .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
     .card { display: flex; flex-direction: column; gap: 10px; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 12px; padding: 14px; }
+    .card.unavailable { background: var(--secondary-background-color); }
+    .card.unavailable .card-head { opacity: .72; }
     .card-head { display: flex; align-items: flex-start; gap: 10px; }
     .card-icon { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .card-icon ha-icon { --mdc-icon-size: 20px; }
@@ -430,10 +636,17 @@ export class EnergyAutomations extends LitElement {
     return sources;
   }
 
-  private _available(s: EnergyScenario): boolean {
-    if (s.requires === 'contract') return this._contractActive;
-    if (s.requires === 'solar') return !!this._netEntity();
-    return true;
+  private _missingRequirement(s: EnergyScenario): string {
+    const hasPrices = this._contractActive;
+    const hasGridMeter = !!this._netEntity();
+    if (s.requires === 'contract' && !hasPrices) return 'Needs dynamic prices';
+    if (s.requires === 'solar' && !hasGridMeter) return 'Needs grid meter';
+    if (s.requires === 'contract_solar') {
+      if (!hasPrices && !hasGridMeter) return 'Needs prices + grid meter';
+      if (!hasPrices) return 'Needs dynamic prices';
+      if (!hasGridMeter) return 'Needs grid meter';
+    }
+    return '';
   }
 
   private _targetOptions(domains: Domain[]): Array<{ value: string; label: string }> {
@@ -461,6 +674,7 @@ export class EnergyAutomations extends LitElement {
   }
 
   private _openModal(s: EnergyScenario): void {
+    if (this._missingRequirement(s)) return;
     this._error = '';
     this._modal = s;
     this._target = '';
@@ -484,8 +698,21 @@ export class EnergyAutomations extends LitElement {
     let min = 0;
     const st = this.hass.states[this._target];
     if (st && dom(this._target) === 'number') {
-      const m = Number(st.attributes?.min);
-      if (!Number.isNaN(m)) min = m;
+      const entityMin = Number(st.attributes?.min);
+      const entityMax = Number(st.attributes?.max);
+      const entityStep = Number(st.attributes?.step);
+      if (Number.isFinite(entityMin)) min = entityMin;
+
+      const max = Number.isFinite(entityMax) ? entityMax : Number.POSITIVE_INFINITY;
+      if ('normal_limit' in params) params.normal_limit = Math.max(min, Math.min(max, params.normal_limit));
+      if ('minimum_limit' in params) {
+        params.minimum_limit = Math.max(min, Math.min(params.normal_limit ?? max, params.minimum_limit));
+      }
+      if ('step_size' in params) {
+        const smallestStep = Number.isFinite(entityStep) && entityStep > 0 ? entityStep : 0.1;
+        const availableRange = Number.isFinite(max) ? Math.max(smallestStep, max - min) : Number.POSITIVE_INFINITY;
+        params.step_size = Math.max(smallestStep, Math.min(availableRange, params.step_size));
+      }
     }
     return { params, min };
   }
@@ -522,21 +749,24 @@ export class EnergyAutomations extends LitElement {
   private _renderCard(s: EnergyScenario) {
     const createdId = this._createdId(s);
     const isAdmin = !!this.hass.user?.is_admin;
+    const missingRequirement = this._missingRequirement(s);
     return html`
-      <div class="card">
+      <div class=${`card${missingRequirement ? ' unavailable' : ''}`}>
         <div class="card-head">
           <div class="card-icon" style="background: ${s.color}1f; color: ${s.color};"><ha-icon icon=${s.icon}></ha-icon></div>
           <div>
             <div class="card-title">${s.title}</div>
             <div class="card-desc">${s.desc}</div>
-            ${s.requires === 'solar' ? html`<span class="tag solar">Needs solar</span>` : nothing}
+            ${missingRequirement ? html`<span class="tag solar">${missingRequirement}</span>` : nothing}
           </div>
         </div>
         <div class="card-foot">
           ${createdId ? html`
             <span class="created"><ha-icon icon="mdi:check-circle" style="--mdc-icon-size:15px;"></ha-icon> Created${createdId !== 'existing' ? html` · <a href="/config/automation/edit/${createdId}">Edit</a>` : nothing}</span>
           ` : html`
-            <button class="create-btn" ?disabled=${!isAdmin} @click=${() => this._openModal(s)}><ha-icon icon="mdi:plus"></ha-icon> Set up</button>
+            <button class="create-btn" ?disabled=${!isAdmin || !!missingRequirement}
+              title=${missingRequirement || nothing}
+              @click=${() => this._openModal(s)}><ha-icon icon="mdi:plus"></ha-icon> Set up</button>
           `}
         </div>
       </div>`;
@@ -568,7 +798,7 @@ export class EnergyAutomations extends LitElement {
               </select>
             </div>
 
-            ${s.params.map(param => html`
+            ${s.params.filter(param => !param.domains || !this._target || param.domains.includes(dom(this._target) as Domain)).map(param => html`
               <div class="field">
                 <label class="f">${param.label}</label>
                 <div class="row">
@@ -595,20 +825,22 @@ export class EnergyAutomations extends LitElement {
 
   protected render() {
     if (!this._loaded) return nothing;
-    if (!this._contractActive && !this._netEntity()) return nothing;
 
-    const scenarios = SCENARIOS.filter(s => this._available(s));
-    if (scenarios.length === 0) return nothing;
+    const scenarios = this.scenarioKeys?.length
+      ? SCENARIOS.filter(scenario => this.scenarioKeys!.includes(scenario.key))
+      : SCENARIOS;
 
     return html`
-      <div class="head">
-        <div class="head-title">Smart energy</div>
-        <div class="head-sub">
-          Steer one device to save money: run it in the cheapest hours, on your solar surplus, or pause
-          it at price peaks. Each becomes a normal HA automation with a safety max-runtime and a
-          "contract connected" guard baked in - edit it later like any automation.
+      ${this.showHeader ? html`
+        <div class="head">
+          <div class="head-title">Smart energy</div>
+          <div class="head-sub">
+            Steer devices around prices and solar production. Loads can run in cheap or surplus hours,
+            while inverter output can be reduced safely to avoid unwanted export. Each setup creates a
+            normal, editable Home Assistant automation with restart recovery and fail-safe behaviour.
+          </div>
         </div>
-      </div>
+      ` : nothing}
       <div class="cards">${scenarios.map(s => this._renderCard(s))}</div>
       ${this._renderModal()}
     `;

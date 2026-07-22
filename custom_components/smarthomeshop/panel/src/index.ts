@@ -188,6 +188,17 @@ export class SmartHomeShopPanel extends LitElement {
     this._selectedDeviceId = e.detail.deviceId;
   }
 
+  private async _handleOpenEnergySettings(event: CustomEvent<{ focus?: 'solar-control' }>): Promise<void> {
+    event.stopPropagation();
+    this._navigateTo('energy');
+    await this.updateComplete;
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const hub = this.renderRoot.querySelector('shs-energy-hub') as (HTMLElement & {
+      openSettings?: (focus?: 'solar-control') => void;
+    }) | null;
+    hub?.openSettings?.(event.detail?.focus || 'solar-control');
+  }
+
   protected render() {
     return html`
       <div class="panel-header">
@@ -223,6 +234,7 @@ export class SmartHomeShopPanel extends LitElement {
           .hass=${this.hass}
           .selectedDeviceId=${this._selectedDeviceId}
           @device-select=${this._handleDeviceSelect}
+          @open-energy-settings=${this._handleOpenEnergySettings}
           @navigate=${(e: CustomEvent) => this._navigateTo(e.detail.page)}
         ></shs-dashboard-page>`;
       case 'room-builder':
@@ -239,6 +251,7 @@ export class SmartHomeShopPanel extends LitElement {
           .hass=${this.hass}
           .selectedDeviceId=${this._selectedDeviceId}
           @device-select=${this._handleDeviceSelect}
+          @open-energy-settings=${this._handleOpenEnergySettings}
           @navigate=${(e: CustomEvent) => this._navigateTo(e.detail.page)}
         ></shs-dashboard-page>`;
       default:

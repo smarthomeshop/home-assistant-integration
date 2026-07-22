@@ -48,6 +48,7 @@ class EnergyData:
     net_power_w: float | None = None
     energy_t1: float | None = None
     energy_t2: float | None = None
+    energy_today_kwh: float | None = None
     energy_returned_t1: float | None = None
     energy_returned_t2: float | None = None
     gas_total: float | None = None
@@ -64,6 +65,7 @@ class EnergyData:
     cost_month: float | None = None
 
     phase_max_load_pct: float | None = None
+    phase_imbalance_a: float | None = None
     phase_currents: dict[str, float] = field(default_factory=dict)
     available_grid_w: float | None = None
 
@@ -226,6 +228,10 @@ class EnergyTracker:
 
         data.energy_t1 = self._value("energy_consumed_tariff_1")
         data.energy_t2 = self._value("energy_consumed_tariff_2")
+        daily_t1 = self._meter_value("energy_daily_t1_cc")
+        daily_t2 = self._meter_value("energy_daily_t2_cc")
+        if daily_t1 is not None or daily_t2 is not None:
+            data.energy_today_kwh = round((daily_t1 or 0.0) + (daily_t2 or 0.0), 3)
         data.energy_returned_t1 = self._value("energy_produced_tariff_1")
         if data.energy_returned_t1 is None:
             data.energy_returned_t1 = self._value("energy_returned_tariff_1")
@@ -242,6 +248,10 @@ class EnergyTracker:
             if amps is not None:
                 currents[f"L{phase}"] = amps
         data.phase_currents = currents
+        if len(currents) >= 2:
+            data.phase_imbalance_a = round(
+                max(currents.values()) - min(currents.values()), 1
+            )
         if currents and fuse > 0:
             max_current = max(currents.values())
             data.phase_max_load_pct = round(max_current / fuse * 100, 1)

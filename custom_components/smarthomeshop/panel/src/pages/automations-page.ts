@@ -1,7 +1,6 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
-import './energy-automations';
 import './energy-schedules';
 
 const ENERGY_PRODUCTS = ['p1meterkit', 'waterp1meterkit'];
@@ -21,6 +20,7 @@ interface Scenario {
   threshold?: number;
   unit?: string;
   forMin?: number;
+  timeWindow?: { after: string; before: string };
   msgTitle: string; // {room}
   msg: string; // {room}, {value}
 }
@@ -133,6 +133,35 @@ const SCENARIOS: Scenario[] = [
   },
   // ---- Energy ----
   {
+    key: 'energy_today_high', group: 'energy', title: 'High electricity usage today', color: '#ef476f',
+    desc: "Notify when today's electricity use passes a limit.",
+    icon: 'mdi:counter', match: { domain: 'sensor', suffix: ['energy_used_today_cc'] },
+    kind: 'above', threshold: 10, unit: 'kWh',
+    msgTitle: 'High electricity usage', msg: '{room} has used {value} kWh of electricity today.',
+  },
+  {
+    key: 'night_power_high', group: 'energy', title: 'Unusual night-time power usage', color: '#6c63ff',
+    desc: 'Notify when power stays above a limit between midnight and 06:00.',
+    icon: 'mdi:weather-night', match: { domain: 'sensor', suffix: ['grid_import_power_cc'] },
+    kind: 'above', threshold: 500, unit: 'W', forMin: 15,
+    timeWindow: { after: '00:00:00', before: '06:00:00' },
+    msgTitle: 'High night-time power use', msg: '{room} is using {value} W during the night for at least {min} minutes.',
+  },
+  {
+    key: 'solar_export_high', group: 'energy', title: 'High solar export', color: '#f59e0b',
+    desc: 'Notify when solar export stays above a chosen limit.',
+    icon: 'mdi:solar-power-variant', match: { domain: 'sensor', suffix: ['grid_export_power_cc'] },
+    kind: 'above', threshold: 1000, unit: 'W', forMin: 5,
+    msgTitle: 'High solar export', msg: '{room} is exporting {value} W for at least {min} minutes.',
+  },
+  {
+    key: 'phase_imbalance', group: 'energy', title: 'Phase imbalance detected', color: '#e63946',
+    desc: 'Notify when the difference between the highest and lowest phase current is too large.',
+    icon: 'mdi:current-ac', match: { domain: 'sensor', suffix: ['phase_imbalance_cc'] },
+    kind: 'above', threshold: 10, unit: 'A', forMin: 5,
+    msgTitle: 'Phase imbalance detected', msg: '{room} has a phase current difference of {value} A for at least {min} minutes.',
+  },
+  {
     key: 'power_high', group: 'energy', title: 'High power usage', color: '#f72585',
     desc: 'Notify when power draw stays above a limit.',
     icon: 'mdi:flash-alert', match: { domain: 'sensor', suffix: ['power_consumed'], excl: ['phase'] },
@@ -193,8 +222,11 @@ export class AutomationsPage extends LitElement {
     .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: white; transition: transform 0.15s; }
     .toggle.on::after { transform: translateX(18px); }
     .empty { font-size: 13px; color: var(--secondary-text-color); }
-    .energy-global-note { display: flex; align-items: flex-start; gap: 9px; margin: 18px 0 6px; padding: 11px 13px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.45; }
+    .energy-global-note { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 18px 0 6px; padding: 11px 13px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.45; }
     .energy-global-note ha-icon { --mdc-icon-size: 17px; flex: none; margin-top: 1px; color: var(--shs-primary); }
+    .energy-global-copy { flex: 1; min-width: 220px; }
+    .energy-global-button { display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 8px; padding: 8px 11px; background: var(--shs-primary); color: #fff; cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+    .energy-global-button ha-icon { --mdc-icon-size: 16px; color: inherit; margin: 0; }
     .config-hint { margin-top: 24px; font-size: 12px; color: var(--secondary-text-color); line-height: 1.5; opacity: 0.8; }
     .config-hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
     .loading { padding: 40px; text-align: center; }
@@ -325,13 +357,16 @@ export class AutomationsPage extends LitElement {
 
     const [domain, service] = this._notifyTarget.split('.');
     const action = { service: `${domain}.${service}`, data: { title: fill(s.msgTitle), message: fill(s.msg) } };
+    const condition = s.timeWindow
+      ? [{ condition: 'time', after: s.timeWindow.after, before: s.timeWindow.before }]
+      : [];
 
     return {
       alias: `${room} - ${s.title}`,
       description: `Created with the SmartHomeShop.io panel`,
       mode: 'single',
       trigger: [trigger],
-      condition: [],
+      condition,
       action: [action],
     };
   }
@@ -498,6 +533,14 @@ export class AutomationsPage extends LitElement {
     `;
   }
 
+  private _openGlobalEnergySettings(): void {
+    this.dispatchEvent(new CustomEvent('open-energy-settings', {
+      detail: { focus: 'solar-control' },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
   protected render() {
     if (this._loading) {
       return html`<div class="loading"><ha-circular-progress active></ha-circular-progress></div>`;
@@ -524,12 +567,6 @@ export class AutomationsPage extends LitElement {
       ${this._error && !this._modalScenario ? html`<div class="warn">${this._error}</div>` : nothing}
 
       ${ENERGY_PRODUCTS.includes(this.productType) ? html`
-        <shs-energy-automations
-          .hass=${this.hass}
-          .deviceId=${this.deviceId}
-          .deviceName=${this.deviceName}
-          .deviceEntities=${this._entities}
-        ></shs-energy-automations>
         <shs-energy-schedules
           .hass=${this.hass}
           .deviceId=${this.deviceId}
@@ -538,7 +575,11 @@ export class AutomationsPage extends LitElement {
         ></shs-energy-schedules>
         <div class="energy-global-note">
           <ha-icon icon="mdi:lightning-bolt-outline"></ha-icon>
-          <div>This page covers this device only. Your account, solar and battery sources, and home-battery control are set up once for the whole home under <b>Energy</b> - <b>Settings</b>.</div>
+          <div class="energy-global-copy">Dynamic prices, solar, battery, EV and inverter automations are configured once for the whole home under Energy settings.</div>
+          <button class="energy-global-button" @click=${this._openGlobalEnergySettings}>
+            <ha-icon icon="mdi:cog-outline"></ha-icon>
+            Open Energy settings
+          </button>
         </div>
       ` : nothing}
 
