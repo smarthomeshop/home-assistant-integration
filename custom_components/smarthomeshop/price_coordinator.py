@@ -77,6 +77,11 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         value = self._account().get("contract_id")
         return str(value) if value not in (None, "") else None
 
+    @property
+    def location_id(self) -> str | None:
+        value = self._account().get("location_id")
+        return str(value) if value not in (None, "") else None
+
     def _ssl_option(self, url: str):
         """Return an aiohttp ssl arg; disable verification for local dev hosts."""
         hostname = (urlparse(url).hostname or "").lower()
@@ -98,9 +103,14 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return {}
 
         url = f"{self.base_url}{PRICES_PATH}"
+        # A pinned contract wins over a location (matching the server, which
+        # checks ?contract= before ?location=); with neither the server uses
+        # the account's active contract for today.
         params = {}
         if self.contract_id:
             params["contract"] = self.contract_id
+        elif self.location_id:
+            params["location"] = self.location_id
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
@@ -126,6 +136,28 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         "Create a new key in your SmartHomeShop account."
                     )
                     raise UpdateFailed("API key lacks the prices permission")
+                if resp.status == 422:
+                    # No active contract for the selected location. This is an
+                    # expected, user-fixable state, not a service error, so it
+                    # keeps its own status and does not spam the logs. Clear
+                    # stale price data so nothing renders a wrong tariff.
+                    body = {}
+                    try:
+                        parsed = await resp.json()
+                        if isinstance(parsed, dict):
+                            body = parsed
+                    except (aiohttp.ClientError, ValueError):
+                        pass
+                    if body.get("code") == "energy_contract_required":
+                        self.status = "no_contract"
+                        self.last_error = (
+                            "No active energy contract for the selected location. "
+                            "Connect one in your SmartHomeShop account."
+                        )
+                        return {}
+                    self.status = "error"
+                    self.last_error = "The price service rejected the request (HTTP 422)."
+                    raise UpdateFailed("HTTP 422")
                 if resp.status != 200:
                     self.status = "error"
                     self.last_error = f"The price service returned HTTP {resp.status}."
@@ -307,15 +339,15 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_fetch_contracts(
         self, *, update_status: bool
-    ) -> tuple[bool, list[dict[str, Any]]]:
-        """Fetch contracts and optionally use the request to validate the account."""
+    ) -> tuple[bool, list[dict[str, Any]], list[dict[str, Any]]]:
+        """Fetch contracts and locations, optionally validating the account."""
         account = self._account()
         api_key = account.get("api_key")
         if not api_key:
             if update_status:
                 self.status = "unconfigured"
                 self.last_error = None
-            return False, []
+            return False, [], []
         url = f"{self.base_url}{CONTRACTS_PATH}"
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
         try:
@@ -329,30 +361,35 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if update_status:
                         self.status = "unauthorized"
                         self.last_error = "The API key is invalid or was revoked."
-                    return False, []
+                    return False, [], []
                 if resp.status == 403:
                     if update_status:
                         self.status = "forbidden"
                         self.last_error = "This account cannot access dynamic energy prices."
-                    return False, []
+                    return False, [], []
                 if resp.status != 200:
                     if update_status:
                         self.status = "error"
                         self.last_error = (
                             f"The account service returned HTTP {resp.status}."
                         )
-                    return False, []
+                    return False, [], []
                 data = await resp.json()
                 if not isinstance(data, dict):
                     if update_status:
                         self.status = "error"
                         self.last_error = "The account service returned an invalid response."
-                    return False, []
+                    return False, [], []
                 contracts = data.get("contracts", []) or []
+                locations = data.get("locations", []) or []
                 if update_status:
                     self.status = "ok"
                     self.last_error = None
-                return True, contracts if isinstance(contracts, list) else []
+                return (
+                    True,
+                    contracts if isinstance(contracts, list) else [],
+                    locations if isinstance(locations, list) else [],
+                )
         except TimeoutError:
             if update_status:
                 self.status = "error"
@@ -374,14 +411,16 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if update_status:
                 self.status = "error"
                 self.last_error = "The account service returned an invalid response."
-        return False, []
+        return False, [], []
 
     async def async_validate_account(self) -> bool:
         """Validate the configured token without waiting for a full forecast."""
-        valid, _ = await self._async_fetch_contracts(update_status=True)
+        valid, _, _ = await self._async_fetch_contracts(update_status=True)
         return valid
 
-    async def async_fetch_contracts(self) -> list[dict[str, Any]]:
-        """Fetch the user's energy contracts (for the panel dropdown)."""
-        _, contracts = await self._async_fetch_contracts(update_status=False)
-        return contracts
+    async def async_fetch_contracts(self) -> dict[str, list[dict[str, Any]]]:
+        """Fetch the user's contracts and locations (for the panel picker)."""
+        _, contracts, locations = await self._async_fetch_contracts(
+            update_status=False
+        )
+        return {"contracts": contracts, "locations": locations}

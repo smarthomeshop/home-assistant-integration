@@ -746,6 +746,7 @@ def _account_result(hass: HomeAssistant) -> dict:
         "has_key": bool(account.get("api_key")),
         "base_url": resolve_api_base_url(account.get("base_url")),
         "contract_id": account.get("contract_id"),
+        "location_id": account.get("location_id"),
         "status": getattr(prices, "status", "unconfigured"),
         "last_error": getattr(prices, "last_error", None),
         "last_synced": getattr(prices, "last_synced", None),
@@ -1097,6 +1098,7 @@ _ENERGY_SOURCES_SCHEMA = vol.Schema({
     vol.Optional("battery_invert"): bool,
     vol.Optional("battery_soc"): vol.Any(None, str),
     vol.Optional("battery_capacity_kwh"): vol.Any(None, vol.Coerce(float)),
+    vol.Optional("battery_capacity_entity"): vol.Any(None, str),
     vol.Optional("pv_forecast"): vol.Any(None, str),
 }, extra=vol.REMOVE_EXTRA)
 
@@ -1143,10 +1145,20 @@ async def ws_set_energy_sources(hass: HomeAssistant, connection, msg: dict) -> N
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/account/contracts"})
 @websocket_api.async_response
 async def ws_get_contracts(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Return the user's energy contracts for the panel dropdown."""
+    """Return the user's energy contracts and locations for the panel picker."""
     prices = hass.data.get(DOMAIN, {}).get("prices")
-    contracts = await prices.async_fetch_contracts() if prices is not None else []
-    connection.send_result(msg["id"], {"contracts": contracts})
+    data = (
+        await prices.async_fetch_contracts()
+        if prices is not None
+        else {"contracts": [], "locations": []}
+    )
+    connection.send_result(
+        msg["id"],
+        {
+            "contracts": data.get("contracts", []),
+            "locations": data.get("locations", []),
+        },
+    )
 
 
 @websocket_api.websocket_command({
@@ -1154,6 +1166,7 @@ async def ws_get_contracts(hass: HomeAssistant, connection, msg: dict) -> None:
     vol.Optional("api_key"): vol.Any(str, None),
     vol.Optional("base_url"): vol.Any(str, None),
     vol.Optional("contract_id"): vol.Any(str, int, None),
+    vol.Optional("location_id"): vol.Any(str, int, None),
 })
 @websocket_api.async_response
 async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
@@ -1178,6 +1191,8 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
         account["base_url"] = (msg.get("base_url") or "").strip() or None
     if "contract_id" in msg:
         account["contract_id"] = (str(msg.get("contract_id")).strip() or None) if msg.get("contract_id") not in (None, "") else None
+    if "location_id" in msg:
+        account["location_id"] = (str(msg.get("location_id")).strip() or None) if msg.get("location_id") not in (None, "") else None
     await store.async_set_account(account)
 
     has_key = bool(account.get("api_key"))

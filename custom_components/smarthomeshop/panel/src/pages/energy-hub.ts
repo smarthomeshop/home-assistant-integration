@@ -264,14 +264,16 @@ export class EnergyHub extends LitElement {
       overflow: hidden;
     }
 
-    .live-surface { display: grid; grid-template-columns: minmax(260px, .85fr) minmax(0, 1.55fr); }
+    .live-surface { display: grid; grid-template-columns: minmax(250px, .8fr) minmax(0, 1.6fr); }
     .live-home {
       display: flex;
       flex-direction: column;
       justify-content: center;
-      min-height: 230px;
+      min-height: 236px;
       padding: 28px;
-      background: var(--shs-blue-soft);
+      background:
+        radial-gradient(120% 90% at 15% 0%, color-mix(in srgb, var(--shs-blue) 16%, var(--card-background-color)), transparent 70%),
+        var(--shs-blue-soft);
       border-right: 1px solid var(--shs-border);
     }
     .metric-label {
@@ -285,48 +287,73 @@ export class EnergyHub extends LitElement {
       text-transform: uppercase;
     }
     .metric-label ha-icon { color: var(--shs-blue); --mdc-icon-size: 19px; }
-    .live-value { font-size: 46px; line-height: 1; font-weight: 760; margin-top: 20px; letter-spacing: 0; }
+    .live-value { font-size: 48px; line-height: 1; font-weight: 760; margin-top: 18px; letter-spacing: -.5px; }
     .live-value span { font-size: 17px; font-weight: 600; color: var(--secondary-text-color); }
-    .live-caption { color: var(--secondary-text-color); font-size: 13px; margin-top: 8px; }
+    .live-caption { color: var(--secondary-text-color); font-size: 13px; margin-top: 10px; }
     .live-caption.error { color: var(--shs-red); }
-
-    .source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .source-row {
-      min-height: 115px;
-      padding: 20px;
-      display: grid;
-      grid-template-columns: 38px minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 12px;
-      border-bottom: 1px solid var(--shs-border);
-      border-right: 1px solid var(--shs-border);
+    /* Self-sufficiency pill: instantly says where the home's power comes from. */
+    .live-source-pill {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 16px;
+      padding: 5px 12px 5px 9px; border-radius: 999px; width: fit-content;
+      font-size: 12px; font-weight: 650;
+      background: var(--shs-muted-surface, var(--secondary-background-color)); color: var(--secondary-text-color);
     }
-    .source-row:nth-child(2n) { border-right: 0; }
-    .source-row:nth-last-child(-n + 2) { border-bottom: 0; }
-    .source-row:last-child:nth-child(odd) { grid-column: 1 / -1; border-right: 0; }
+    .live-source-pill ha-icon { --mdc-icon-size: 15px; }
+    /* Text is mixed toward the theme's primary text colour so it clears WCAG AA
+       on the soft same-hue background in both light and dark themes (the raw
+       accent on its 12% tint only reached ~2.5:1 for amber in light mode). */
+    .live-source-pill.green { background: var(--shs-green-soft); color: color-mix(in srgb, var(--shs-green) 58%, var(--primary-text-color)); }
+    .live-source-pill.amber { background: var(--shs-amber-soft); color: color-mix(in srgb, var(--shs-amber) 52%, var(--primary-text-color)); }
+    .live-source-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: live-pulse 2s ease-in-out infinite; }
+    @keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+    .source-list { display: flex; flex-direction: column; }
+    .source-row {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 1px solid var(--shs-border);
+    }
+    .source-row:last-child { border-bottom: 0; }
     .source-icon {
-      width: 38px;
-      height: 38px;
+      width: 40px;
+      height: 40px;
+      flex-shrink: 0;
       display: grid;
       place-items: center;
-      border-radius: 8px;
-      background: var(--shs-muted-surface);
+      border-radius: 10px;
+      background: var(--shs-muted-surface, var(--secondary-background-color));
       color: var(--secondary-text-color);
     }
-    .source-icon ha-icon { --mdc-icon-size: 21px; }
+    .source-icon ha-icon { --mdc-icon-size: 22px; }
     .source-icon.grid-in { background: var(--shs-red-soft); color: var(--shs-red); }
     .source-icon.grid-out, .source-icon.solar, .source-icon.battery-out { background: var(--shs-green-soft); color: var(--shs-green); }
     .source-icon.battery-in { background: var(--shs-blue-soft); color: var(--shs-blue); }
-    .source-name { font-size: 13px; font-weight: 700; }
-    .source-status { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 3px; }
+    .source-main { flex: 1; min-width: 0; }
+    .source-name { font-size: 13.5px; font-weight: 700; }
+    .source-status { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
     .source-status.good { color: var(--shs-green); }
     .source-status.bad { color: var(--shs-red); }
-    .source-value { font-size: 20px; font-weight: 750; text-align: right; white-space: nowrap; }
+    .source-end { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+    .source-value { display: flex; align-items: center; gap: 6px; font-size: 21px; font-weight: 750; white-space: nowrap; }
     .source-value span { font-size: 12px; font-weight: 550; color: var(--secondary-text-color); }
-    .battery-meta { grid-column: 2 / 4; display: flex; align-items: center; gap: 9px; margin-top: -3px; }
-    .soc { flex: 1; height: 5px; border-radius: 3px; background: var(--secondary-background-color); overflow: hidden; }
-    .soc > span { display: block; height: 100%; background: var(--shs-green); }
-    .soc-txt { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; }
+    /* Flow arrow: down = into your home, up = leaving it. Pulses when live. */
+    .flow-arrow { --mdc-icon-size: 18px; color: var(--secondary-text-color); }
+    .flow-arrow.in { color: var(--shs-green); animation: flow-in 1.6s ease-in-out infinite; }
+    .flow-arrow.cost { color: var(--shs-red); animation: flow-in 1.6s ease-in-out infinite; }
+    .flow-arrow.out { color: var(--shs-blue); animation: flow-out 1.6s ease-in-out infinite; }
+    @keyframes flow-in { 0%,100% { transform: translateY(-1px); opacity: .55; } 50% { transform: translateY(1px); opacity: 1; } }
+    @keyframes flow-out { 0%,100% { transform: translateY(1px); opacity: .55; } 50% { transform: translateY(-1px); opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .flow-arrow, .live-source-pill .dot { animation: none; } }
+    /* Compact battery glyph instead of a lonely full-width bar. */
+    .batt { display: flex; align-items: center; gap: 7px; }
+    .batt-pct { font-size: 11.5px; font-weight: 650; color: var(--secondary-text-color); }
+    .batt-glyph { position: relative; width: 30px; height: 15px; border: 1.5px solid color-mix(in srgb, var(--secondary-text-color) 55%, transparent); border-radius: 4px; padding: 1.5px; }
+    .batt-glyph::after { content: ''; position: absolute; right: -3.5px; top: 4px; width: 2.5px; height: 5px; border-radius: 0 2px 2px 0; background: color-mix(in srgb, var(--secondary-text-color) 55%, transparent); }
+    .batt-glyph > span { display: block; height: 100%; border-radius: 1.5px; background: var(--shs-green); transition: width .4s ease; }
+    .batt-glyph > span.charging { background: var(--shs-blue); }
+    .batt-glyph > span.low { background: var(--shs-red); }
 
     .setup-note, .empty {
       display: flex;
@@ -518,13 +545,9 @@ export class EnergyHub extends LitElement {
       .section { margin-top: 22px; }
       .section-title h2 { font-size: 16px; }
       .live-surface { grid-template-columns: 1fr; }
-      .live-home { min-height: 160px; padding: 22px; border-right: 0; border-bottom: 1px solid var(--shs-border); }
-      .live-value { font-size: 38px; margin-top: 14px; }
-      .source-list { grid-template-columns: 1fr; }
-      .source-row { min-height: 88px; padding: 15px 17px; border-right: 0; }
-      .source-row:last-child:nth-child(odd) { grid-column: auto; }
-      .source-row:nth-last-child(-n + 2) { border-bottom: 1px solid var(--shs-border); }
-      .source-row:last-child { border-bottom: 0; }
+      .live-home { min-height: auto; padding: 22px; border-right: 0; border-bottom: 1px solid var(--shs-border); }
+      .live-value { font-size: 40px; margin-top: 14px; }
+      .source-row { padding: 15px 17px; }
       .price-summary { padding: 20px; }
       .price-value { font-size: 34px; }
       .price-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1008,6 +1031,35 @@ export class EnergyHub extends LitElement {
     };
   }
 
+  // One-line answer to "where is my home's power coming from right now",
+  // so the big number is not just a bare figure.
+  private _homeSourcePill(
+    house: number | null, grid: number | null, solar: number | null,
+    battery: number | null, contributorDead: boolean,
+  ): { cls: string; icon: string; text: string } | null {
+    if (house === null || contributorDead || house <= 0) return null;
+    // Only power delivered TO the home counts: solar production and battery
+    // discharge (positive). Whatever the home still needs beyond those comes
+    // from the grid, so a grid import that is only charging the battery is
+    // not counted against the home.
+    const solarToHome = Math.max(0, solar ?? 0);
+    const batteryToHome = Math.max(0, battery ?? 0);
+    const gridToHome = Math.max(0, house - solarToHome - batteryToHome);
+    const importing = grid !== null && grid > 5;
+    if (importing && gridToHome > 5) {
+      const share = Math.min(100, Math.max(0, Math.round((gridToHome / house) * 100)));
+      return { cls: 'amber', icon: 'mdi:transmission-tower-import',
+        text: `${share}% from the grid` };
+    }
+    // The home runs on its own power (the grid, if importing, only charges the battery).
+    const solarIn = solarToHome > 5;
+    const batteryIn = batteryToHome > 5;
+    if (solarIn && batteryIn) return { cls: 'green', icon: '', text: 'Running on solar and battery' };
+    if (solarIn) return { cls: 'green', icon: '', text: 'Running on solar' };
+    if (batteryIn) return { cls: 'green', icon: '', text: 'Running on your battery' };
+    return null;
+  }
+
   private _sourceRow(options: {
     name: string;
     icon: string;
@@ -1017,24 +1069,41 @@ export class EnergyHub extends LitElement {
     statusClass?: string;
     dead?: boolean;
     soc?: number | null;
+    // 'in'  = power flowing into your home (import, production, discharge)
+    // 'out' = power leaving your home (export, charging)
+    // 'cost'= flowing in but you pay for it (grid import)
+    dir?: 'in' | 'out' | 'cost' | 'idle';
+    charging?: boolean;
   }) {
     const formatted = this._formatPower(options.value, true);
+    const dir = options.dead ? 'idle' : options.dir || 'idle';
+    const arrow = dir === 'out' ? 'mdi:arrow-up' : 'mdi:arrow-down';
+    const soc = options.soc;
+    const hasSoc = soc !== null && soc !== undefined;
+    const socPct = hasSoc ? Math.max(0, Math.min(100, soc as number)) : 0;
     return html`
       <div class="source-row">
         <div class="source-icon ${options.iconClass}"><ha-icon icon=${options.icon}></ha-icon></div>
-        <div>
+        <div class="source-main">
           <div class="source-name">${options.name}</div>
           <div class="source-status ${options.dead ? 'bad' : options.statusClass || ''}">
             ${options.dead ? 'Sensor unavailable' : options.status}
           </div>
         </div>
-        <div class="source-value">${formatted.value} <span>${formatted.unit}</span></div>
-        ${options.soc !== null && options.soc !== undefined ? html`
-          <div class="battery-meta">
-            <div class="soc"><span style="width:${Math.max(0, Math.min(100, options.soc))}%"></span></div>
-            <div class="soc-txt">${Math.round(options.soc)}% charged</div>
+        <div class="source-end">
+          <div class="source-value">
+            ${dir !== 'idle' ? html`<ha-icon class="flow-arrow ${dir}" icon=${arrow}></ha-icon>` : nothing}
+            ${formatted.value} <span>${formatted.unit}</span>
           </div>
-        ` : nothing}
+          ${hasSoc ? html`
+            <div class="batt">
+              <span class="batt-glyph"><span
+                class="${options.charging ? 'charging' : socPct <= 15 ? 'low' : ''}"
+                style="width:${socPct}%"></span></span>
+              <span class="batt-pct">${Math.round(socPct)}%</span>
+            </div>
+          ` : nothing}
+        </div>
       </div>
     `;
   }
@@ -1042,6 +1111,7 @@ export class EnergyHub extends LitElement {
   private _renderLive(house: number | null, grid: number | null, solar: number | null, battery: number | null, soc: number | null, contributorDead: boolean) {
     const home = this._formatPower(house);
     const sourceCount = 1 + (this._sources.solar_power ? 1 : 0) + (this._sources.battery_power ? 1 : 0);
+    const pill = this._homeSourcePill(house, grid, solar, battery, contributorDead);
     return html`
       <section class="section">
         <div class="section-head">
@@ -1052,8 +1122,13 @@ export class EnergyHub extends LitElement {
             <div class="metric-label"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon>Home consumption</div>
             <div class="live-value">${home.value} <span>${home.unit}</span></div>
             <div class="live-caption ${house === null && contributorDead ? 'error' : ''}">
-              ${house === null && contributorDead ? 'A connected power sensor is unavailable' : 'Calculated from all connected energy flows'}
+              ${house === null && contributorDead ? 'A connected power sensor is unavailable' : 'Total power your home is using right now'}
             </div>
+            ${pill ? html`
+              <div class="live-source-pill ${pill.cls}">
+                ${pill.cls === 'green' ? html`<span class="dot"></span>` : html`<ha-icon icon=${pill.icon}></ha-icon>`}
+                ${pill.text}
+              </div>` : nothing}
           </div>
           <div class="source-list">
             ${this._sourceRow({
@@ -1064,6 +1139,7 @@ export class EnergyHub extends LitElement {
               dead: this._isDead(this._netEntity()),
               status: grid === null ? 'No reading' : grid > 5 ? 'Importing from grid' : grid < -5 ? 'Exporting to grid' : 'Grid balanced',
               statusClass: grid !== null && grid < -5 ? 'good' : '',
+              dir: grid === null || Math.abs(grid) <= 5 ? 'idle' : grid > 5 ? 'cost' : 'out',
             })}
             ${this._sources.solar_power ? this._sourceRow({
               name: 'Solar',
@@ -1073,6 +1149,7 @@ export class EnergyHub extends LitElement {
               dead: this._isDead(this._sources.solar_power),
               status: solar !== null && solar > 5 ? 'Producing now' : 'No production',
               statusClass: solar !== null && solar > 5 ? 'good' : '',
+              dir: solar !== null && solar > 5 ? 'in' : 'idle',
             }) : nothing}
             ${this._sources.battery_power ? this._sourceRow({
               name: 'Battery',
@@ -1082,6 +1159,8 @@ export class EnergyHub extends LitElement {
               dead: this._isDead(this._sources.battery_power),
               status: battery === null ? 'No reading' : battery > 5 ? 'Discharging' : battery < -5 ? 'Charging' : 'Idle',
               statusClass: battery !== null && battery > 5 ? 'good' : '',
+              dir: battery === null || Math.abs(battery) <= 5 ? 'idle' : battery > 5 ? 'in' : 'out',
+              charging: battery !== null && battery < -5,
               soc,
             }) : nothing}
           </div>
@@ -1643,6 +1722,11 @@ export class EnergyHub extends LitElement {
           <ha-icon icon="mdi:account-key-outline"></ha-icon>
           <div>Connect your SmartHomeShop account to get dynamic prices, cheapest-hours planning and automated control.</div>
           ${this.hass.user?.is_admin ? html`<button class="cta-btn" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
+        </div>` : hasKey && this._account?.status === 'no_contract' && !this._wizardVisible(hasKey) ? html`
+        <div class="empty">
+          <ha-icon icon="mdi:file-document-alert-outline"></ha-icon>
+          <div>The selected location has no active energy contract, so there are no prices to show. Add one in your SmartHomeShop account or pick another location in Settings.</div>
+          ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Open settings</button>` : nothing}
         </div>` : hasKey && !priceOk && !this._wizardVisible(hasKey) ? html`
         <div class="empty">
           <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
@@ -1793,7 +1877,11 @@ export class EnergyHub extends LitElement {
           </div>
         `}
         ${this._wizardError ? html`<div class="wizard-err">${this._wizardError}</div>` : nothing}
-        ${!priceOk && hasKey ? html`<div class="wizard-err">The price connection is not working yet; check the key or try Sync in Settings.</div>` : nothing}
+        ${this._account?.status === 'no_contract'
+          ? html`<div class="wizard-err">Connected, but this location has no active energy contract yet. Add one in your SmartHomeShop account to see prices.</div>`
+          : !priceOk && hasKey
+            ? html`<div class="wizard-err">The price connection is not working yet; check the key or try Sync in Settings.</div>`
+            : nothing}
       </div>
     `;
   }

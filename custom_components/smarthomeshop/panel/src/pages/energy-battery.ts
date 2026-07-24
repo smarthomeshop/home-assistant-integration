@@ -182,6 +182,9 @@ export class EnergyBattery extends LitElement {
   }
 
   private _accountMessage(): string {
+    if (this._accountStatus === 'no_contract') {
+      return 'Your API key works, but the selected location has no active energy contract, so there are no prices to plan against. Add or activate a contract in your SmartHomeShop account, or pick another location in Settings.';
+    }
     if (['unauthorized', 'forbidden'].includes(this._accountStatus)) {
       return 'The saved SmartHomeShop.io API key is invalid or was revoked. Replace it to enable dynamic prices and battery planning.';
     }
@@ -189,6 +192,11 @@ export class EnergyBattery extends LitElement {
       return 'Enter your SmartHomeShop.io API key to enable dynamic prices, forecasts and home battery planning.';
     }
     return 'Dynamic price data is unavailable. Check the SmartHomeShop.io API key to enable home battery planning.';
+  }
+
+  // No contract is not a key problem, so the gate must not talk about keys.
+  private _noContract(): boolean {
+    return this._accountStatus === 'no_contract';
   }
 
   private _entityOptions(domains: string[], kind?: 'battery' | 'energy' | 'power' | 'forecast'): Array<{ value: string; label: string }> {
@@ -217,6 +225,22 @@ export class EnergyBattery extends LitElement {
     return Number.isFinite(minimum) ? minimum : 0;
   }
 
+  private _sourceCapacityKwh(): number | undefined {
+    const entityId = this._sources?.battery_capacity_entity;
+    if (entityId) {
+      const state = this.hass.states?.[entityId];
+      const value = Number(state?.state);
+      const unit = String(state?.attributes?.unit_of_measurement || '').trim().toLowerCase();
+      if (Number.isFinite(value) && value > 0) {
+        if (unit === 'wh') return value / 1000;
+        if (unit === 'kwh') return value;
+        if (unit === 'mwh') return value * 1000;
+      }
+    }
+    const fixed = Number(this._sources?.battery_capacity_kwh);
+    return Number.isFinite(fixed) && fixed > 0 ? fixed : undefined;
+  }
+
   private async _openModal(): Promise<void> {
     this._error = '';
     try {
@@ -230,7 +254,7 @@ export class EnergyBattery extends LitElement {
       control_kind: 'switch',
       target_soc: 90,
       reserve_soc: 15,
-      capacity_kwh: sources.battery_capacity_kwh ?? undefined,
+      capacity_kwh: this._sourceCapacityKwh(),
       soc_sensor: sources.battery_soc || undefined,
       pv_forecast_sensor: sources.pv_forecast || undefined,
       charge_power: 3000,
@@ -248,7 +272,8 @@ export class EnergyBattery extends LitElement {
     // The Solar & battery mapping is the single source of truth for these:
     // when mapped there, it overrides whatever was saved here before.
     if (sources.battery_soc) this._form.soc_sensor = sources.battery_soc;
-    if (sources.battery_capacity_kwh != null) this._form.capacity_kwh = sources.battery_capacity_kwh;
+    const sourceCapacity = this._sourceCapacityKwh();
+    if (sourceCapacity != null) this._form.capacity_kwh = sourceCapacity;
     if (sources.pv_forecast) this._form.pv_forecast_sensor = sources.pv_forecast;
     this._modal = true;
   }
@@ -297,7 +322,12 @@ export class EnergyBattery extends LitElement {
     const target = numOr(form.target_soc, NaN);
     const reserve = numOr(form.reserve_soc, NaN);
     if (!form.soc_sensor) { this._error = 'Select the battery state-of-charge sensor.'; return; }
-    if (!(numOr(form.capacity_kwh, 0) > 0)) { this._error = 'Enter the usable battery capacity.'; return; }
+    if (!(numOr(form.capacity_kwh, 0) > 0)) {
+      this._error = this._sources?.battery_capacity_entity
+        ? 'The selected battery capacity entity is unavailable. Set a fixed fallback under Energy settings.'
+        : 'Enter the usable battery capacity.';
+      return;
+    }
     if (!(numOr(form.charge_power, 0) > 0) || !(numOr(form.max_discharge_power, 0) > 0)) {
       this._error = 'Set both maximum charge and discharge power.'; return;
     }
@@ -377,6 +407,26 @@ export class EnergyBattery extends LitElement {
     </div>`;
   }
 
+  private _renderCapacityField() {
+    const entityId = this._sources?.battery_capacity_entity;
+    const fixed = Number(this._sources?.battery_capacity_kwh);
+    const configured = Boolean(entityId) || (Number.isFinite(fixed) && fixed > 0);
+    if (!configured) {
+      return this._renderNumber('capacity_kwh', 'Usable capacity (kWh)', 10, 0.5, 500, 0.1);
+    }
+    const capacity = this._sourceCapacityKwh();
+    const label = entityId
+      ? this.hass.states?.[entityId]?.attributes?.friendly_name || entityId
+      : 'Fixed capacity from Energy settings';
+    return html`
+      <div class="field">
+        <label class="f">Usable capacity (kWh)</label>
+        <div class="locked">${capacity != null ? `${capacity.toFixed(2).replace(/\.?0+$/, '')} kWh` : 'Unavailable'}</div>
+        <div class="help">${label}. Configured under Energy settings.</div>
+      </div>
+    `;
+  }
+
   private _renderModal() {
     if (!this._modal) return nothing;
     const form = this._form;
@@ -408,13 +458,7 @@ export class EnergyBattery extends LitElement {
                   </select>
                 `}
               </div>
-              ${this._sources?.battery_capacity_kwh != null ? html`
-                <div class="field">
-                  <label class="f">Usable capacity (kWh)</label>
-                  <div class="locked">${this._sources.battery_capacity_kwh} kWh</div>
-                  <div class="help">From Solar &amp; battery - change it there.</div>
-                </div>
-              ` : this._renderNumber('capacity_kwh', 'Usable capacity (kWh)', 10, 0.5, 500, 0.1)}
+              ${this._renderCapacityField()}
             </div>
             <div class="two">
               ${this._renderNumber('reserve_soc', 'Protected reserve SoC (%)', 15, 0, 90, 1)}
@@ -521,16 +565,16 @@ export class EnergyBattery extends LitElement {
         <div class="sub">Plan charging and discharging against confirmed and predicted prices, solar, house load, efficiency and battery wear.</div>
         <div class="card unavailable">
           <div class="row">
-            <div class="row-icon"><ha-icon icon="mdi:account-key-outline"></ha-icon></div>
+            <div class="row-icon"><ha-icon icon=${this._noContract() ? 'mdi:file-document-alert-outline' : 'mdi:account-key-outline'}></ha-icon></div>
             <div class="row-main">
-              <div class="row-title">SmartHomeShop.io API key required</div>
-              <div class="row-meta">${this._accountMessage()}${!this.hass.user?.is_admin ? ' Ask a Home Assistant administrator to add or replace the key.' : ''}</div>
-              <div class="requirement"><ha-icon icon="mdi:lock-outline"></ha-icon>Battery planner unavailable until connected</div>
+              <div class="row-title">${this._noContract() ? 'Energy contract required' : 'SmartHomeShop.io API key required'}</div>
+              <div class="row-meta">${this._accountMessage()}${!this.hass.user?.is_admin && !this._noContract() ? ' Ask a Home Assistant administrator to add or replace the key.' : ''}</div>
+              <div class="requirement"><ha-icon icon="mdi:lock-outline"></ha-icon>Battery planner unavailable until ${this._noContract() ? 'a contract is active' : 'connected'}</div>
             </div>
             ${this.hass.user?.is_admin ? html`
               <button class="btn ghost" @click=${this._openAccountSettings}>
-                <ha-icon icon="mdi:key-outline"></ha-icon>
-                ${['unauthorized', 'forbidden'].includes(this._accountStatus) ? 'Replace API key' : 'Enter API key'}
+                <ha-icon icon=${this._noContract() ? 'mdi:cog-outline' : 'mdi:key-outline'}></ha-icon>
+                ${this._noContract() ? 'Open settings' : ['unauthorized', 'forbidden'].includes(this._accountStatus) ? 'Replace API key' : 'Enter API key'}
               </button>
             ` : nothing}
           </div>

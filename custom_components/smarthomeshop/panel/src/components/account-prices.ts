@@ -18,6 +18,7 @@ export class AccountPrices extends LitElement {
   @state() private _showKeyForm = false;
   @state() private _syncing = false;
   @state() private _contracts: any[] = [];
+  @state() private _locations: any[] = [];
   @state() private _error: string | null = null;
   private _refreshFollow?: Promise<void>;
 
@@ -97,19 +98,28 @@ export class AccountPrices extends LitElement {
     }
   }
 
+  // The contract/location list is available whenever the key is valid, so it
+  // must also load in the no_contract state where the user needs it to fix
+  // the very problem (pick a location that has a contract).
+  private _picksLoadable(status?: string): boolean {
+    return status === 'ok' || status === 'no_contract';
+  }
+
   private async _load(): Promise<void> {
     try {
       this._account = await this._callWS({ type: 'smarthomeshop/account' }, 8000);
       this._baseUrlInput = this._account?.base_url || '';
-      if (this._account?.status === 'ok') this._loadContracts();
+      if (this._picksLoadable(this._account?.status)) this._loadContracts();
       this._startRefreshFollow();
     } catch (err) { console.error('account load failed', err); }
   }
 
   private async _loadContracts(): Promise<void> {
     try {
-      const res = await this._callWS<{ contracts: any[] }>({ type: 'smarthomeshop/account/contracts' }, 8000);
+      const res = await this._callWS<{ contracts: any[]; locations: any[] }>(
+        { type: 'smarthomeshop/account/contracts' }, 8000);
       this._contracts = res.contracts || [];
+      this._locations = res.locations || [];
     } catch (err) { console.error('contracts load failed', err); }
   }
 
@@ -119,12 +129,54 @@ export class AccountPrices extends LitElement {
     this._error = null;
     try {
       this._account = await this._callWS({ type: 'smarthomeshop/account/set', contract_id: id }, 12000);
-      if (this._account?.status === 'ok') void this._loadContracts();
+      if (this._picksLoadable(this._account?.status)) void this._loadContracts();
       this._notifyAccountChanged();
       this._startRefreshFollow();
     } catch (err) {
       console.error('select contract failed', err);
       this._error = err instanceof Error ? err.message : 'Could not select the contract.';
+      // A user-changed native select does not follow re-rendered attributes,
+      // so reset it to the actual saved state after a failed save.
+      this._resetSelect('.js-contract-select', this._account?.contract_id);
+    } finally {
+      this._savingKey = false;
+    }
+  }
+
+  private _pinnedContractName(): string {
+    const id = this._account?.contract_id;
+    if (!id) return '';
+    const found = this._contracts.find((c) => String(c.id) === String(id));
+    return found?.name || '';
+  }
+
+  private _resetSelect(selector: string, savedId: unknown): void {
+    const select = this.renderRoot?.querySelector(selector) as HTMLSelectElement | null;
+    if (select) select.value = savedId == null ? '' : String(savedId);
+  }
+
+  private async _selectLocation(id: string): Promise<void> {
+    if (this._savingKey) return;
+    this._savingKey = true;
+    this._error = null;
+    try {
+      // Picking a location clears any pinned contract, otherwise the pin
+      // would keep overriding the location (contract wins on the server).
+      this._account = await this._callWS(
+        { type: 'smarthomeshop/account/set', location_id: id, contract_id: null }, 12000);
+      if (this._picksLoadable(this._account?.status)) void this._loadContracts();
+      this._notifyAccountChanged();
+      this._startRefreshFollow();
+    } catch (err) {
+      console.error('select location failed', err);
+      this._error = err instanceof Error ? err.message : 'Could not select the location.';
+      // Nothing was saved: restore the select to the real state. With a pin
+      // still active the shown option is the synthetic "__pinned" one, not
+      // the location id (which is still empty).
+      this._resetSelect(
+        '.js-location-select',
+        this._account?.contract_id ? '__pinned' : this._account?.location_id,
+      );
     } finally {
       this._savingKey = false;
     }
@@ -146,7 +198,7 @@ export class AccountPrices extends LitElement {
       this._account = await this._callWS(payload, 12000);
       this._apiKeyInput = '';
       this._showKeyForm = this._account?.status !== 'ok';
-      if (this._account?.status === 'ok') void this._loadContracts();
+      if (this._picksLoadable(this._account?.status)) void this._loadContracts();
       this._notifyAccountChanged();
       this._startRefreshFollow();
     } catch (err) {
@@ -164,7 +216,7 @@ export class AccountPrices extends LitElement {
     try {
       const account = await this._callWS({ type: 'smarthomeshop/account/refresh' }, 12000);
       this._account = await this._waitForRefresh(account);
-      if (this._account?.status === 'ok') this._loadContracts();
+      if (this._picksLoadable(this._account?.status)) this._loadContracts();
       this._notifyAccountChanged();
     } catch (err) {
       console.error('sync failed', err);
@@ -180,7 +232,7 @@ export class AccountPrices extends LitElement {
     this._refreshFollow = this._waitForRefresh(this._account)
       .then(account => {
         this._account = account;
-        if (account?.status === 'ok') void this._loadContracts();
+        if (this._picksLoadable(account?.status)) void this._loadContracts();
         this._notifyAccountChanged();
       })
       .catch(err => console.warn('price refresh status polling failed', err))
@@ -280,11 +332,13 @@ export class AccountPrices extends LitElement {
       unconfigured: 'Connect once here to use live dynamic spot prices across SmartHomeShop Energy. The integration keeps working locally without an account.',
       connecting: 'Checking your API key and loading dynamic energy prices...',
       ok: 'Connected - live prices are being fetched.',
+      no_contract: 'Connected, but the selected location has no active energy contract yet, so there are no prices to show.',
       unauthorized: 'That API key is invalid or was revoked.',
       forbidden: 'The price service rejected this key. Create a new API token in your account.',
       error: 'Could not reach the price service. Check your connection and try again.',
     };
     const cls = status === 'ok' ? 'ok' : status === 'unconfigured' ? '' : 'alert';
+    const badgeText: Record<string, string> = { ok: 'Connected', no_contract: 'No contract' };
 
     return html`
       <div class="card">
@@ -297,7 +351,7 @@ export class AccountPrices extends LitElement {
           <div class="status">
             <div class="status-icon ${cls}"><ha-icon icon="mdi:cloud-outline"></ha-icon></div>
             <div class="status-text">
-              ${a?.has_key ? html`<span class="status-badge ${cls === 'ok' ? 'ok' : 'alert'}">${status === 'ok' ? 'Connected' : status}</span>` : nothing}
+              ${a?.has_key ? html`<span class="status-badge ${cls === 'ok' ? 'ok' : 'alert'}">${badgeText[status] || status}</span>` : nothing}
               ${status === 'error' && a?.last_error
                 ? a.last_error
                 : statusText[status] || statusText.error}
@@ -311,10 +365,40 @@ export class AccountPrices extends LitElement {
             </div>
           ` : nothing}
 
-          ${status === 'ok' && this._contracts.length > 0 ? html`
+          ${this._picksLoadable(status) && this._locations.length > 0 ? html`
+            <div class="contract-row">
+              <label>Location</label>
+              <select class="js-location-select" ?disabled=${this._savingKey}
+                @change=${(e: Event) => this._selectLocation((e.target as HTMLSelectElement).value)}>
+                ${a?.contract_id ? html`
+                  <option value="__pinned" selected disabled>
+                    Pinned contract${this._pinnedContractName() ? ` · ${this._pinnedContractName()}` : ''}
+                  </option>` : nothing}
+                <option value="" ?selected=${!a?.location_id && !a?.contract_id}>Active contract (automatic)</option>
+                ${this._locations.map((loc) => html`
+                  <option value=${String(loc.id)} ?selected=${String(a?.location_id) === String(loc.id) && !a?.contract_id}>
+                    ${loc.name}${loc.active_contract
+                      ? ` · ${loc.active_contract.name}${loc.active_contract.provider ? ` (${loc.active_contract.provider})` : ''}`
+                      : ' · no active contract'}
+                  </option>`)}
+              </select>
+            </div>
+            <div class="hint">
+              ${a?.contract_id
+                ? html`SmartHomeShop Energy is pinned to a specific contract. Pick a location above to follow its active contract instead.`
+                : !a?.location_id
+                  ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account. Pick a location to always follow that location's active contract, so prices update by themselves when you switch contracts there.`
+                  : html`Prices follow the active contract for this location and update by themselves when you change it in your SmartHomeShop account.`}
+            </div>
+            ${status === 'no_contract' ? html`
+              <div class="warn">
+                This location has no active energy contract, so no prices are shown. Add or
+                activate a contract for it in your SmartHomeShop account, or pick another location.
+              </div>` : nothing}
+          ` : this._picksLoadable(status) && this._contracts.length > 0 ? html`
             <div class="contract-row">
               <label>Contract</label>
-              <select ?disabled=${this._savingKey}
+              <select class="js-contract-select" ?disabled=${this._savingKey}
                 @change=${(e: Event) => this._selectContract((e.target as HTMLSelectElement).value)}>
                 <option value="" ?selected=${!a?.contract_id}>Active contract (automatic)</option>
                 ${this._contracts.map((c) => html`
@@ -328,7 +412,11 @@ export class AccountPrices extends LitElement {
                 ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account, so prices update by themselves when you switch contracts there. Pick a specific contract above to pin it instead.`
                 : html`SmartHomeShop Energy is pinned to a specific contract. Choose <b>Active contract (automatic)</b> to always follow the active contract in your account instead.`}
             </div>
-            ${a?.contract_id && !a?.contract ? html`
+            ${status === 'no_contract' ? html`
+              <div class="warn">
+                The active contract for today has expired or is not set, so no prices are shown.
+                Pin a specific contract above, or add an active contract in your SmartHomeShop account.
+              </div>` : status === 'ok' && a?.contract_id && !a?.contract ? html`
               <div class="warn">
                 The pinned contract no longer exists in your account, so generic prices without
                 contract tariffs are used. Pick another contract above.
