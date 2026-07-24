@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-panel",
-  "version": "1.5.5",
+  "version": "1.5.0",
   "description": "SmartHomeShop Configurator Panel for Home Assistant",
   "type": "module",
   "scripts": {
