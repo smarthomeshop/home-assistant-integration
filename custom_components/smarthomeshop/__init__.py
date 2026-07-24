@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config import ConfigType
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
     DOMAIN,
@@ -34,6 +35,7 @@ from .products.waterflowkit import WaterFlowKitCoordinator
 from .products.ultimatesensor import UltimateSensorCoordinator
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
+CONFIG_SCHEMA = cv.empty_config_schema(DOMAIN)
 
 # Panel constants
 PANEL_URL = "/smarthomeshop_panel"

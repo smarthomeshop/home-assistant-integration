@@ -5,15 +5,16 @@
     "@smarthomeshop"
   ],
   "config_flow": true,
-  "documentation": "https://smarthomeshop.io/docs",
-  "iot_class": "calculated",
-  "issue_tracker": "https://github.com/smarthomeshop/home-assistant-integration/issues",
-  "version": "1.5.0",
   "dependencies": [
+    "energy",
     "esphome",
     "http",
     "frontend",
     "panel_custom",
     "websocket_api"
-  ]
+  ],
+  "documentation": "https://smarthomeshop.io/docs",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/smarthomeshop/home-assistant-integration/issues",
+  "version": "1.5.1"
 }
