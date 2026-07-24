@@ -2,6 +2,7 @@
   "name": "smarthomeshop-integration",
   "private": true,
   "description": "SmartHomeShop.io Home Assistant Integration",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "build": "npm run build:frontend && npm run build:panel",
     "build:frontend": "cd frontend && npm run build",

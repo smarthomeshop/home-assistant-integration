@@ -22,7 +22,7 @@
     "litelement"
   ],
   "author": "SmartHomeShop.io",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "devDependencies": {
     "@rollup/plugin-commonjs": "^25.0.7",
     "@rollup/plugin-node-resolve": "^15.2.3",

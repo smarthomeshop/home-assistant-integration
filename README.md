@@ -90,6 +90,13 @@ overriding the current recommendation.
 
 ## License
 
-Copyright (c) 2025 SmartHomeShop.io - All Rights Reserved.
+Copyright © 2025–2026 SmartHomeShop.io.
 
-This software is proprietary. Unauthorized copying, modification, distribution, or use of this software, via any medium, is strictly prohibited without prior written permission from SmartHomeShop.io.
+The integration source code is licensed under the
+[GNU Affero General Public License v3.0](LICENSE). Modified versions and
+network-accessible derivatives must remain available under the AGPL.
+
+The SmartHomeShop.io name, logos, product names and brand assets are not
+licensed under the AGPL. See [TRADEMARKS.md](TRADEMARKS.md). A separate
+commercial license is available for organizations that want to incorporate
+this software without the AGPL obligations; contact info@smarthomeshop.io.
