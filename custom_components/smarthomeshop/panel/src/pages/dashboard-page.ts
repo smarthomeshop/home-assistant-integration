@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
 import './settings-page';
 import './automations-page';
+import '../components/ha-energy-sync';
 
 interface DeviceWithEntities extends SmartHomeShopDevice {
   entities?: DeviceEntity[];
@@ -730,6 +731,7 @@ export class DashboardPage extends LitElement {
     const energy = ins?.energy;
     const leak = water?.leak_score;
     const baseline = water?.baseline;
+    const isP1EnergyDevice = ['waterp1meterkit', 'p1meterkit'].includes(device.product_type || '');
     // Insights carry live connectivity (5s polling); fall back to the
     // devices-list snapshot until the first insights response arrives.
     const offline = ins ? ins.online === false : device.online === false;
@@ -805,6 +807,17 @@ export class DashboardPage extends LitElement {
           Settings
         </button>
       </div>
+
+      ${this._detailTab === 'overview' && isP1EnergyDevice ? html`
+        <shs-ha-energy-sync
+          .hass=${this.hass}
+          .deviceId=${device.id}
+          .deviceName=${device.name}
+          .deviceEntities=${device.entities || []}
+          compact>
+        </shs-ha-energy-sync>
+        <div style="height: 16px;"></div>
+      ` : nothing}
 
       ${this._detailTab === 'automations' ? html`
         <shs-automations-page

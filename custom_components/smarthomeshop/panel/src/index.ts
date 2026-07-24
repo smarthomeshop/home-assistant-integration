@@ -169,6 +169,15 @@ export class SmartHomeShopPanel extends LitElement {
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
     console.log(`SmartHomeShop Panel v${VERSION} initialized`);
+    if (new URLSearchParams(window.location.search).get('energy-settings') === 'automations') {
+      this._currentPage = 'energy';
+      void this.updateComplete.then(() => {
+        const hub = this.renderRoot.querySelector('shs-energy-hub') as (HTMLElement & {
+          openSettings?: (focus?: 'solar-control') => void;
+        }) | null;
+        hub?.openSettings?.('solar-control');
+      });
+    }
   }
 
   private _navigateTo(page: PageType): void {

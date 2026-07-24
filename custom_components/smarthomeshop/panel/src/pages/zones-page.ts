@@ -1,6 +1,8 @@
 import { LitElement, html, css, svg, nothing, PropertyValues } from 'lit';
 import { customElement, property, state, query } from 'lit/decorators.js';
 import type { HomeAssistant, Room } from '../types';
+import '../components/sensor-coverage-calibration';
+import type { CalibrationPoint } from '../components/sensor-coverage-calibration';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -27,7 +29,7 @@ interface ZoneData {
   sensorId?: string;               // Entry lines: which sensor counts this line
   profile?: ZoneProfile;
 }
-interface RoomCalibration { enabled: boolean; corners: Point[]; gridSizeMm: 100 | 300; snapToGrid: boolean; }
+interface RoomCalibration { enabled: boolean; corners: Point[]; gridSizeMm: 100 | 300; snapToGrid: boolean; sensorId?: string; }
 interface TrackingSettings { smoothingEnabled: boolean; smoothingAlpha: number; maxJumpMm: number; trackHoldMs: number; crossZoneTracking: boolean; }
 interface LocalFurnitureItem { id: string; type: string; name: string; x: number; y: number; width: number; height: number; rotation: number; }
 interface DoorItem { id: string; wallIndex: number; position: number; width: number; openDirection: 'inward' | 'outward'; openSide: 'left' | 'right'; }
@@ -159,6 +161,7 @@ export class ZonesPage extends LitElement {
   @state() private _selectedZonePartIndex = 0;
   @state() private _appendToZoneIndex: number | null = null;
   @state() private _calibration: RoomCalibration = { ...DEFAULT_CALIBRATION, corners: [] };
+  @state() private _showCoverageCalibration = false;
   @state() private _tracking: TrackingSettings = { ...DEFAULT_TRACKING };
   @state() private _drawingZone: Point[] = [];
   @state() private _newZoneType: ZoneType = 'detection';
@@ -319,7 +322,16 @@ export class ZonesPage extends LitElement {
     .corner-row input { width: 100%; }
     .secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 10px; padding: 8px; border: 1px solid var(--rd-line-strong); border-radius: 7px; background: transparent; color: var(--rd-text); cursor: pointer; font-size: 12px; }
     .secondary-action:hover { border-color: #4361ee; color: #4361ee; }
+    .secondary-action:disabled { opacity: 0.45; cursor: not-allowed; }
     .secondary-action ha-icon { --mdc-icon-size: 16px; }
+    .coverage-summary { display: flex; align-items: flex-start; gap: 9px; margin-top: 10px; padding: 10px; border: 1px solid var(--rd-line); border-radius: 8px; background: var(--rd-panel); }
+    .coverage-summary ha-icon { --mdc-icon-size: 18px; flex: 0 0 auto; margin-top: 1px; color: var(--rd-dim); }
+    .coverage-summary.calibrated ha-icon { color: #22c55e; }
+    .coverage-summary strong, .coverage-summary span { display: block; }
+    .coverage-summary strong { color: var(--rd-text); font-size: 12px; }
+    .coverage-summary span { margin-top: 2px; color: var(--rd-dim); font-size: 11px; line-height: 1.4; }
+    .calibration-details { margin-top: 10px; color: var(--rd-dim2); font-size: 11px; }
+    .calibration-details summary { cursor: pointer; }
     select { width: 100%; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; }
     .info-text { color: var(--rd-dim); font-size: 12px; line-height: 1.5; }
     .firmware-status { margin-top: 10px; padding: 10px; border: 1px solid var(--rd-border); border-radius: 8px; background: var(--rd-deep); }
@@ -1110,6 +1122,7 @@ export class ZonesPage extends LitElement {
           : [],
         gridSizeMm: savedCalibration.gridSizeMm === 300 ? 300 : 100,
         snapToGrid: savedCalibration.snapToGrid !== false,
+        sensorId: typeof savedCalibration.sensorId === 'string' ? savedCalibration.sensorId : undefined,
       };
       const savedTracking = (room as any).tracking || {};
       this._tracking = {
@@ -2185,28 +2198,39 @@ export class ZonesPage extends LitElement {
     this._markDirty();
   }
 
-  private _useRoomCornersForCalibration() {
-    if (this._roomPoints.length < 3) return;
-    let corners: Point[];
-    if (this._roomPoints.length === 4) {
-      corners = this._roomPoints.map(point => ({ ...point }));
-    } else {
-      const xs = this._roomPoints.map(point => point.x);
-      const ys = this._roomPoints.map(point => point.y);
-      const minX = Math.min(...xs), maxX = Math.max(...xs);
-      const minY = Math.min(...ys), maxY = Math.max(...ys);
-      corners = [
-        { x: minX, y: minY }, { x: maxX, y: minY },
-        { x: maxX, y: maxY }, { x: minX, y: maxY },
-      ];
-    }
-    this._updateCalibration({ enabled: true, corners });
+  private _sensorLocalToWorld(sensor: SensorInstance, point: Point): Point {
+    const rotation = (sensor.rotation - 90) * Math.PI / 180;
+    return {
+      x: sensor.x + point.y * Math.cos(rotation) - point.x * Math.sin(rotation),
+      y: sensor.y + point.y * Math.sin(rotation) + point.x * Math.cos(rotation),
+    };
   }
 
-  private _updateCalibrationCorner(index: number, patch: Partial<Point>) {
-    const corners = [...this._calibration.corners];
-    corners[index] = { ...(corners[index] || { x: 0, y: 0 }), ...patch };
-    this._updateCalibration({ corners });
+  private _worldToSensorLocal(sensor: SensorInstance, point: Point): Point {
+    const rotation = (sensor.rotation - 90) * Math.PI / 180;
+    const dx = point.x - sensor.x;
+    const dy = point.y - sensor.y;
+    return {
+      x: -dx * Math.sin(rotation) + dy * Math.cos(rotation),
+      y: dx * Math.cos(rotation) + dy * Math.sin(rotation),
+    };
+  }
+
+  private _openCoverageCalibration() {
+    if (!this._selectedSensor?.deviceId) return;
+    this._showCoverageCalibration = true;
+  }
+
+  private _saveCoverageCalibration(event: CustomEvent<{ corners: CalibrationPoint[] }>) {
+    const sensor = this._selectedSensor;
+    if (!sensor) return;
+    const corners = event.detail.corners.map(point => this._sensorLocalToWorld(sensor, point));
+    this._updateCalibration({
+      enabled: true,
+      corners,
+      sensorId: sensor.id,
+    });
+    this._showCoverageCalibration = false;
   }
 
   private _updateTracking(patch: Partial<TrackingSettings>) {
@@ -4103,6 +4127,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const selectedRadar = radarDevices.find(device => device.id === this._selectedSensor?.deviceId);
     const selectedRadarCapabilities = this._getRadarCapabilities(this._selectedSensor?.deviceId ?? null);
     const activeTargets = Object.values(this._liveTargets).reduce((sum, targets) => sum + targets.filter(t => t.active).length, 0);
+    const calibrationSensor = this._sensors.find(sensor => sensor.id === this._calibration.sensorId);
 
     return html`
       <div class="sidebar">
@@ -4398,15 +4423,40 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
         <div class="settings-panel">
           <div class="settings-panel-header">
-            <ha-icon icon="mdi:vector-square"></ha-icon>
-            <span>Room calibration</span>
+            <ha-icon icon="mdi:radar"></ha-icon>
+            <span>Sensor coverage calibration</span>
           </div>
-          <p class="info-text">Calibrate all four room corners and choose the grid used while drawing zones.</p>
-          <div class="settings-row">
-            <label>Enable calibration</label>
-            <input type="checkbox" .checked="${this._calibration.enabled}"
-                   @change="${(e: Event) => this._updateCalibration({ enabled: (e.target as HTMLInputElement).checked })}"/>
+          <p class="info-text">
+            Measure the furthest positions the selected LD2450 or LD2460 can reliably see.
+            This sets the sensor's usable detection area, not the room size.
+          </p>
+          <div class="coverage-summary ${this._calibration.corners.length === 4 ? 'calibrated' : ''}">
+            <ha-icon icon="${this._calibration.corners.length === 4 ? 'mdi:check-circle-outline' : 'mdi:map-marker-path'}"></ha-icon>
+            <div>
+              <strong>${this._calibration.corners.length === 4 ? 'Detection area measured' : 'No detection area measured'}</strong>
+              <span>
+                ${this._calibration.corners.length === 4
+                  ? `Four points${calibrationSensor ? ` measured with ${this._sensorLabel(calibrationSensor, this._sensors.indexOf(calibrationSensor))}` : ''}.`
+                  : 'Select a sensor, then walk to four reliable outer positions.'}
+              </span>
+            </div>
           </div>
+          ${this._calibration.corners.length === 4 ? html`
+            <div class="settings-row">
+              <label>Use measured area</label>
+              <input type="checkbox" .checked="${this._calibration.enabled}"
+                     @change="${(e: Event) => this._updateCalibration({ enabled: (e.target as HTMLInputElement).checked })}"/>
+            </div>
+          ` : nothing}
+          <button class="secondary-action" @click="${this._openCoverageCalibration}" ?disabled="${!this._selectedSensor?.deviceId}">
+            <ha-icon icon="mdi:map-marker-radius"></ha-icon>
+            ${this._calibration.corners.length === 4 ? 'Measure again' : 'Start live measurement'}
+          </button>
+          ${!this._selectedSensor?.deviceId ? html`
+            <p class="firmware-status-note warning">Select an LD2450 or LD2460 device above before starting.</p>
+          ` : html`
+            <p class="firmware-status-note">Uses live X/Y target positions from ${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}.</p>
+          `}
           <div class="settings-row">
             <label>Grid size</label>
             <select .value="${String(this._calibration.gridSizeMm)}"
@@ -4420,22 +4470,19 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <input type="checkbox" .checked="${this._calibration.snapToGrid}"
                    @change="${(e: Event) => this._updateCalibration({ snapToGrid: (e.target as HTMLInputElement).checked })}"/>
           </div>
-          <button class="secondary-action" @click="${this._useRoomCornersForCalibration}" ?disabled="${this._roomPoints.length < 3}">
-            <ha-icon icon="mdi:selection-marker"></ha-icon>
-            Use room outline
-          </button>
           ${this._calibration.enabled && this._calibration.corners.length === 4 ? html`
-            <div class="corner-grid">
-              ${this._calibration.corners.map((corner, index) => html`
-                <div class="corner-row">
-                  <strong>C${index + 1}</strong>
-                  <input type="number" step="10" .value="${String(corner.x)}" title="X coordinate in millimetres"
-                         @change="${(e: Event) => this._updateCalibrationCorner(index, { x: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
-                  <input type="number" step="10" .value="${String(corner.y)}" title="Y coordinate in millimetres"
-                         @change="${(e: Event) => this._updateCalibrationCorner(index, { y: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
-                </div>
-              `)}
-            </div>
+            <details class="calibration-details">
+              <summary>Measured coordinates</summary>
+              <div class="corner-grid">
+                ${this._calibration.corners.map((corner, index) => html`
+                  <div class="corner-row">
+                    <strong>P${index + 1}</strong>
+                    <span>X ${Math.round(corner.x)} mm</span>
+                    <span>Y ${Math.round(corner.y)} mm</span>
+                  </div>
+                `)}
+              </div>
+            </details>
           ` : nothing}
         </div>
 
@@ -4795,6 +4842,21 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           </div>
         </div>
       ` : ''}
+
+      ${this._showCoverageCalibration && this._selectedSensor ? html`
+        <shs-sensor-coverage-calibration
+          .targets="${this._liveTargets[this._selectedSensor.id] || []}"
+          .initialCorners="${this._calibration.sensorId === this._selectedSensor.id
+            ? this._calibration.corners.map(point => this._worldToSensorLocal(this._selectedSensor!, point))
+            : []}"
+          .range="${this._selectedSensor.range}"
+          .fov="${this._selectedSensor.fov}"
+          .mountingMode="${this._selectedSensor.mountingMode}"
+          .sensorName="${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}"
+          @calibration-cancel="${() => this._showCoverageCalibration = false}"
+          @calibration-save="${this._saveCoverageCalibration}"
+        ></shs-sensor-coverage-calibration>
+      ` : nothing}
     `;
   }
 }

@@ -16,10 +16,12 @@ interface EnergySources {
   battery_invert?: boolean;
   battery_soc?: string;
   battery_capacity_kwh?: number | null;
+  battery_capacity_entity?: string;
   pv_forecast?: string;
 }
 
 const dom = (e: string): string => e.split('.')[0];
+type EntityKind = 'power' | 'battery' | 'energy';
 
 @customElement('shs-energy-sources')
 export class EnergySourcesCard extends LitElement {
@@ -62,8 +64,9 @@ export class EnergySourcesCard extends LitElement {
     .live { font-size: 11.5px; margin-top: 4px; }
     .live.ok { color: #16a34a; }
     .live.dead { color: #ef4444; }
-    select, input[type="number"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
-    select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
+    ha-entity-picker { display: block; width: 100%; --mdc-theme-primary: var(--shs-primary); }
+    input[type="number"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    input:focus { outline: none; border-color: var(--shs-primary); }
     .check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--primary-text-color); margin-top: 6px; }
     .check input { width: auto; }
     .two { display: flex; gap: 10px; }
@@ -86,18 +89,37 @@ export class EnergySourcesCard extends LitElement {
     this._loaded = true;
   }
 
-  private _options(kind: 'power' | 'battery' | 'energy'): Array<{ value: string; label: string }> {
-    const out = [{ value: '', label: 'None' }];
-    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
-      if (dom(entityId) !== 'sensor') continue;
-      const dc = st.attributes?.device_class;
-      const unit = String(st.attributes?.unit_of_measurement || '');
-      if (kind === 'power' && dc !== 'power' && !/^k?W$/i.test(unit)) continue;
-      if (kind === 'battery' && dc !== 'battery' && unit !== '%') continue;
-      if (kind === 'energy' && dc !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
-      out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
-    }
-    return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
+  private _matchesKind(entity: string | { entity_id?: string }, kind: EntityKind): boolean {
+    const entityId = typeof entity === 'string' ? entity : entity.entity_id || '';
+    if (dom(entityId) !== 'sensor') return false;
+    const st = this.hass.states?.[entityId];
+    if (!st) return false;
+    const dc = st.attributes?.device_class;
+    const unit = String(st.attributes?.unit_of_measurement || '');
+    if (kind === 'power') return dc === 'power' || /^k?W$/i.test(unit);
+    if (kind === 'battery') return dc === 'battery' || unit === '%';
+    return dc === 'energy' || /^(?:Wh|kWh|MWh)$/i.test(unit);
+  }
+
+  private _capacityKwh(entityId?: string): { value: number; text: string } | null {
+    if (!entityId) return null;
+    const state = this.hass.states?.[entityId];
+    if (!state || state.state === 'unknown' || state.state === 'unavailable') return null;
+
+    const raw = Number(state.state);
+    if (!Number.isFinite(raw)) return null;
+
+    const unit = String(state.attributes?.unit_of_measurement || '').trim().toLowerCase();
+    let value: number;
+    if (unit === 'wh') value = raw / 1000;
+    else if (unit === 'kwh') value = raw;
+    else if (unit === 'mwh') value = raw * 1000;
+    else return null;
+
+    return {
+      value,
+      text: `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} kWh`,
+    };
   }
 
   private _liveValue(entityId?: string, invert = false): { text: string; dead: boolean } | null {
@@ -158,15 +180,20 @@ export class EnergySourcesCard extends LitElement {
       .some(e => e && this._liveValue(e)?.dead);
   }
 
-  private _picker(label: string, key: keyof EnergySources, kind: 'power' | 'battery' | 'energy', invertKey?: keyof EnergySources, help?: string) {
+  private _picker(label: string, key: keyof EnergySources, kind: EntityKind, invertKey?: keyof EnergySources, help?: string) {
     const val = this._form[key] as string | undefined;
     const live = this._liveValue(val, invertKey ? !!this._form[invertKey] : false);
     return html`
       <div class="field">
         <label class="f">${label}</label>
-        <select @change=${(e: Event) => this._set(key, (e.target as HTMLSelectElement).value as any)}>
-          ${this._options(kind).map(o => html`<option value=${o.value} ?selected=${o.value === val}>${o.label}</option>`)}
-        </select>
+        <ha-entity-picker
+          .hass=${this.hass}
+          .value=${val || ''}
+          .includeDomains=${['sensor']}
+          .entityFilter=${(entity: string | { entity_id?: string }) => this._matchesKind(entity, kind)}
+          .allowCustomEntity=${false}
+          @value-changed=${(e: CustomEvent<{ value?: string }>) => this._set(key, (e.detail?.value || '') as any)}
+        ></ha-entity-picker>
         ${help ? html`<div class="help">${help}</div>` : nothing}
         ${live ? html`<div class="live ${live.dead ? 'dead' : 'ok'}">${live.text}</div>` : nothing}
         ${invertKey && val ? html`
@@ -200,11 +227,46 @@ export class EnergySourcesCard extends LitElement {
               'Signed battery power. With solar power this gives true PV surplus; check the sign against the live value below.')}
             ${this._picker('Battery state of charge (%)', 'battery_soc', 'battery', undefined,
               'Used to stop charging at the target and to protect the reserve in battery arbitrage.')}
-            <div class="field">
-              <label class="f">Battery capacity (kWh)</label>
-              <input type="number" min="1" max="200" step="0.5" .value=${this._form.battery_capacity_kwh != null ? String(this._form.battery_capacity_kwh) : ''}
-                @input=${(e: Event) => this._set('battery_capacity_kwh', parseFloat((e.target as HTMLInputElement).value))} />
+          <div class="field">
+            <label class="f">Battery capacity entity (optional)</label>
+            <ha-entity-picker
+              .hass=${this.hass}
+              .value=${this._form.battery_capacity_entity || ''}
+              .includeDomains=${['sensor']}
+              .entityFilter=${(entity: string | { entity_id?: string }) => this._matchesKind(entity, 'energy')}
+              .allowCustomEntity=${false}
+              @value-changed=${(e: CustomEvent<{ value?: string }>) =>
+                this._set('battery_capacity_entity', e.detail?.value || undefined)}
+            ></ha-entity-picker>
+            ${this._form.battery_capacity_entity
+              ? html`
+                  <div class="live ${this._capacityKwh(this._form.battery_capacity_entity) ? '' : 'dead'}">
+                    ${this._capacityKwh(this._form.battery_capacity_entity)?.text ||
+                    'Entity is unavailable or does not report Wh, kWh or MWh'}
+                  </div>
+                `
+              : nothing}
+            <div class="hint">
+              Select a sensor when your inverter exposes the usable battery capacity. Its live value overrides the fixed value below.
             </div>
+          </div>
+          <div class="field">
+            <label class="f">Fixed battery capacity (kWh)</label>
+            <input
+              type="number"
+              min="1"
+              max="200"
+              step="0.1"
+              .value=${this._form.battery_capacity_kwh != null ? String(this._form.battery_capacity_kwh) : ''}
+              @input=${(e: Event) => {
+                const value = (e.target as HTMLInputElement).value;
+                this._set('battery_capacity_kwh', value === '' ? null : Number(value));
+              }}
+            />
+            <div class="hint">
+              Used when no capacity entity is selected or when that entity is temporarily unavailable.
+            </div>
+          </div>
 
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
           </div>

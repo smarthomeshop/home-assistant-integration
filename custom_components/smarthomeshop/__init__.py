@@ -38,7 +38,7 @@ PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
 # Panel constants
 PANEL_URL = "/smarthomeshop_panel"
 PANEL_TITLE = "SmartHomeShop.io"
-PANEL_ICON = "mdi:store"
+PANEL_ICON = "shs:logo"
 PANEL_NAME = "smarthomeshop-panel"
 _PANEL_STATIC_PATH_REGISTERED = "panel_static_path_registered"
 

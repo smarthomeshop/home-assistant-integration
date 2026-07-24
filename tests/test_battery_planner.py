@@ -128,6 +128,31 @@ class BatteryPlannerTest(unittest.TestCase):
         self.assertEqual(plan["status"], "ready")
         self.assertEqual(plan["timeline"][0]["start"], now.isoformat())
 
+    def test_capacity_to_kwh_converts_supported_energy_units(self) -> None:
+        cases = (
+            (10000, "Wh", 10.0),
+            (10, "kWh", 10.0),
+            (0.01, "MWh", 10.0),
+            ("12.5", "kWh", 12.5),
+        )
+
+        for value, unit, expected in cases:
+            with self.subTest(value=value, unit=unit):
+                self.assertEqual(PLANNER.capacity_to_kwh(value, unit), expected)
+
+    def test_capacity_to_kwh_rejects_invalid_values(self) -> None:
+        cases = (
+            (0, "kWh"),
+            (-1, "kWh"),
+            ("unknown", "kWh"),
+            (10, None),
+            (10, "J"),
+        )
+
+        for value, unit in cases:
+            with self.subTest(value=value, unit=unit):
+                self.assertIsNone(PLANNER.capacity_to_kwh(value, unit))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,16 @@ async def async_ha_energy_prices(hass: HomeAssistant) -> dict[str, float]:
     for source in data.get("energy_sources", []) or []:
         stype = source.get("type")
         if stype == "grid":
+            # HA 2026.6+ stores one unified grid source. Keep the legacy
+            # flow_from/flow_to fallback so upgrades from older HA releases
+            # continue to provide sensible defaults.
+            import_price = source.get("number_energy_price")
+            export_price = source.get("number_energy_price_export")
+            if import_price is not None:
+                prices.setdefault(CONF_PRICE_T1, float(import_price))
+                prices.setdefault(CONF_PRICE_T2, float(import_price))
+            if export_price is not None:
+                prices.setdefault(CONF_PRICE_FEED_IN, float(export_price))
             for flow in source.get("flow_from", []) or []:
                 price = flow.get("number_energy_price")
                 if price is not None:

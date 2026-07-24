@@ -9,7 +9,12 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
-from .battery_planner import build_battery_plan, empty_plan, normalize_hourly_kw
+from .battery_planner import (
+    build_battery_plan,
+    capacity_to_kwh,
+    empty_plan,
+    normalize_hourly_kw,
+)
 from .const import DOMAIN, LOGGER
 from .price_coordinator import PriceCoordinator
 
@@ -28,7 +33,29 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _config(self) -> dict[str, Any]:
         store = self.hass.data.get(DOMAIN, {}).get("store")
-        return store.get_battery() if store else {}
+        if not store:
+            return {}
+
+        config = dict(store.get_battery())
+        sources = store.get_energy_sources()
+        capacity = self._capacity_kwh(sources.get("battery_capacity_entity"))
+        if capacity is None:
+            capacity = capacity_to_kwh(
+                sources.get("battery_capacity_kwh"), "kWh"
+            )
+        if capacity is not None:
+            config["capacity_kwh"] = capacity
+        return config
+
+    def _capacity_kwh(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", "none"):
+            return None
+        return capacity_to_kwh(
+            state.state, state.attributes.get("unit_of_measurement")
+        )
 
     def _state_number(self, entity_id: str | None) -> float | None:
         if not entity_id:

@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 
 // Control-action scenarios for p1/waterp1 with a connected dynamic contract
@@ -159,6 +159,8 @@ function buildNumberCurtailment(o: {
 }) {
   const active = o.activeTemplate || 'true';
   const p = o.p;
+  const gridPower = `(states('${o.net}') | float(0))`;
+  const currentLimit = `(states('${o.target}') | float(${p.normal_limit}))`;
   return {
     alias: o.alias, description: DESCRIPTION, mode: 'single', max_exceeded: 'silent',
     trigger: [
@@ -167,22 +169,18 @@ function buildNumberCurtailment(o: {
       BOOT,
     ],
     condition: [],
-    variables: {
-      shs_grid_power: `{{ states('${o.net}') | float(0) }}`,
-      shs_current_limit: `{{ states('${o.target}') | float(${p.normal_limit}) }}`,
-    },
     action: [{ choose: [
       {
-        conditions: [templateCond(`{{ has_value('${o.target}') and (not (${active}) or not has_value('${o.net}')) and (shs_current_limit | float) != ${p.normal_limit} }}`)],
+        conditions: [templateCond(`{{ has_value('${o.target}') and (not (${active}) or not has_value('${o.net}')) and ${currentLimit} != ${p.normal_limit} }}`)],
         sequence: [setNumberTemplate(o.target, `{{ ${p.normal_limit} }}`)],
       },
       {
-        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and shs_grid_power < -${p.export_threshold} and (shs_current_limit | float) > ${p.minimum_limit} }}`)],
-        sequence: [setNumberTemplate(o.target, `{{ [${p.minimum_limit}, shs_current_limit - ${p.step_size}] | max }}`)],
+        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and ${gridPower} < -${p.export_threshold} and ${currentLimit} > ${p.minimum_limit} }}`)],
+        sequence: [setNumberTemplate(o.target, `{{ [${p.minimum_limit}, ${currentLimit} - ${p.step_size}] | max }}`)],
       },
       {
-        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and shs_grid_power > ${p.import_threshold} and shs_current_limit < ${p.normal_limit} }}`)],
-        sequence: [setNumberTemplate(o.target, `{{ [${p.normal_limit}, shs_current_limit + ${p.step_size}] | min }}`)],
+        conditions: [templateCond(`{{ has_value('${o.net}') and has_value('${o.target}') and (${active}) and ${gridPower} > ${p.import_threshold} and ${currentLimit} < ${p.normal_limit} }}`)],
+        sequence: [setNumberTemplate(o.target, `{{ [${p.normal_limit}, ${currentLimit} + ${p.step_size}] | min }}`)],
       },
     ] }],
   };
@@ -529,7 +527,156 @@ const SCENARIOS: EnergyScenario[] = [
   // including SoC limits and solar-aware charging.
 ];
 
-@customElement('shs-energy-automations')
+interface AutomationRef {
+  id: string;
+  entityId?: string;
+  enabled: boolean;
+}
+
+interface ManagedSettings {
+  version: number;
+  scenario: string;
+  targets: string[];
+  params: Record<string, number>;
+}
+
+function managedSettings(config: Record<string, any>): ManagedSettings | undefined {
+  const raw = config.variables?.shs_managed_settings;
+  if (typeof raw !== 'string') return undefined;
+  try {
+    const parsed = JSON.parse(raw) as ManagedSettings;
+    if (!parsed || !Array.isArray(parsed.targets) || typeof parsed.params !== 'object') return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+function objectTree(value: unknown): Record<string, any>[] {
+  const found: Record<string, any>[] = [];
+  const visit = (item: unknown): void => {
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    if (!item || typeof item !== 'object') return;
+    const object = item as Record<string, any>;
+    found.push(object);
+    Object.values(object).forEach(visit);
+  };
+  visit(value);
+  return found;
+}
+
+function automationTargets(config: Record<string, any>, domains: Domain[]): string[] {
+  const stored = managedSettings(config)?.targets
+    .filter(entityId => domains.includes(dom(entityId) as Domain));
+  if (stored?.length) return [...new Set(stored)];
+
+  const targets = new Set<string>();
+  for (const item of objectTree(config)) {
+    if ((!item.service && !item.action) || !item.target?.entity_id) continue;
+    const entityIds = Array.isArray(item.target.entity_id)
+      ? item.target.entity_id
+      : [item.target.entity_id];
+    for (const entityId of entityIds) {
+      if (typeof entityId === 'string' && domains.includes(dom(entityId) as Domain)) {
+        targets.add(entityId);
+      }
+    }
+  }
+  return [...targets];
+}
+
+function existingParams(scenario: EnergyScenario, config: Record<string, any>): Record<string, number> {
+  const params = Object.fromEntries(scenario.params.map(param => [param.key, param.default]));
+  const stored = managedSettings(config);
+  if (stored?.scenario === scenario.key) {
+    for (const param of scenario.params) {
+      const value = stored.params[param.key];
+      if (Number.isFinite(value)) params[param.key] = value;
+    }
+    return params;
+  }
+
+  const items = objectTree(config);
+  const alias = String(config.alias || '');
+  const hours = alias.match(/(\d+)h\b/)?.[1];
+  if (hours && 'hours' in params) params.hours = Number(hours);
+
+  const trigger = (id: string) => items.find(item => item.id === id && item.platform);
+  const numericActions = items.filter(item =>
+    (item.service || item.action) && item.data && typeof item.data === 'object');
+  const watchdogHours = Number(trigger('watchdog')?.for?.hours);
+  if (Number.isFinite(watchdogHours) && 'max_runtime' in params) params.max_runtime = watchdogHours;
+
+  if (scenario.key === 'solar_surplus_switch' || scenario.key === 'solar_surplus_heat_boost') {
+    const on = trigger('on') || trigger('boost');
+    const off = trigger('off') || trigger('normal');
+    const below = Number(on?.below);
+    const onMinutes = Number(on?.for?.minutes);
+    const offMinutes = Number(off?.for?.minutes);
+    if (Number.isFinite(below)) params.device_power = Math.abs(below);
+    if (Number.isFinite(onMinutes)) params.on_delay = onMinutes;
+    if (Number.isFinite(offMinutes)) params.off_delay = offMinutes;
+  }
+
+  const temperatures = numericActions
+    .map(item => Number(item.data?.temperature))
+    .filter(Number.isFinite);
+  if (scenario.key === 'precharge_climate_before_peak' && temperatures.length >= 2) {
+    params.comfort = temperatures[0];
+    params.eco = temperatures[1];
+  }
+  if (scenario.key === 'solar_surplus_heat_boost' && temperatures.length >= 2) {
+    params.boost = temperatures[0];
+    params.normal = temperatures[1];
+  }
+  if (scenario.key === 'ev_charge_cheapest_block') {
+    const current = numericActions
+      .map(item => Number(item.data?.value))
+      .find(Number.isFinite);
+    if (current != null) params.current = current;
+  }
+
+  if (scenario.key === 'keep_solar_export_near_zero' || scenario.key === 'avoid_negative_price_solar_export') {
+    const exportTrigger = trigger('export');
+    const importTrigger = trigger('import');
+    const sensorFailure = trigger('sensor_failure');
+    const exportBelow = Number(exportTrigger?.below);
+    const importAbove = Number(importTrigger?.above);
+    const exportMinutes = Number(exportTrigger?.for?.minutes);
+    const sensorMinutes = Number(sensorFailure?.for?.minutes);
+    if (Number.isFinite(exportBelow)) params.export_threshold = Math.abs(exportBelow);
+    if (Number.isFinite(importAbove)) params.import_threshold = importAbove;
+    if (Number.isFinite(exportMinutes)) params.export_delay = exportMinutes;
+    if (Number.isFinite(sensorMinutes)) params.sensor_timeout = sensorMinutes;
+    const probe = items.find(item => Number.isFinite(Number(item.delay?.seconds)));
+    if (probe) params.probe_seconds = Number(probe.delay.seconds);
+  }
+
+  if (scenario.key === 'avoid_negative_price_solar_export') {
+    const source = JSON.stringify(config);
+    const threshold = source.match(/float\(0\)\) < (-?\d+(?:\.\d+)?)/)?.[1];
+    if (threshold != null) params.feed_in_threshold = Number(threshold);
+  }
+  return params;
+}
+
+function combinedAutomation(configs: Record<string, any>[]): Record<string, any> {
+  const first = configs[0];
+  const trigger = new Map<string, unknown>();
+  for (const config of configs) {
+    for (const item of config.trigger || []) trigger.set(JSON.stringify(item), item);
+  }
+  return {
+    ...first,
+    trigger: [...trigger.values()],
+    condition: first.condition || [],
+    action: configs.flatMap(config => config.action || []),
+  };
+}
+
 export class EnergyAutomations extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceId = '';
@@ -537,6 +684,11 @@ export class EnergyAutomations extends LitElement {
   @property({ attribute: false }) public deviceEntities: DeviceEntity[] = [];
   @property({ attribute: false }) public scenarioKeys?: string[];
   @property({ type: Boolean }) public showHeader = true;
+  @property({ type: Boolean }) public dialogOnly = false;
+  @property() public autoEditScenario = '';
+  @property() public autoEditId = '';
+  @property() public autoEditEntityId = '';
+  @property({ type: Boolean }) public autoEditEnabled = true;
 
   @state() private _priceEntities: Record<string, string | null> = {};
   @state() private _contractActive = false;
@@ -544,10 +696,15 @@ export class EnergyAutomations extends LitElement {
   @state() private _loaded = false;
   @state() private _created: Record<string, string> = {};
   @state() private _modal: EnergyScenario | null = null;
-  @state() private _target = '';
+  @state() private _targets: string[] = [''];
   @state() private _params: Record<string, number> = {};
   @state() private _busy = false;
+  @state() private _modalLoading = false;
   @state() private _error = '';
+  @state() private _editId = '';
+  @state() private _editEntityId = '';
+  @state() private _editEnabled = true;
+  private _autoEditOpened = false;
 
   static styles = css`
     :host { display: block; --shs-primary: #4361ee; }
@@ -570,11 +727,12 @@ export class EnergyAutomations extends LitElement {
     .create-btn:disabled { opacity: 0.5; cursor: default; }
     .create-btn ha-icon { --mdc-icon-size: 15px; }
     .created { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #22c55e; }
-    .created a { color: var(--shs-primary); text-decoration: none; }
+    .created button { border: 0; padding: 0; background: none; color: var(--shs-primary); font: inherit; cursor: pointer; }
+    .created.disabled { color: var(--secondary-text-color); }
     .warn { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3); color: var(--primary-text-color); border-radius: 10px; padding: 12px 14px; margin: 8px 0; font-size: 13px; }
 
     .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 999; padding: 20px; }
-    .modal { width: 100%; max-width: 460px; max-height: 90vh; overflow-y: auto; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+    .modal { width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
     .modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px; border-bottom: 1px solid var(--divider-color); position: sticky; top: 0; background: var(--card-background-color); }
     .modal-title { font-size: 16px; font-weight: 700; color: var(--primary-text-color); }
     .modal-sub { font-size: 12.5px; color: var(--secondary-text-color); margin-top: 1px; }
@@ -586,19 +744,54 @@ export class EnergyAutomations extends LitElement {
     label.f { display: block; font-size: 12px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .4px; margin: 0 0 6px; }
     .field { margin-bottom: 14px; }
     .field .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
-    select, input[type="number"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    ha-entity-picker { display: block; width: 100%; --mdc-theme-primary: var(--shs-primary); }
+    input[type="number"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    .target-list { display: grid; gap: 8px; }
+    .target-row { display: grid; grid-template-columns: minmax(0, 1fr) 36px; align-items: center; gap: 8px; }
+    .remove-target { width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--divider-color); border-radius: 8px; background: transparent; color: var(--secondary-text-color); cursor: pointer; }
+    .remove-target:hover { color: var(--error-color, #dc2626); border-color: currentColor; }
+    .remove-target ha-icon { --mdc-icon-size: 18px; }
+    .add-target { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 7px 0 0; background: none; color: var(--shs-primary); font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; }
+    .add-target ha-icon { --mdc-icon-size: 16px; }
     .row { display: flex; align-items: center; gap: 8px; }
     .row input { max-width: 130px; text-align: right; }
     .row .unit { font-size: 12px; color: var(--secondary-text-color); }
-    select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
-    .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--divider-color); position: sticky; bottom: 0; background: var(--card-background-color); }
+    input:focus { outline: none; border-color: var(--shs-primary); }
+    .modal-loading { min-height: 180px; display: grid; place-items: center; color: var(--secondary-text-color); font-size: 13px; }
+    .modal-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--divider-color); position: sticky; bottom: 0; background: var(--card-background-color); }
     .btn-ghost { padding: 9px 16px; border: 1px solid var(--divider-color); border-radius: 8px; background: transparent; color: var(--primary-text-color); font-size: 13px; font-weight: 500; font-family: inherit; cursor: pointer; }
+    .btn-toggle { margin-right: auto; color: var(--error-color, #dc2626); }
+    .btn-toggle.enable { color: #16a34a; }
+    button:disabled { opacity: .5; cursor: default; }
     .modal-foot .create-btn { margin-left: 0; }
+    @media (max-width: 560px) {
+      .modal-backdrop { align-items: flex-end; padding: 0; }
+      .modal { max-height: 94vh; border-radius: 16px 16px 0 0; border-bottom: 0; }
+      .modal-foot { flex-wrap: wrap; }
+      .btn-toggle { width: 100%; margin: 0 0 2px; }
+    }
   `;
 
   connectedCallback(): void {
     super.connectedCallback();
     this._load();
+  }
+
+  protected updated(): void {
+    if (
+      !this._loaded
+      || !this.autoEditScenario
+      || !this.autoEditId
+      || this._autoEditOpened
+    ) return;
+    const scenario = SCENARIOS.find(item => item.key === this.autoEditScenario);
+    if (!scenario) return;
+    this._autoEditOpened = true;
+    void this._openEditModal(scenario, {
+      id: this.autoEditId,
+      entityId: this.autoEditEntityId || undefined,
+      enabled: this.autoEditEnabled,
+    });
   }
 
   private async _load(): Promise<void> {
@@ -649,43 +842,102 @@ export class EnergyAutomations extends LitElement {
     return '';
   }
 
-  private _targetOptions(domains: Domain[]): Array<{ value: string; label: string }> {
-    const out = [{ value: '', label: 'Select a device...' }];
-    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
-      if (!domains.includes(dom(entityId) as Domain)) continue;
-      out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
-    }
-    return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
-  }
-
-  private _createdId(s: EnergyScenario): string | undefined {
-    if (this._created[s.key]) return this._created[s.key];
+  private _automationRef(s: EnergyScenario): AutomationRef | undefined {
+    const locallyCreatedId = this._created[s.key];
     // These automations trigger on the price device, not this device, so
     // search/related can't see them - scan all automations by alias stem.
     const prefix = `${this.deviceName || 'the device'} - `;
     for (const [entityId, st] of Object.entries(this.hass.states || {})) {
       if (!entityId.startsWith('automation.')) continue;
       const name = st.attributes?.friendly_name as string | undefined;
-      if (name && name.startsWith(prefix) && name.includes(s.aliasStem)) {
-        return (st.attributes?.id as string | undefined) || 'existing';
+      const id = st.attributes?.id as string | undefined;
+      if (
+        (locallyCreatedId && id === locallyCreatedId)
+        || (name && name.startsWith(prefix) && name.includes(s.aliasStem))
+      ) {
+        if (!id) return undefined;
+        return { id, entityId, enabled: st.state !== 'off' };
       }
     }
-    return undefined;
+    return locallyCreatedId ? { id: locallyCreatedId, enabled: true } : undefined;
   }
 
   private _openModal(s: EnergyScenario): void {
     if (this._missingRequirement(s)) return;
     this._error = '';
     this._modal = s;
-    this._target = '';
-    const p: Record<string, number> = {};
-    for (const param of s.params) p[param.key] = param.default;
-    this._params = p;
+    this._targets = [''];
+    this._params = Object.fromEntries(s.params.map(param => [param.key, param.default]));
+    this._editId = '';
+    this._editEntityId = '';
+    this._editEnabled = true;
   }
 
-  private _closeModal(): void { this._modal = null; }
+  private async _openEditModal(s: EnergyScenario, automation: AutomationRef): Promise<void> {
+    this._openModal(s);
+    this._editId = automation.id;
+    this._editEntityId = automation.entityId || '';
+    this._editEnabled = automation.enabled;
+    this._modalLoading = true;
+    try {
+      const config = await this.hass.callApi<Record<string, any>>(
+        'GET',
+        `config/automation/config/${automation.id}`,
+      );
+      const targets = automationTargets(config, s.targetDomains);
+      this._targets = targets.length ? targets : [''];
+      this._params = existingParams(s, config);
+      if (!targets.length) {
+        this._error = 'The existing automation has no supported target entities. Select one before saving.';
+      }
+    } catch (err: any) {
+      console.error('energy-automations: edit load failed', err);
+      this._error = `Could not load the existing automation. ${err?.message || ''}`;
+    }
+    this._modalLoading = false;
+  }
 
-  private _sanitized(s: EnergyScenario): { params: Record<string, number>; min: number } {
+  private _closeModal(): void {
+    if (this._busy) return;
+    this._modal = null;
+    this._modalLoading = false;
+    if (this.dialogOnly) {
+      this.dispatchEvent(new CustomEvent('shs-dialog-closed', {
+        bubbles: true,
+        composed: true,
+      }));
+    }
+  }
+
+  private _setTarget(index: number, value: string): void {
+    const targets = [...this._targets];
+    targets[index] = value;
+    this._targets = targets;
+  }
+
+  private _addTarget(): void {
+    this._targets = [...this._targets, ''];
+  }
+
+  private _removeTarget(index: number): void {
+    if (this._targets.length === 1) {
+      this._targets = [''];
+      return;
+    }
+    this._targets = this._targets.filter((_, targetIndex) => targetIndex !== index);
+  }
+
+  private _entityAllowed(
+    entity: string | { entity_id?: string },
+    scenario: EnergyScenario,
+    rowIndex: number,
+  ): boolean {
+    const entityId = typeof entity === 'string' ? entity : entity.entity_id || '';
+    if (!scenario.targetDomains.includes(dom(entityId) as Domain)) return false;
+    return !this._targets.some((target, index) => index !== rowIndex && target === entityId);
+  }
+
+  private _sanitized(s: EnergyScenario, target: string): { params: Record<string, number>; min: number } {
     const params: Record<string, number> = {};
     for (const param of s.params) {
       let v = this._params[param.key];
@@ -696,8 +948,8 @@ export class EnergyAutomations extends LitElement {
       params[param.key] = v;
     }
     let min = 0;
-    const st = this.hass.states[this._target];
-    if (st && dom(this._target) === 'number') {
+    const st = this.hass.states[target];
+    if (st && dom(target) === 'number') {
       const entityMin = Number(st.attributes?.min);
       const entityMax = Number(st.attributes?.max);
       const entityStep = Number(st.attributes?.step);
@@ -717,37 +969,70 @@ export class EnergyAutomations extends LitElement {
     return { params, min };
   }
 
-  private async _create(): Promise<void> {
+  private async _save(): Promise<void> {
     const s = this._modal;
-    if (!s || !this._target || this._busy) return;
+    const targets = [...new Set(this._targets.filter(Boolean))];
+    if (!s || !targets.length || this._busy || this._modalLoading) return;
     if (!this.hass.user?.is_admin) { this._error = 'Administrator required.'; return; }
     this._busy = true;
     this._error = '';
+    let saved = false;
     try {
-      const { params, min } = this._sanitized(s);
-      const config = s.build({
-        target: this._target, p: params, px: this._priceEntities,
-        net: this._netEntity(), min, deviceName: this.deviceName || 'the device',
-        sources: await this._freshSources(),
+      const sources = await this._freshSources();
+      const configs = targets.map(target => {
+        const { params, min } = this._sanitized(s, target);
+        return s.build({
+          target, p: params, px: this._priceEntities,
+          net: this._netEntity(), min, deviceName: this.deviceName || 'the device',
+          sources,
+        });
       });
+      const config = combinedAutomation(configs);
+      config.variables = {
+        ...(config.variables || {}),
+        shs_managed_settings: JSON.stringify({
+          version: 1,
+          scenario: s.key,
+          targets,
+          params: this._params,
+        } satisfies ManagedSettings),
+      };
       if (JSON.stringify(config).includes('"entity_id":null')) {
         this._error = 'The energy price sensors are not ready yet. Try again in a moment.';
         this._busy = false;
         return;
       }
-      const id = `shs_${this.deviceId.slice(0, 6)}_${s.key}_${Date.now()}`;
+      const id = this._editId || `shs_${this.deviceId.slice(0, 6)}_${s.key}_${Date.now()}`;
       await this.hass.callApi('POST', `config/automation/config/${id}`, config);
       this._created = { ...this._created, [s.key]: id };
-      this._closeModal();
+      saved = true;
     } catch (err: any) {
-      console.error('energy-automations: create failed', err);
-      this._error = `Could not create it. ${err?.message || ''}`;
+      console.error('energy-automations: save failed', err);
+      this._error = `Could not save the automation. ${err?.message || ''}`;
+    }
+    this._busy = false;
+    if (saved) this._closeModal();
+  }
+
+  private async _toggleAutomation(): Promise<void> {
+    if (!this._editEntityId || this._busy) return;
+    this._busy = true;
+    this._error = '';
+    try {
+      const turnOn = !this._editEnabled;
+      await this.hass.callService('automation', turnOn ? 'turn_on' : 'turn_off', {
+        entity_id: this._editEntityId,
+      });
+      this._editEnabled = turnOn;
+    } catch (err: any) {
+      console.error('energy-automations: toggle failed', err);
+      this._error = `Could not ${this._editEnabled ? 'disable' : 'enable'} the automation. ${err?.message || ''}`;
     }
     this._busy = false;
   }
 
   private _renderCard(s: EnergyScenario) {
-    const createdId = this._createdId(s);
+    const automation = this._automationRef(s);
     const isAdmin = !!this.hass.user?.is_admin;
     const missingRequirement = this._missingRequirement(s);
     return html`
@@ -761,8 +1046,12 @@ export class EnergyAutomations extends LitElement {
           </div>
         </div>
         <div class="card-foot">
-          ${createdId ? html`
-            <span class="created"><ha-icon icon="mdi:check-circle" style="--mdc-icon-size:15px;"></ha-icon> Created${createdId !== 'existing' ? html` · <a href="/config/automation/edit/${createdId}">Edit</a>` : nothing}</span>
+          ${automation ? html`
+            <span class=${`created${automation.enabled ? '' : ' disabled'}`}>
+              <ha-icon icon=${automation.enabled ? 'mdi:check-circle' : 'mdi:pause-circle'} style="--mdc-icon-size:15px;"></ha-icon>
+              ${automation.enabled ? 'Created' : 'Disabled'} ·
+              <button @click=${() => this._openEditModal(s, automation)}>Edit</button>
+            </span>
           ` : html`
             <button class="create-btn" ?disabled=${!isAdmin || !!missingRequirement}
               title=${missingRequirement || nothing}
@@ -775,7 +1064,8 @@ export class EnergyAutomations extends LitElement {
   private _renderModal() {
     const s = this._modal;
     if (!s) return nothing;
-    const opts = this._targetOptions(s.targetDomains);
+    const selectedTargets = this._targets.filter(Boolean);
+    const editing = !!this._editId;
     return html`
       <div class="modal-backdrop" @click=${this._closeModal}>
         <div class="modal" @click=${(e: Event) => e.stopPropagation()}>
@@ -783,22 +1073,49 @@ export class EnergyAutomations extends LitElement {
             <div class="card-icon" style="background: ${s.color}1f; color: ${s.color};"><ha-icon icon=${s.icon}></ha-icon></div>
             <div>
               <div class="modal-title">${s.title}</div>
-              <div class="modal-sub">${this.deviceName}</div>
+              <div class="modal-sub">${editing ? 'Edit existing automation' : this.deviceName}</div>
             </div>
-            <button class="modal-x" @click=${this._closeModal}><ha-icon icon="mdi:close"></ha-icon></button>
+            <button class="modal-x" ?disabled=${this._busy} @click=${this._closeModal}><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
-          <div class="modal-body">
+          ${this._modalLoading ? html`
+            <div class="modal-loading">
+              <div>Loading automation settings...</div>
+            </div>
+          ` : html`<div class="modal-body">
             <p class="modal-desc">${s.desc}</p>
             ${s.note ? html`<div class="note"><ha-icon icon="mdi:information-outline" style="--mdc-icon-size:14px;"></ha-icon> ${s.note}</div>` : nothing}
 
             <div class="field">
-              <label class="f">${s.targetLabel}</label>
-              <select @change=${(e: Event) => { this._target = (e.target as HTMLSelectElement).value; }}>
-                ${opts.map(o => html`<option value=${o.value} ?selected=${o.value === this._target}>${o.label}</option>`)}
-              </select>
+              <label class="f">${s.targetLabel}${this._targets.length > 1 ? 's' : ''}</label>
+              <div class="target-list">
+                ${this._targets.map((target, index) => html`
+                  <div class="target-row">
+                    <ha-entity-picker
+                      .hass=${this.hass}
+                      .value=${target}
+                      .includeDomains=${s.targetDomains}
+                      .entityFilter=${(entity: string | { entity_id?: string }) => this._entityAllowed(entity, s, index)}
+                      .allowCustomEntity=${false}
+                      @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+                        this._setTarget(index, event.detail?.value || '')}
+                    ></ha-entity-picker>
+                    <button class="remove-target" title="Remove entity" @click=${() => this._removeTarget(index)}>
+                      <ha-icon icon="mdi:close"></ha-icon>
+                    </button>
+                  </div>
+                `)}
+              </div>
+              <button class="add-target" @click=${this._addTarget}>
+                <ha-icon icon="mdi:plus"></ha-icon> Add another entity
+              </button>
+              <div class="help">All selected entities are controlled together by this automation.</div>
             </div>
 
-            ${s.params.filter(param => !param.domains || !this._target || param.domains.includes(dom(this._target) as Domain)).map(param => html`
+            ${s.params.filter(param =>
+              !param.domains
+              || !selectedTargets.length
+              || selectedTargets.some(target => param.domains!.includes(dom(target) as Domain))
+            ).map(param => html`
               <div class="field">
                 <label class="f">${param.label}</label>
                 <div class="row">
@@ -812,11 +1129,21 @@ export class EnergyAutomations extends LitElement {
             `)}
 
             ${this._error ? html`<div class="warn">${this._error}</div>` : nothing}
-          </div>
+          </div>`}
           <div class="modal-foot">
-            <button class="btn-ghost" @click=${this._closeModal}>Cancel</button>
-            <button class="create-btn" ?disabled=${!this._target || this._busy} @click=${this._create}>
-              <ha-icon icon="mdi:plus"></ha-icon> ${this._busy ? 'Creating...' : 'Create automation'}
+            ${editing && this._editEntityId ? html`
+              <button
+                class=${`btn-ghost btn-toggle${this._editEnabled ? '' : ' enable'}`}
+                ?disabled=${this._busy || this._modalLoading}
+                @click=${this._toggleAutomation}
+              >
+                ${this._editEnabled ? 'Disable automation' : 'Enable automation'}
+              </button>
+            ` : nothing}
+            <button class="btn-ghost" ?disabled=${this._busy} @click=${this._closeModal}>Cancel</button>
+            <button class="create-btn" ?disabled=${!selectedTargets.length || this._busy || this._modalLoading} @click=${this._save}>
+              <ha-icon icon=${editing ? 'mdi:content-save-outline' : 'mdi:plus'}></ha-icon>
+              ${this._busy ? 'Saving...' : editing ? 'Save changes' : 'Create automation'}
             </button>
           </div>
         </div>
@@ -829,6 +1156,8 @@ export class EnergyAutomations extends LitElement {
     const scenarios = this.scenarioKeys?.length
       ? SCENARIOS.filter(scenario => this.scenarioKeys!.includes(scenario.key))
       : SCENARIOS;
+
+    if (this.dialogOnly) return this._renderModal();
 
     return html`
       ${this.showHeader ? html`
@@ -851,4 +1180,8 @@ declare global {
   interface HTMLElementTagNameMap {
     'shs-energy-automations': EnergyAutomations;
   }
+}
+
+if (!customElements.get('shs-energy-automations')) {
+  customElements.define('shs-energy-automations', EnergyAutomations);
 }

@@ -2,6 +2,7 @@ import { LitElement, html, svg, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { DeviceEntity, HomeAssistant } from '../types';
 import '../components/account-prices';
+import '../components/ha-energy-sync';
 import './energy-sources';
 import './energy-battery';
 import './energy-automations';
@@ -61,6 +62,9 @@ interface CheapestBlock {
 interface HistoryPoint {
   t: number;
   v: number;
+  min?: number;
+  max?: number;
+  end?: number;
 }
 
 interface PowerSeries {
@@ -70,6 +74,28 @@ interface PowerSeries {
   points: HistoryPoint[];
   dash?: string;
 }
+
+interface StatisticValue {
+  start: number;
+  end: number;
+  mean: number;
+  min: number;
+  max: number;
+}
+
+interface CardHelpers {
+  createCardElement(config: Record<string, unknown>): HTMLElement;
+}
+
+declare global {
+  interface Window {
+    loadCardHelpers?: () => Promise<CardHelpers>;
+    __shsStatisticsChartReady?: Promise<boolean>;
+  }
+}
+
+type EnergySettingsTab = 'connection' | 'sources' | 'ha-energy' | 'automations' | 'battery';
+type EnergySettingsFocus = 'account' | 'sources' | 'ha-energy' | 'solar-control' | 'battery' | '';
 
 @customElement('shs-energy-hub')
 export class EnergyHub extends LitElement {
@@ -94,8 +120,9 @@ export class EnergyHub extends LitElement {
   @state() private _powerChartWidth = 760;
   @state() private _hoverPowerTime?: number;
   @state() private _hiddenPowerSeries: string[] = [];
+  @state() private _statisticsChartReady = false;
   @state() private _settingsOpen = false;
-  @state() private _settingsFocus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = '';
+  @state() private _settingsTab: EnergySettingsTab = 'connection';
   @state() private _savings: Record<string, number> = {};
   @state() private _wizardDone = false;
   @state() private _wizardKeyInput = '';
@@ -112,8 +139,6 @@ export class EnergyHub extends LitElement {
   private static readonly HISTORY_LOAD_TIMEOUT = 25000;
   private _loadStarted = false;
   private _loading?: Promise<void>;
-  private _anchorObserver?: ResizeObserver;
-  private _backdropArmed = false;
   private _accountLoading?: Promise<void>;
   private _historyLoading?: Promise<void>;
   private _timer?: number;
@@ -180,18 +205,89 @@ export class EnergyHub extends LitElement {
     .settings-btn:hover { border-color: var(--shs-blue); color: var(--shs-blue); }
     .settings-btn ha-icon { --mdc-icon-size: 17px; }
 
-    /* Energy settings dialog: one place for account, sources and battery.
-       z-index stays below the sub-components' own modals (999) so their
-       pickers layer on top of this dialog. */
-    .dlg-backdrop { position: fixed; inset: 0; background: rgba(15, 18, 32, .55); z-index: 940; display: flex; align-items: flex-start; justify-content: center; padding: 4vh 16px; overscroll-behavior: contain; }
-    .dlg { width: 100%; max-width: 700px; max-height: 92vh; overflow-y: auto; overscroll-behavior: contain; outline: none; background: var(--primary-background-color); border: 1px solid var(--divider-color); border-radius: 18px; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
-    .dlg-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 16px 20px; background: var(--primary-background-color); border-bottom: 1px solid var(--divider-color); }
-    .dlg-title { font-size: 16px; font-weight: 700; color: var(--primary-text-color); }
-    .dlg-sub { font-size: 12px; color: var(--secondary-text-color); margin-top: 1px; }
-    .dlg-x { margin-left: auto; background: none; border: none; color: var(--secondary-text-color); cursor: pointer; padding: 6px; display: flex; border-radius: 8px; }
-    .dlg-x:hover { background: var(--secondary-background-color); color: var(--primary-text-color); }
-    .dlg-body { padding: 6px 20px 24px; }
-    .dlg-sec { scroll-margin-top: 92px; border-radius: 14px; }
+    /* Energy settings is a full page: these controls are too important and
+       extensive for a long, nested modal. */
+    .settings-page { width: 100%; max-width: 960px; margin: 0 auto; }
+    .settings-page-head { margin-bottom: 20px; }
+    .settings-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 36px;
+      margin: 0 0 16px -8px;
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--secondary-text-color);
+      font: 600 13px/1 inherit;
+      cursor: pointer;
+    }
+    .settings-back:hover { color: var(--shs-blue); background: var(--shs-blue-soft); }
+    .settings-back:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: 2px; }
+    .settings-back ha-icon { --mdc-icon-size: 18px; }
+    .settings-tabs-shell {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      margin-bottom: 24px;
+      padding-top: 4px;
+      background: var(--primary-background-color);
+    }
+    .settings-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      border: 1px solid var(--shs-border);
+      border-radius: 12px;
+      background: var(--card-background-color);
+    }
+    .settings-tabs::-webkit-scrollbar { display: none; }
+    .settings-tab {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      flex: 1 0 auto;
+      min-width: 130px;
+      min-height: 44px;
+      padding: 9px 14px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--secondary-text-color);
+      font: 650 13px/1 inherit;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .settings-tab:hover { color: var(--primary-text-color); background: var(--secondary-background-color); }
+    .settings-tab.active { color: var(--shs-blue); background: var(--shs-blue-soft); }
+    .settings-tab:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: -2px; }
+    .settings-tab ha-icon { --mdc-icon-size: 18px; }
+    .settings-panel { min-height: 360px; outline: none; }
+    .settings-panel > * + * { margin-top: 18px; }
+    .settings-intro {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .settings-intro-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 10px;
+      color: var(--shs-blue);
+      background: var(--shs-blue-soft);
+    }
+    .settings-intro-icon ha-icon { --mdc-icon-size: 21px; }
+    .settings-intro-title { font-size: 16px; font-weight: 720; color: var(--primary-text-color); }
+    .settings-intro-text { margin-top: 3px; font-size: 12.5px; line-height: 1.5; color: var(--secondary-text-color); }
     .alpha-notice {
       display: flex;
       align-items: flex-start;
@@ -229,12 +325,6 @@ export class EnergyHub extends LitElement {
     .alpha-link:hover { text-decoration: underline; }
     .alpha-link:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: 3px; border-radius: 3px; }
     .alpha-link ha-icon { --mdc-icon-size: 16px; }
-    .dlg-sec.focus { animation: sec-focus 1.6s ease-out 1; }
-    @keyframes sec-focus {
-      0% { box-shadow: 0 0 0 2px var(--shs-blue, #4361ee); }
-      100% { box-shadow: 0 0 0 2px transparent; }
-    }
-    @media (prefers-reduced-motion: reduce) { .dlg-sec.focus { animation: none; } }
     .p1-card { border: 1px solid var(--divider-color); border-radius: 14px; padding: 14px 16px; background: var(--card-background-color); }
     .p1-head { display: flex; align-items: flex-start; gap: 10px; }
     .p1-head ha-icon { color: var(--shs-primary); --mdc-icon-size: 20px; margin-top: 1px; }
@@ -469,6 +559,27 @@ export class EnergyHub extends LitElement {
     .power-legend-toggle.off i { background: transparent !important; box-shadow: inset 0 0 0 1.5px currentColor; }
     .chart svg { width: 100%; height: 225px; display: block; overflow: visible; }
     .power-surface .chart svg { height: auto; }
+    .power-native-chart {
+      padding: 18px 18px 10px;
+    }
+    .power-native-label {
+      margin: 0 2px 4px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .power-native-chart statistics-chart {
+      display: block;
+      width: 100%;
+      height: clamp(250px, 29vw, 330px);
+      --chart-max-height: 330px;
+    }
+    .power-native-loading {
+      min-height: 270px;
+      display: grid;
+      place-items: center;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+    }
     .chart text { fill: var(--secondary-text-color); font-size: 10px; }
     .chart .grid, .chart .axis { stroke: var(--shs-border); stroke-width: 1; }
     .chart .grid { opacity: .7; }
@@ -627,6 +738,9 @@ export class EnergyHub extends LitElement {
       .smart-item { border-right: 0; border-bottom: 1px solid var(--shs-border); }
       .smart-item:last-child { border-bottom: 0; }
       .alpha-notice { padding: 13px 14px; }
+      .settings-tabs-shell { margin-inline: -4px; }
+      .settings-tab { min-width: 118px; }
+      .settings-page-head { margin-bottom: 16px; }
     }
   `;
 
@@ -644,10 +758,6 @@ export class EnergyHub extends LitElement {
     this._powerChartObserver?.disconnect();
     this._powerChartObserver = undefined;
     this._powerChartElement = undefined;
-    this._anchorObserver?.disconnect();
-    this._anchorObserver = undefined;
-    // Never leave the page scroller frozen if we unmount with the dialog open.
-    this._lockPageScroll(false);
     super.disconnectedCallback();
   }
 
@@ -864,18 +974,33 @@ export class EnergyHub extends LitElement {
 
     try {
       const start = new Date(this._todayStart()).toISOString();
-      const result = await this._callWS<Record<string, any[]>>(
-        {
-          type: 'history/history_during_period',
-          start_time: start,
-          entity_ids: ids,
-          minimal_response: true,
-          no_attributes: true,
-          significant_changes_only: true,
-        },
-        EnergyHub.HISTORY_LOAD_TIMEOUT,
-      );
+      const [statisticsResult, historyResult, chartReady] = await Promise.all([
+        this._callWS<Record<string, any[]>>(
+          {
+            type: 'recorder/statistics_during_period',
+            start_time: start,
+            end_time: new Date().toISOString(),
+            statistic_ids: ids,
+            period: '5minute',
+            types: ['mean', 'min', 'max'],
+          },
+          EnergyHub.HISTORY_LOAD_TIMEOUT,
+        ).catch(() => ({} as Record<string, any[]>)),
+        this._callWS<Record<string, any[]>>(
+          {
+            type: 'history/history_during_period',
+            start_time: start,
+            entity_ids: ids,
+            minimal_response: true,
+            no_attributes: true,
+            significant_changes_only: true,
+          },
+          EnergyHub.HISTORY_LOAD_TIMEOUT,
+        ).catch(() => ({} as Record<string, any[]>)),
+        this._ensureStatisticsChart(ids[0]),
+      ]);
       const history: Record<string, HistoryPoint[]> = {};
+      this._statisticsChartReady = chartReady;
 
       for (const id of ids) {
         const invert = id === this._sources.solar_power
@@ -884,14 +1009,33 @@ export class EnergyHub extends LitElement {
             ? !!this._sources.battery_invert
             : false;
         const scale = this._scale(id);
-        const points = (result[id] || []).map((point: any) => {
-          const rawTime = point.lu ?? point.lc ?? point.last_updated ?? point.last_changed;
-          const numericTime = typeof rawTime === 'number'
-            ? (rawTime > 1000000000000 ? rawTime : rawTime * 1000)
-            : Date.parse(String(rawTime));
+        const factor = (invert ? -1 : 1) * scale;
+        const statisticPoints = (statisticsResult[id] || []).map((point: any) => {
+          const rawMinimum = Number(point.min);
+          const rawMaximum = Number(point.max);
           return {
-            t: numericTime,
-            v: (invert ? -1 : 1) * scale * Number(point.s ?? point.state),
+            t: this._normaliseHistoryTime(point.start),
+            end: this._normaliseHistoryTime(point.end),
+            v: factor * Number(point.mean),
+            min: factor < 0 ? factor * rawMaximum : factor * rawMinimum,
+            max: factor < 0 ? factor * rawMinimum : factor * rawMaximum,
+          };
+        }).filter((point: HistoryPoint) =>
+          Number.isFinite(point.v)
+          && Number.isFinite(point.min)
+          && Number.isFinite(point.max)
+          && Number.isFinite(point.t)
+          && point.t > 0);
+        if (statisticPoints.length > 1) {
+          history[id] = statisticPoints;
+          continue;
+        }
+
+        const points = (historyResult[id] || []).map((point: any) => {
+          const rawTime = point.lu ?? point.lc ?? point.last_updated ?? point.last_changed;
+          return {
+            t: this._normaliseHistoryTime(rawTime),
+            v: factor * Number(point.s ?? point.state),
           };
         }).filter((point: HistoryPoint) => Number.isFinite(point.v) && Number.isFinite(point.t) && point.t > 0);
         history[id] = this._downsample(points, 360);
@@ -901,6 +1045,30 @@ export class EnergyHub extends LitElement {
       // Keep the last successful graph on a slow or temporarily unavailable
       // Recorder instead of making the whole section disappear.
     }
+  }
+
+  private _normaliseHistoryTime(value: unknown): number {
+    if (typeof value === 'number') return value > 1000000000000 ? value : value * 1000;
+    return Date.parse(String(value));
+  }
+
+  private async _ensureStatisticsChart(probeEntity?: string): Promise<boolean> {
+    if (customElements.get('statistics-chart')) return true;
+    if (!window.loadCardHelpers) return false;
+    if (!window.__shsStatisticsChartReady) {
+      window.__shsStatisticsChartReady = (async () => {
+        const helpers = await window.loadCardHelpers!();
+        helpers.createCardElement({
+          type: 'statistics-graph',
+          entities: probeEntity ? [probeEntity] : ['sensor.invalid'],
+        });
+        return Promise.race([
+          customElements.whenDefined('statistics-chart').then(() => true),
+          new Promise<boolean>(resolve => window.setTimeout(() => resolve(false), 8000)),
+        ]);
+      })().catch(() => false);
+    }
+    return window.__shsStatisticsChartReady;
   }
 
   private _downsample(points: HistoryPoint[], maxPoints: number): HistoryPoint[] {
@@ -1454,14 +1622,15 @@ export class EnergyHub extends LitElement {
         {
           key: 'grid-import',
           label: 'Grid import',
-          color: 'var(--shs-grid-import-color, #d34a4a)',
-          points: grid.map(point => ({ t: point.t, v: Math.max(0, point.v) })),
+          color: '#d34a4a',
+          points: grid.map(point => this._mapPowerPoint(point, value => Math.max(0, value))),
         },
         {
           key: 'grid-export',
           label: 'Grid export',
-          color: 'var(--shs-grid-export-color, #159957)',
-          points: grid.map(point => ({ t: point.t, v: Math.max(0, -point.v) })),
+          color: '#159957',
+          points: grid.map(point =>
+            this._mapPowerPoint(point, value => Math.max(0, -value), true)),
           dash: '7 3',
         },
       );
@@ -1478,8 +1647,8 @@ export class EnergyHub extends LitElement {
       series.push({
         key: 'solar',
         label: 'Solar',
-        color: 'var(--shs-solar-color, #d8890b)',
-        points: solarPoints,
+        color: '#d8890b',
+        points: solarPoints.map(point => this._mapPowerPoint(point, value => Math.max(0, value))),
       });
     }
 
@@ -1494,12 +1663,29 @@ export class EnergyHub extends LitElement {
       series.push({
         key: 'battery',
         label: 'Battery',
-        color: 'var(--shs-battery-color, #4361ee)',
+        color: '#4361ee',
         points: batteryPoints,
       });
     }
 
     return series;
+  }
+
+  private _mapPowerPoint(
+    point: HistoryPoint,
+    transform: (value: number) => number,
+    reverseBounds = false,
+  ): HistoryPoint {
+    const rawMinimum = point.min ?? point.v;
+    const rawMaximum = point.max ?? point.v;
+    const minimum = transform(reverseBounds ? rawMaximum : rawMinimum);
+    const maximum = transform(reverseBounds ? rawMinimum : rawMaximum);
+    return {
+      ...point,
+      v: transform(point.v),
+      min: Math.min(minimum, maximum),
+      max: Math.max(minimum, maximum),
+    };
   }
 
   private _historyWithCurrent(
@@ -1513,7 +1699,10 @@ export class EnergyHub extends LitElement {
 
     // Recorder only stores changes. Add the current state at one shared "now"
     // timestamp so stable series still reach the right edge of the chart.
-    return [...points.filter(point => point.t < now), { t: now, v: current }];
+    return [
+      ...points.filter(point => point.t < now),
+      { t: now, end: now, v: current, min: current, max: current },
+    ];
   }
 
   private _togglePowerSeries(key: string): void {
@@ -1529,8 +1718,12 @@ export class EnergyHub extends LitElement {
     const net = this._netEntity();
     const gridHistory = net ? this._history[net] || [] : [];
     const currentGrid = grid ?? 0;
-    const peakImport = gridHistory.length ? Math.max(0, currentGrid, ...gridHistory.map(point => point.v)) : Math.max(0, currentGrid);
-    const peakExport = gridHistory.length ? Math.abs(Math.min(0, currentGrid, ...gridHistory.map(point => point.v))) : Math.abs(Math.min(0, currentGrid));
+    const peakImport = gridHistory.length
+      ? Math.max(0, currentGrid, ...gridHistory.map(point => point.max ?? point.v))
+      : Math.max(0, currentGrid);
+    const peakExport = gridHistory.length
+      ? Math.abs(Math.min(0, currentGrid, ...gridHistory.map(point => point.min ?? point.v)))
+      : Math.abs(Math.min(0, currentGrid));
     const gridLabel = grid === null ? 'Grid now' : grid < 0 ? 'Export now' : 'Import now';
 
     return html`
@@ -1544,7 +1737,26 @@ export class EnergyHub extends LitElement {
             ${this._powerStat('Peak import', this._formatPower(peakImport))}
             ${this._powerStat('Peak export', this._formatPower(peakExport))}
           </div>
-          ${this._powerChart(series)}
+          <div class="power-native-chart">
+            <div class="power-native-label">Power (W) · 5-minute mean with min/max range</div>
+            ${this._statisticsChartReady ? html`
+              <statistics-chart
+                .hass=${this.hass}
+                .statisticsData=${this._powerStatistics(series)}
+                .metadata=${this._powerMetadata(series)}
+                .names=${this._powerNames(series)}
+                .colors=${this._powerColors(series)}
+                .statTypes=${['mean', 'min', 'max']}
+                .chartType=${'line'}
+                .period=${'5minute'}
+                .startTime=${new Date(this._todayStart())}
+                .endTime=${new Date()}
+                .unit=${'W'}
+                .height=${'100%'}
+                .clickForMoreInfo=${false}
+              ></statistics-chart>
+            ` : html`<div class="power-native-loading">Loading Home Assistant chart…</div>`}
+          </div>
         </div>
       </section>
     `;
@@ -1552,6 +1764,45 @@ export class EnergyHub extends LitElement {
 
   private _powerStat(label: string, value: { value: string; unit: string }) {
     return html`<div class="power-stat"><div class="power-stat-label">${label}</div><div class="power-stat-value">${value.value} ${value.unit}</div></div>`;
+  }
+
+  private _powerStatistics(series: PowerSeries[]): Record<string, StatisticValue[]> {
+    const now = Date.now();
+    return Object.fromEntries(series.map(item => [
+      `shs:${item.key}`,
+      item.points.map((point, index) => ({
+        start: point.t,
+        end: point.end
+          || item.points[index + 1]?.t
+          || Math.min(now, point.t + 5 * 60 * 1000),
+        mean: point.v,
+        min: point.min ?? point.v,
+        max: point.max ?? point.v,
+      })),
+    ]));
+  }
+
+  private _powerMetadata(series: PowerSeries[]) {
+    return Object.fromEntries(series.map(item => [
+      `shs:${item.key}`,
+      {
+        statistic_id: `shs:${item.key}`,
+        source: 'smarthomeshop',
+        name: item.label,
+        statistics_unit_of_measurement: 'W',
+        unit_class: 'power',
+        has_sum: false,
+        mean_type: 1,
+      },
+    ]));
+  }
+
+  private _powerNames(series: PowerSeries[]): Record<string, string> {
+    return Object.fromEntries(series.map(item => [`shs:${item.key}`, item.label]));
+  }
+
+  private _powerColors(series: PowerSeries[]): Record<string, string> {
+    return Object.fromEntries(series.map(item => [`shs:${item.key}`, item.color]));
   }
 
   private _nicePowerStep(span: number, targetIntervals: number): number {
@@ -1885,6 +2136,10 @@ export class EnergyHub extends LitElement {
       return html`<div class="loading"><div><div class="loading-ring"></div>Loading energy data</div></div>`;
     }
 
+    if (this._settingsOpen) {
+      return this._renderSettingsPage();
+    }
+
     const net = this._netEntity();
     const grid = this._num(net);
     const solar = this._sources.solar_power
@@ -1949,7 +2204,6 @@ export class EnergyHub extends LitElement {
       ${this._renderPowerSection(grid)}
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
       ${this._renderCompareNudge(priceOk)}
-      ${this._renderSettingsDialog()}
     `;
   }
 
@@ -2151,201 +2405,293 @@ export class EnergyHub extends LitElement {
     `;
   }
 
-  public openSettings(focus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = ''): void {
+  public openSettings(focus: EnergySettingsFocus = ''): void {
     this._openSettings(focus);
   }
 
-  private _openSettings(focus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = ''): void {
-    this._settingsFocus = focus;
+  private _settingsTabForFocus(focus: EnergySettingsFocus): EnergySettingsTab {
+    if (focus === 'sources') return 'sources';
+    if (focus === 'ha-energy') return 'ha-energy';
+    if (focus === 'solar-control') return 'automations';
+    if (focus === 'battery') return 'battery';
+    return 'connection';
+  }
+
+  private _openSettings(focus: EnergySettingsFocus = ''): void {
+    this._settingsTab = this._settingsTabForFocus(focus);
     this._settingsOpen = true;
-    this._lockPageScroll(true);
+    this._scrollSettingsTop();
+  }
+
+  private _setSettingsTab(tab: EnergySettingsTab): void {
+    if (this._settingsTab === tab) return;
+    this._settingsTab = tab;
+    this._scrollSettingsTop();
+  }
+
+  private _onSettingsTabKeydown(event: KeyboardEvent, current: EnergySettingsTab): void {
+    const tabs: EnergySettingsTab[] = ['connection', 'sources', 'ha-energy', 'automations', 'battery'];
+    const index = tabs.indexOf(current);
+    let next: EnergySettingsTab | undefined;
+    if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+    if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
+    if (event.key === 'Home') next = tabs[0];
+    if (event.key === 'End') next = tabs[tabs.length - 1];
+    if (!next) return;
+
+    event.preventDefault();
+    this._settingsTab = next;
     this.updateComplete.then(() => {
-      (this.renderRoot.querySelector('.dlg') as HTMLElement | null)?.focus();
-      if (focus) this._anchorSection(focus);
+      (this.renderRoot.querySelector(`#energy-settings-tab-${next}`) as HTMLElement | null)?.focus();
     });
   }
 
-  // The dialog's cards load their content async and grow while rendering, so
-  // a single scrollIntoView lands on a still-empty section. Re-anchor on every
-  // size change of the dialog body until the layout settles.
-  private _anchorSection(focus: string): void {
-    this._anchorObserver?.disconnect();
-    const scroll = (behavior: ScrollBehavior) =>
-      this.renderRoot.querySelector(`[data-sec="${focus}"]`)?.scrollIntoView({ block: 'start', behavior });
-    scroll('smooth');
-    const body = this.renderRoot.querySelector('.dlg-body');
-    if (!body || typeof ResizeObserver === 'undefined') return;
-    this._anchorObserver = new ResizeObserver(() => scroll('auto'));
-    this._anchorObserver.observe(body);
-    window.setTimeout(() => { this._anchorObserver?.disconnect(); this._anchorObserver = undefined; }, 2500);
+  private _scrollSettingsTop(): void {
+    this.updateComplete.then(() => {
+      this.renderRoot.querySelector('.settings-page')?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth',
+      });
+      (this.renderRoot.querySelector('.settings-panel') as HTMLElement | null)?.focus({
+        preventScroll: true,
+      });
+    });
   }
 
   private _closeSettings(): void {
-    this._anchorObserver?.disconnect();
-    this._anchorObserver = undefined;
     this._settingsOpen = false;
-    this._settingsFocus = '';
-    this._lockPageScroll(false);
-    // Reflect whatever was changed in the dialog on the overview.
+    this.updateComplete.then(() => {
+      this.renderRoot.querySelector('.page-head')?.scrollIntoView({
+        block: 'start',
+        behavior: 'smooth',
+      });
+    });
+    // Reflect whatever was changed in settings on the overview.
     this._load();
   }
 
-  // The page scrolls in the panel's .panel-content container (not the body);
-  // freeze it while the dialog is open so backdrop scrolling cannot move the
-  // overview underneath.
-  private _lockPageScroll(lock: boolean): void {
-    const root = this.getRootNode();
-    const container = root instanceof ShadowRoot
-      ? (root.querySelector('.panel-content') as HTMLElement | null)
-      : null;
-    if (container) container.style.overflow = lock ? 'hidden' : '';
-  }
-
-  private _onDialogKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      this._closeSettings();
-    }
-  }
-
-  private _onBackdropPointerDown(event: PointerEvent): void {
-    // Only arm the backdrop-close when the gesture STARTS on the backdrop, so
-    // releasing a drag from a form field over the backdrop cannot close it.
-    this._backdropArmed = event.target === event.currentTarget;
-  }
-
-  private _onBackdropClick(event: MouseEvent): void {
-    if (this._backdropArmed && event.target === event.currentTarget) this._closeSettings();
-    this._backdropArmed = false;
-  }
-
   private _scrollToAccountSection(): void {
-    this._anchorSection('account');
+    this._setSettingsTab('connection');
   }
 
-  // One dialog for everything you configure on this page: the account and
-  // contract, the solar/battery measurement entities, and home-battery
-  // control. The cards keep their own edit dialogs, which layer on top.
-  private _renderSettingsDialog() {
-    if (!this._settingsOpen) return nothing;
+  private _renderSettingsTab(tab: EnergySettingsTab) {
     const selectedP1 = this._effectiveP1();
-    return html`
-      <div class="dlg-backdrop"
-        @pointerdown=${this._onBackdropPointerDown}
-        @click=${this._onBackdropClick}>
-        <div class="dlg" role="dialog" aria-modal="true" aria-label="Energy settings" tabindex="-1"
-          @keydown=${this._onDialogKeydown}
-          @hass-more-info=${this._closeSettings}
-          @click=${(e: Event) => e.stopPropagation()}>
-          <div class="dlg-head">
+
+    if (tab === 'connection') {
+      return html`
+        <div class="settings-panel" id="energy-settings-connection" role="tabpanel"
+          aria-labelledby="energy-settings-tab-connection" tabindex="-1">
+          <div class="settings-intro">
+            <div class="settings-intro-icon"><ha-icon icon="mdi:cloud-sync-outline"></ha-icon></div>
             <div>
-              <div class="dlg-title">Energy settings</div>
-              <div class="dlg-sub">Account, ${this._p1Devices.length ? 'P1 meter, ' : ''}solar and battery for your whole home - set up once, used everywhere.</div>
+              <div class="settings-intro-title">Connection</div>
+              <div class="settings-intro-text">Connect your SmartHomeShop account, select a contract and choose the P1 meter used across Smart Energy.</div>
             </div>
-            <button class="dlg-x" title="Close" @click=${this._closeSettings}><ha-icon icon="mdi:close"></ha-icon></button>
           </div>
-          <div class="dlg-body">
-            <div class="dlg-sec ${this._settingsFocus === 'account' ? 'focus' : ''}" data-sec="account">
-              <shs-account-prices
-                .hass=${this.hass}
-                @account-changed=${this._handleAccountChanged}>
-              </shs-account-prices>
-            </div>
-            ${this._p1Devices.length ? html`
-              <div class="dlg-sec" data-sec="p1">
-                <div class="p1-card">
-                  <div class="p1-head">
-                    <ha-icon icon="mdi:meter-electric-outline"></ha-icon>
-                    <div style="flex: 1; min-width: 0;">
-                      <div class="p1-title">P1 meter</div>
-                      <div class="p1-sub">All grid readings and smart-energy features on this page follow this meter.</div>
-                    </div>
-                  </div>
-                  ${this._p1Devices.length === 1 ? html`
-                    <div class="p1-row">
-                      <span class="p1-name">${this._p1Devices[0].name}</span>
-                      <span class="p1-badge">Selected automatically</span>
-                    </div>
-                  ` : html`
-                    <div class="p1-row">
-                      <select class="p1-select"
-                        ?disabled=${this._p1Saving || !this.hass.user?.is_admin}
-                        @change=${(e: Event) => this._selectP1((e.target as HTMLSelectElement).value)}>
-                        ${this._p1Devices.map(device => html`
-                          <option value=${device.id} ?selected=${device.id === this._effectiveP1()?.id}>
-                            ${device.name} (${device.product_name})${device.online ? '' : ' - offline'}
-                          </option>
-                        `)}
-                      </select>
-                      ${this._p1Saving ? html`<span class="p1-badge">Saving...</span>` : nothing}
-                    </div>
-                    ${!this.hass.user?.is_admin ? html`
-                      <div class="p1-sub" style="margin-top: 6px;">Ask a Home Assistant administrator to change this.</div>
-                    ` : nothing}
-                  `}
+          <shs-account-prices
+            .hass=${this.hass}
+            @account-changed=${this._handleAccountChanged}>
+          </shs-account-prices>
+          ${this._p1Devices.length ? html`
+            <div class="p1-card">
+              <div class="p1-head">
+                <ha-icon icon="mdi:meter-electric-outline"></ha-icon>
+                <div style="flex: 1; min-width: 0;">
+                  <div class="p1-title">P1 meter</div>
+                  <div class="p1-sub">All grid readings and smart-energy features on this page follow this meter.</div>
                 </div>
               </div>
-            ` : nothing}
-            <div class="dlg-sec ${this._settingsFocus === 'sources' ? 'focus' : ''}" data-sec="sources">
-              <shs-energy-sources
-                .hass=${this.hass}
-                @shs-energy-sources-changed=${this._handleEnergySourcesChanged}>
-              </shs-energy-sources>
-            </div>
-            <div class="dlg-sec ${this._settingsFocus === 'solar-control' ? 'focus' : ''}" data-sec="solar-control">
-              <div class="alpha-notice" role="note" aria-label="Smart Energy alpha notice">
-                <div class="alpha-icon"><ha-icon icon="mdi:flask-outline"></ha-icon></div>
-                <div class="alpha-copy">
-                  <div class="alpha-title">Smart Energy is in alpha</div>
-                  <div class="alpha-text">
-                    These features are still in active development. If you use or test them, join us on Discord.
-                    Tell us what you are setting up, what works, what does not, and share feedback to help shape the next release.
-                  </div>
-                  <a
-                    class="alpha-link"
-                    href="https://smarthomeshop.io/discord"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <ha-icon icon="mdi:discord"></ha-icon>
-                    Join the SmartHomeShop Discord
-                    <ha-icon icon="mdi:open-in-new"></ha-icon>
-                  </a>
+              ${this._p1Devices.length === 1 ? html`
+                <div class="p1-row">
+                  <span class="p1-name">${this._p1Devices[0].name}</span>
+                  <span class="p1-badge">Selected automatically</span>
                 </div>
-              </div>
-              <div class="p1-card">
-                <div class="p1-head">
-                  <ha-icon icon="mdi:solar-power-variant-outline"></ha-icon>
-                  <div style="flex: 1; min-width: 0;">
-                    <div class="p1-title">Smart energy automations</div>
-                    <div class="p1-sub">Configure price, solar, EV and inverter automations once for the whole home.</div>
-                  </div>
+              ` : html`
+                <div class="p1-row">
+                  <select class="p1-select"
+                    ?disabled=${this._p1Saving || !this.hass.user?.is_admin}
+                    @change=${(e: Event) => this._selectP1((e.target as HTMLSelectElement).value)}>
+                    ${this._p1Devices.map(device => html`
+                      <option value=${device.id} ?selected=${device.id === this._effectiveP1()?.id}>
+                        ${device.name} (${device.product_name})${device.online ? '' : ' - offline'}
+                      </option>
+                    `)}
+                  </select>
+                  ${this._p1Saving ? html`<span class="p1-badge">Saving...</span>` : nothing}
                 </div>
-                ${selectedP1 ? html`
-                  <shs-energy-automations
-                    .hass=${this.hass}
-                    .deviceId=${selectedP1.id}
-                    .deviceName=${selectedP1.name}
-                    .deviceEntities=${this._entitiesByDevice[selectedP1.id] || []}
-                    .showHeader=${false}>
-                  </shs-energy-automations>
-                ` : html`
-                  <div class="p1-sub" style="margin-top: 10px;">
-                    Connect or select a P1 meter first to configure smart energy automations.
-                  </div>
-                `}
+                ${!this.hass.user?.is_admin ? html`
+                  <div class="p1-sub" style="margin-top: 6px;">Ask a Home Assistant administrator to change this.</div>
+                ` : nothing}
+              `}
+            </div>
+          ` : nothing}
+        </div>
+      `;
+    }
+
+    if (tab === 'sources') {
+      return html`
+        <div class="settings-panel" id="energy-settings-sources" role="tabpanel"
+          aria-labelledby="energy-settings-tab-sources" tabindex="-1">
+          <div class="settings-intro">
+            <div class="settings-intro-icon"><ha-icon icon="mdi:solar-power-variant-outline"></ha-icon></div>
+            <div>
+              <div class="settings-intro-title">Energy sources</div>
+              <div class="settings-intro-text">Map your solar and battery entities so live flow, surplus and state of charge are calculated correctly.</div>
+            </div>
+          </div>
+          <shs-energy-sources
+            .hass=${this.hass}
+            @shs-energy-sources-changed=${this._handleEnergySourcesChanged}>
+          </shs-energy-sources>
+        </div>
+      `;
+    }
+
+    if (tab === 'automations') {
+      return html`
+        <div class="settings-panel" id="energy-settings-automations" role="tabpanel"
+          aria-labelledby="energy-settings-tab-automations" tabindex="-1">
+          <div class="settings-intro">
+            <div class="settings-intro-icon"><ha-icon icon="mdi:robot-outline"></ha-icon></div>
+            <div>
+              <div class="settings-intro-title">Smart energy automations</div>
+              <div class="settings-intro-text">Configure price, solar, EV and inverter automations once for the whole home.</div>
+            </div>
+          </div>
+          <div class="alpha-notice" role="note" aria-label="Smart Energy alpha notice">
+            <div class="alpha-icon"><ha-icon icon="mdi:flask-outline"></ha-icon></div>
+            <div class="alpha-copy">
+              <div class="alpha-title">Smart Energy is in alpha</div>
+              <div class="alpha-text">
+                These features are still in active development. If you use or test them, join us on Discord.
+                Tell us what you are setting up, what works, what does not, and share feedback to help shape the next release.
               </div>
+              <a
+                class="alpha-link"
+                href="https://smarthomeshop.io/discord"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ha-icon icon="mdi:discord"></ha-icon>
+                Join the SmartHomeShop Discord
+                <ha-icon icon="mdi:open-in-new"></ha-icon>
+              </a>
             </div>
-            <div class="dlg-sec ${this._settingsFocus === 'battery' ? 'focus' : ''}" data-sec="battery">
-              <shs-energy-battery
-                .hass=${this.hass}
-                .deviceName=${'Home battery'}
-                @open-device-settings=${this._scrollToAccountSection}>
-              </shs-energy-battery>
+          </div>
+          ${selectedP1 ? html`
+            <shs-energy-automations
+              .hass=${this.hass}
+              .deviceId=${selectedP1.id}
+              .deviceName=${selectedP1.name}
+              .deviceEntities=${this._entitiesByDevice[selectedP1.id] || []}
+              .showHeader=${false}>
+            </shs-energy-automations>
+          ` : html`
+            <div class="p1-card">
+              <div class="p1-sub">Connect or select a P1 meter first to configure smart energy automations.</div>
+              ${this.hass.user?.is_admin ? html`
+                <button class="cta-btn ghost" style="margin-top: 12px;"
+                  @click=${() => this._setSettingsTab('connection')}>Open connection settings</button>
+              ` : nothing}
             </div>
+          `}
+        </div>
+      `;
+    }
+
+    if (tab === 'ha-energy') {
+      return html`
+        <div class="settings-panel" id="energy-settings-ha-energy" role="tabpanel"
+          aria-labelledby="energy-settings-tab-ha-energy" tabindex="-1">
+          <div class="settings-intro">
+            <div class="settings-intro-icon"><ha-icon icon="mdi:home-lightning-bolt-outline"></ha-icon></div>
+            <div>
+              <div class="settings-intro-title">Home Assistant Energy</div>
+              <div class="settings-intro-text">Connect the selected P1 meter to the native HA Energy Dashboard or import compatible HA source mappings into Smart Energy.</div>
+            </div>
+          </div>
+          ${selectedP1 ? html`
+            <shs-ha-energy-sync
+              .hass=${this.hass}
+              .deviceId=${selectedP1.id}
+              .deviceName=${selectedP1.name}
+              .deviceEntities=${this._entitiesByDevice[selectedP1.id] || []}
+              @ha-energy-synced=${this._handleEnergySourcesChanged}>
+            </shs-ha-energy-sync>
+          ` : html`
+            <div class="p1-card">
+              <div class="p1-sub">Connect or select a P1 meter before linking the Home Assistant Energy Dashboard.</div>
+              ${this.hass.user?.is_admin ? html`
+                <button class="cta-btn ghost" style="margin-top: 12px;"
+                  @click=${() => this._setSettingsTab('connection')}>Open connection settings</button>
+              ` : nothing}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    return html`
+      <div class="settings-panel" id="energy-settings-battery" role="tabpanel"
+        aria-labelledby="energy-settings-tab-battery" tabindex="-1">
+        <div class="settings-intro">
+          <div class="settings-intro-icon"><ha-icon icon="mdi:home-battery-outline"></ha-icon></div>
+          <div>
+            <div class="settings-intro-title">Home battery</div>
+            <div class="settings-intro-text">Configure planning, limits, forecasts and automatic execution for your battery.</div>
           </div>
         </div>
+        <shs-energy-battery
+          .hass=${this.hass}
+          .deviceName=${'Home battery'}
+          @open-device-settings=${this._scrollToAccountSection}>
+        </shs-energy-battery>
       </div>
+    `;
+  }
+
+  private _renderSettingsPage() {
+    const tabs: Array<{ id: EnergySettingsTab; label: string; icon: string }> = [
+      { id: 'connection', label: 'Connection', icon: 'mdi:cloud-sync-outline' },
+      { id: 'sources', label: 'Sources', icon: 'mdi:solar-power-variant-outline' },
+      { id: 'ha-energy', label: 'HA Energy', icon: 'mdi:home-lightning-bolt-outline' },
+      { id: 'automations', label: 'Automations', icon: 'mdi:robot-outline' },
+      { id: 'battery', label: 'Battery', icon: 'mdi:home-battery-outline' },
+    ];
+
+    return html`
+      <main class="settings-page">
+        <header class="settings-page-head">
+          <button class="settings-back" @click=${this._closeSettings}>
+            <ha-icon icon="mdi:arrow-left"></ha-icon>
+            Back to Energy
+          </button>
+          <div class="eyebrow">Smart Energy</div>
+          <h1>Energy settings</h1>
+          <div class="subtitle">Configure your connection, energy sources, Home Assistant Energy, automations and battery.</div>
+        </header>
+        <div class="settings-tabs-shell">
+          <nav class="settings-tabs" role="tablist" aria-label="Energy settings sections">
+            ${tabs.map(tab => html`
+              <button
+                id="energy-settings-tab-${tab.id}"
+                class="settings-tab ${this._settingsTab === tab.id ? 'active' : ''}"
+                role="tab"
+                aria-selected=${this._settingsTab === tab.id ? 'true' : 'false'}
+                aria-controls="energy-settings-${tab.id}"
+                tabindex=${this._settingsTab === tab.id ? '0' : '-1'}
+                @click=${() => this._setSettingsTab(tab.id)}
+                @keydown=${(event: KeyboardEvent) => this._onSettingsTabKeydown(event, tab.id)}
+              >
+                <ha-icon icon=${tab.icon}></ha-icon>
+                ${tab.label}
+              </button>
+            `)}
+          </nav>
+        </div>
+        ${this._renderSettingsTab(this._settingsTab)}
+      </main>
     `;
   }
 

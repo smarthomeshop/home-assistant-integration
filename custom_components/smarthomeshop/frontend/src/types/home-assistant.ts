@@ -55,6 +55,11 @@ export interface HomeAssistant {
     themes: { [name: string]: { [key: string]: string } };
   };
   callWS: <T>(msg: { type: string; [key: string]: unknown }) => Promise<T>;
+  callApi: <T>(
+    method: string,
+    path: string,
+    parameters?: { [key: string]: unknown },
+  ) => Promise<T>;
   callService: (
     domain: string,
     service: string,
@@ -73,4 +78,3 @@ export interface LovelaceCardEditor extends HTMLElement {
   lovelace?: unknown;
   setConfig(config: unknown): void;
 }
-

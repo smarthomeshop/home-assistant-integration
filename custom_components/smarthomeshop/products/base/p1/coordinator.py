@@ -228,6 +228,14 @@ class EnergyTracker:
 
         data.energy_t1 = self._value("energy_consumed_tariff_1")
         data.energy_t2 = self._value("energy_consumed_tariff_2")
+        if data.energy_t1 is None and data.energy_t2 is None:
+            # Luxembourg firmware exposes one cumulative register instead of
+            # DSMR tariff 1/2. Treat its second tariff as zero so the combined
+            # HA Energy sensor remains a valid total-increasing statistic.
+            combined = self._value("energy_consumed_luxembourg")
+            if combined is not None:
+                data.energy_t1 = combined
+                data.energy_t2 = 0.0
         daily_t1 = self._meter_value("energy_daily_t1_cc")
         daily_t2 = self._meter_value("energy_daily_t2_cc")
         if daily_t1 is not None or daily_t2 is not None:
@@ -238,6 +246,11 @@ class EnergyTracker:
         data.energy_returned_t2 = self._value("energy_produced_tariff_2")
         if data.energy_returned_t2 is None:
             data.energy_returned_t2 = self._value("energy_returned_tariff_2")
+        if data.energy_returned_t1 is None and data.energy_returned_t2 is None:
+            combined_returned = self._value("energy_produced_luxembourg")
+            if combined_returned is not None:
+                data.energy_returned_t1 = combined_returned
+                data.energy_returned_t2 = 0.0
         data.gas_total = self._value("gas_consumed")
 
         # Phase currents and load against the main fuse

@@ -130,6 +130,7 @@ export class EnergySchedules extends LitElement {
     label.f { display: block; font-size: 12px; font-weight: 600; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .4px; margin: 0 0 6px; }
     .field .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
     select, input[type="text"], input[type="number"], input[type="time"] { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    ha-entity-picker { display: block; width: 100%; --mdc-theme-primary: var(--shs-primary); }
     select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
     .two { display: flex; gap: 10px; }
     .two > div { flex: 1; }
@@ -163,18 +164,14 @@ export class EnergySchedules extends LitElement {
     this._schedules = res.schedules || [];
   }
 
-  private _switchOptions(excludeUsed = true): Array<{ value: string; label: string }> {
+  private _switchAllowed(entity: string | { entity_id?: string }): boolean {
+    const entityId = typeof entity === 'string' ? entity : entity.entity_id || '';
+    const domain = dom(entityId);
+    if (domain !== 'switch' && domain !== 'input_boolean') return false;
     const used = new Set(
       this._schedules.filter(s => s.id !== this._editId).map(s => s.target_entity)
     );
-    const out = [{ value: '', label: 'Select a device...' }];
-    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
-      const d = dom(entityId);
-      if (d !== 'switch' && d !== 'input_boolean') continue;
-      if (excludeUsed && used.has(entityId) && entityId !== this._target) continue;
-      out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
-    }
-    return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
+    return !used.has(entityId) || entityId === this._target;
   }
 
   private _openModal(s?: Schedule): void {
@@ -337,9 +334,16 @@ export class EnergySchedules extends LitElement {
             </div>
             <div class="field">
               <label class="f">Device to run</label>
-              <select @change=${(e: Event) => { this._target = (e.target as HTMLSelectElement).value; }}>
-                ${this._switchOptions().map(o => html`<option value=${o.value} ?selected=${o.value === this._target}>${o.label}</option>`)}
-              </select>
+              <ha-entity-picker
+                .hass=${this.hass}
+                .value=${this._target}
+                .includeDomains=${['switch', 'input_boolean']}
+                .entityFilter=${(entity: string | { entity_id?: string }) => this._switchAllowed(entity)}
+                .allowCustomEntity=${false}
+                @value-changed=${(event: CustomEvent<{ value?: string }>) => {
+                  this._target = event.detail?.value || '';
+                }}
+              ></ha-entity-picker>
               <div class="help">A switch or smart plug (EV charger, appliance). It is fully controlled by this schedule. Devices already used by another schedule are hidden.</div>
             </div>
             <div class="two">

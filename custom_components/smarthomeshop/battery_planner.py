@@ -39,6 +39,25 @@ def _number(value: Any, default: float = 0.0) -> float:
     return parsed if isfinite(parsed) else default
 
 
+def capacity_to_kwh(value: Any, unit: Any) -> float | None:
+    """Convert a positive energy value to kWh."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(number) or number <= 0:
+        return None
+
+    normalized_unit = str(unit or "").strip().lower()
+    if normalized_unit == "wh":
+        return number / 1000
+    if normalized_unit == "kwh":
+        return number
+    if normalized_unit == "mwh":
+        return number * 1000
+    return None
+
+
 def normalize_hourly_kw(value: Any, unit: str | None) -> float | None:
     """Normalize an hourly power or energy forecast value to average kW."""
     try:

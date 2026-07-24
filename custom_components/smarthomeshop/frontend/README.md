@@ -16,6 +16,13 @@ frontend/
 │   │   ├── ultimatesensor-card.ts # UltimateSensor card
 │   │   ├── p1meterkit-card.ts # P1MeterKit card (grid, tariffs and phases)
 │   │   ├── ceilsense-card.ts # CeilSense card (presence, zones and climate)
+│   │   ├── energy-card-common.ts # Shared Smart Energy data and styles
+│   │   ├── energy-live-card.ts # Live home, grid, solar and battery power
+│   │   ├── energy-price-card.ts # Hourly price outlook and cheapest block
+│   │   ├── energy-power-card.ts # Today's interactive power trend
+│   │   ├── energy-savings-card.ts # Measured Smart Savings
+│   │   ├── energy-automations-card.ts # Smart automations and deadline schedules
+│   │   ├── energy-card-editor.ts # Visual editor for all Energy cards
 │   │   ├── product-card-utils.ts # Registry-first product/entity resolution
 │   │   ├── card-editors.ts # Configuration editors for all cards
 │   │   ├── sensor-settings.ts # Sensor settings component
@@ -46,6 +53,11 @@ frontend/
 | **UltimateSensor Card** | `smarthomeshop-ultimatesensor-card` | Presence detection and environment sensors |
 | **P1MeterKit Card** | `smarthomeshop-p1meterkit-card` | Live electricity, grid direction, tariffs, phases and energy insights |
 | **CeilSense Card** | `smarthomeshop-ceilsense-card` | Ceiling presence, target zones, distance, energy and room climate |
+| **Live Energy Card** | `smarthomeshop-energy-live-card` | Live home consumption, grid, solar and battery power |
+| **Price Outlook Card** | `smarthomeshop-energy-price-card` | Hourly prices, price insights and cheapest consecutive block |
+| **Power Trend Card** | `smarthomeshop-energy-power-card` | Today's grid import/export, solar and battery as native HA 5-minute statistics |
+| **Smart Savings Card** | `smarthomeshop-energy-savings-card` | Measured battery and schedule savings |
+| **Smart Automations Card** | `smarthomeshop-energy-automations-card` | Live status, targets and controls for Smart Energy automations and schedules |
 
 ## Visibility Options
 
@@ -60,10 +72,30 @@ options default to visible, so existing dashboards keep their current layout.
 | **UltimateSensor Card** | Header, presence status, room score, climate values, individual environment sensors, CO2 meter, PM section, PM gauge, PM value cards, NOx, radar/room view and person distance details |
 | **P1MeterKit Card** | Header, connection status, live power flow, tariff totals, phase load, energy insights, gas and device environment |
 | **CeilSense Card** | Header, connection status, live presence radar, zones, distance and signal energy, environment values and room-quality insights |
+| **Live Energy Card** | Header, home consumption, grid, solar and battery rows |
+| **Price Outlook Card** | Header, initial day, price insights, cheapest block and 1–6 hour duration |
+| **Power Trend Card** | Header, current/peak summary and independently toggleable grid import, grid export, solar and battery statistics |
+| **Smart Savings Card** | Header, battery/schedule breakdown and measurement explanation |
+| **Smart Automations Card** | Header, compact/expanded density, deadline schedules, quick controls and last-triggered information |
 
 The compact `Total meter reading` row stays available on firmware without a
 calibration entity. Firmware that supports meter calibration also shows a
 `Set` action in the same row.
+
+The Energy cards use the contract and entities configured once in
+**SmartHomeShop.io → Energy → Settings**. They do not duplicate entity
+configuration in each Lovelace card. All four cards are available in Home
+Assistant's visual card picker, or can be added as YAML:
+
+```yaml
+type: custom:smarthomeshop-energy-live-card
+```
+
+The Power Trend card and the matching Energy panel section use Home
+Assistant's native `statistics-chart` renderer. Recorder's 5-minute `mean`,
+`min` and `max` statistics provide the line and range, while sources without
+statistics fall back to state history. A shared live sample is appended so
+every available series reaches the current time.
 
 ## Source Files
 
@@ -80,6 +112,13 @@ calibration entity. Firmware that supports meter calibration also shows a
 - **ultimatesensor-card.ts** - Room score, presence, CO2, VOC, air quality
 - **p1meterkit-card.ts** - Grid import/export, tariff totals, phase load and energy insights
 - **ceilsense-card.ts** - Presence targets, zones, distance, signal energy and room climate
+- **energy-card-common.ts** - Cached Energy API context, live values, history and shared responsive styling
+- **energy-live-card.ts** - Live home consumption and configured energy sources
+- **energy-price-card.ts** - Interactive hourly prices and configurable cheapest block
+- **energy-power-card.ts** - Native HA statistics graph with mean/min/max ranges and per-series visibility
+- **energy-savings-card.ts** - Today, month, all-time and contribution values
+- **energy-automations-card.ts** - Managed HA automations and deadline schedules with live status, shared editing and controls
+- **energy-card-editor.ts** - Shared visual card editor for all five Energy cards
 - **product-card-utils.ts** - Shared registry-first product and entity matching
 - **card-editors.ts** - Visual configuration editors for Lovelace UI
 - **sensor-settings.ts** - Settings panel for sensors

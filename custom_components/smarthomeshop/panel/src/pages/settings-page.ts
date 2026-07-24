@@ -134,6 +134,7 @@ export class SettingsPage extends LitElement {
     }
     .cfg-control input[type="number"] { width: 90px; text-align: right; }
     .cfg-control input:focus, .cfg-control select:focus { outline: none; border-color: var(--shs-primary); }
+    .cfg-control ha-entity-picker { display: block; width: min(320px, 46vw); --mdc-theme-primary: var(--shs-primary); }
     .cfg-unit { font-size: 12px; color: var(--secondary-text-color); min-width: 34px; }
     .cfg-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--divider-color); }
     .cfg-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: #22c55e; }
@@ -220,15 +221,6 @@ export class SettingsPage extends LitElement {
     this._savingConfig = false;
   }
 
-  private _inputBooleanOptions(): Array<{ value: string; label: string }> {
-    const out = [{ value: '', label: 'None' }];
-    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
-      if (!entityId.startsWith('input_boolean.')) continue;
-      out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
-    }
-    return out;
-  }
-
   private _renderConfigField(f: any) {
     const val = this._configValues[f.key];
     const set = (v: any) => { this._configValues = { ...this._configValues, [f.key]: v }; };
@@ -241,10 +233,16 @@ export class SettingsPage extends LitElement {
     } else if (f.type === 'time') {
       control = html`<input type="time" .value=${val ?? ''} @input=${(e: Event) => set((e.target as HTMLInputElement).value)} />`;
     } else if (f.type === 'entity') {
+      const domains = Array.isArray(f.domains) && f.domains.length ? f.domains : ['input_boolean'];
       control = html`
-        <select @change=${(e: Event) => set((e.target as HTMLSelectElement).value)}>
-          ${this._inputBooleanOptions().map(o => html`<option value=${o.value} ?selected=${o.value === (val || '')}>${o.label}</option>`)}
-        </select>`;
+        <ha-entity-picker
+          .hass=${this.hass}
+          .value=${val || ''}
+          .includeDomains=${domains}
+          .allowCustomEntity=${false}
+          @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+            set(event.detail?.value || '')}
+        ></ha-entity-picker>`;
     } else {
       control = html`<input type="text" .value=${val ?? ''} @input=${(e: Event) => set((e.target as HTMLInputElement).value)} />`;
     }

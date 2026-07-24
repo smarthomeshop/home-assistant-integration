@@ -25,6 +25,25 @@ interface Scenario {
   msg: string; // {room}, {value}
 }
 
+function openAutomationEditor(event: MouseEvent, automationId: string): void {
+  if (
+    event.button !== 0
+    || event.metaKey
+    || event.ctrlKey
+    || event.shiftKey
+    || event.altKey
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  const path = `/config/automation/edit/${encodeURIComponent(automationId)}`;
+  window.history.pushState(null, '', path);
+  window.dispatchEvent(new CustomEvent('location-changed', {
+    detail: { replace: false },
+  }));
+}
+
 // Products mapped to the scenario groups they support
 const PRODUCT_GROUPS: Record<string, Group[]> = {
   ultimatesensor: ['climate'],
@@ -457,7 +476,7 @@ export class AutomationsPage extends LitElement {
           ${createdId ? html`
             <span class="created">
               <ha-icon icon="mdi:check-circle" style="--mdc-icon-size: 15px;"></ha-icon>
-              Created · <a href="/config/automation/edit/${createdId}">Edit</a>
+              Created · <a href="/config/automation/edit/${createdId}" @click=${(event: MouseEvent) => openAutomationEditor(event, createdId)}>Edit</a>
             </span>
           ` : html`
             <button class="create-btn" ?disabled=${!isAdmin}
@@ -602,7 +621,7 @@ export class AutomationsPage extends LitElement {
               <button class="toggle ${a.on ? 'on' : ''}"
                 @click=${() => this.hass.callService('automation', a.on ? 'turn_off' : 'turn_on', { entity_id: a.entityId })}></button>
               <span class="existing-name">${a.name}</span>
-              ${a.id ? html`<a href="/config/automation/edit/${a.id}">Edit</a>` : nothing}
+              ${a.id ? html`<a href="/config/automation/edit/${a.id}" @click=${(event: MouseEvent) => openAutomationEditor(event, a.id!)}>Edit</a>` : nothing}
             </div>
           `)}
         </div>

@@ -125,6 +125,7 @@ export class EnergyBattery extends LitElement {
     .locked { padding: 9px 12px; border: 1px dashed var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 13.5px; }
     .help { font-size: 11px; color: var(--secondary-text-color); margin-top: 4px; line-height: 1.4; }
     select, input[type='number'] { width: 100%; box-sizing: border-box; min-height: 40px; padding: 9px 12px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--secondary-background-color); color: var(--primary-text-color); font-size: 14px; font-family: inherit; }
+    ha-entity-picker { display: block; width: 100%; --mdc-theme-primary: var(--shs-primary); }
     select:focus, input:focus { outline: none; border-color: var(--shs-primary); }
     .two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
@@ -199,19 +200,23 @@ export class EnergyBattery extends LitElement {
     return this._accountStatus === 'no_contract';
   }
 
-  private _entityOptions(domains: string[], kind?: 'battery' | 'energy' | 'power' | 'forecast'): Array<{ value: string; label: string }> {
-    const out = [{ value: '', label: 'Select...' }];
-    for (const [entityId, st] of Object.entries(this.hass.states || {})) {
-      if (!domains.includes(dom(entityId))) continue;
-      const deviceClass = String(st.attributes?.device_class || '');
-      const unit = String(st.attributes?.unit_of_measurement || '');
-      if (kind === 'battery' && deviceClass !== 'battery' && unit !== '%') continue;
-      if (kind === 'energy' && deviceClass !== 'energy' && !/^k?Wh$/i.test(unit)) continue;
-      if (kind === 'power' && deviceClass !== 'power' && !/^(k|m)?W$/i.test(unit)) continue;
-      if (kind === 'forecast' && !['energy', 'power'].includes(deviceClass) && !/^(k|m)?W(h)?$/i.test(unit)) continue;
-      out.push({ value: entityId, label: (st.attributes?.friendly_name as string) || entityId });
+  private _matchesEntity(
+    entity: string | { entity_id?: string },
+    domains: string[],
+    kind?: 'battery' | 'energy' | 'power' | 'forecast',
+  ): boolean {
+    const entityId = typeof entity === 'string' ? entity : entity.entity_id || '';
+    if (!domains.includes(dom(entityId))) return false;
+    const state = this.hass.states[entityId];
+    const deviceClass = String(state?.attributes?.device_class || '');
+    const unit = String(state?.attributes?.unit_of_measurement || '');
+    if (kind === 'battery') return deviceClass === 'battery' || unit === '%';
+    if (kind === 'energy') return deviceClass === 'energy' || /^k?Wh$/i.test(unit);
+    if (kind === 'power') return deviceClass === 'power' || /^(k|m)?W$/i.test(unit);
+    if (kind === 'forecast') {
+      return ['energy', 'power'].includes(deviceClass) || /^(k|m)?W(h)?$/i.test(unit);
     }
-    return [out[0], ...out.slice(1).sort((a, b) => a.label.localeCompare(b.label))];
+    return true;
   }
 
   private _selectOptions(entityId?: string): string[] {
@@ -453,9 +458,16 @@ export class EnergyBattery extends LitElement {
                   <div class="locked">${this._friendly(this._sources.battery_soc)}</div>
                   <div class="help">From Solar &amp; battery - change it there.</div>
                 ` : html`
-                  <select @change=${(event: Event) => this._set('soc_sensor', (event.target as HTMLSelectElement).value)}>
-                    ${this._entityOptions(['sensor'], 'battery').map(option => html`<option value=${option.value} ?selected=${option.value === form.soc_sensor}>${option.label}</option>`)}
-                  </select>
+                  <ha-entity-picker
+                    .hass=${this.hass}
+                    .value=${form.soc_sensor || ''}
+                    .includeDomains=${['sensor']}
+                    .entityFilter=${(entity: string | { entity_id?: string }) =>
+                      this._matchesEntity(entity, ['sensor'], 'battery')}
+                    .allowCustomEntity=${false}
+                    @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+                      this._set('soc_sensor', event.detail?.value || undefined)}
+                  ></ha-entity-picker>
                 `}
               </div>
               ${this._renderCapacityField()}
@@ -477,17 +489,31 @@ export class EnergyBattery extends LitElement {
                   <div class="locked">${this._friendly(this._sources.pv_forecast)}</div>
                   <div class="help">From Solar &amp; battery - change it there.</div>
                 ` : html`
-                  <select @change=${(event: Event) => this._set('pv_forecast_sensor', (event.target as HTMLSelectElement).value)}>
-                    ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.pv_forecast_sensor}>${option.label}</option>`)}
-                  </select>
+                  <ha-entity-picker
+                    .hass=${this.hass}
+                    .value=${form.pv_forecast_sensor || ''}
+                    .includeDomains=${['sensor']}
+                    .entityFilter=${(entity: string | { entity_id?: string }) =>
+                      this._matchesEntity(entity, ['sensor'], 'forecast')}
+                    .allowCustomEntity=${false}
+                    @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+                      this._set('pv_forecast_sensor', event.detail?.value || undefined)}
+                  ></ha-entity-picker>
                   <div class="help">Hourly forecast attributes are used when available.</div>
                 `}
               </div>
               <div class="field">
                 <label class="f">House load forecast (optional)</label>
-                <select @change=${(event: Event) => this._set('load_forecast_sensor', (event.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(['sensor'], 'forecast').map(option => html`<option value=${option.value} ?selected=${option.value === form.load_forecast_sensor}>${option.label}</option>`)}
-                </select>
+                <ha-entity-picker
+                  .hass=${this.hass}
+                  .value=${form.load_forecast_sensor || ''}
+                  .includeDomains=${['sensor']}
+                  .entityFilter=${(entity: string | { entity_id?: string }) =>
+                    this._matchesEntity(entity, ['sensor'], 'forecast')}
+                  .allowCustomEntity=${false}
+                  @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+                    this._set('load_forecast_sensor', event.detail?.value || undefined)}
+                ></ha-entity-picker>
               </div>
             </div>
             <div class="two">
@@ -527,9 +553,16 @@ export class EnergyBattery extends LitElement {
               </div>
               <div class="field">
                 <label class="f">Control entity</label>
-                <select @change=${(event: Event) => this._set('control_entity', (event.target as HTMLSelectElement).value)}>
-                  ${this._entityOptions(controlDomains).map(option => html`<option value=${option.value} ?selected=${option.value === form.control_entity}>${option.label}</option>`)}
-                </select>
+                <ha-entity-picker
+                  .hass=${this.hass}
+                  .value=${form.control_entity || ''}
+                  .includeDomains=${controlDomains}
+                  .entityFilter=${(entity: string | { entity_id?: string }) =>
+                    this._matchesEntity(entity, controlDomains)}
+                  .allowCustomEntity=${false}
+                  @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+                    this._set('control_entity', event.detail?.value || undefined)}
+                ></ha-entity-picker>
               </div>
               ${kind === 'number' && this._numberMin(form.control_entity) > 0 ? html`<div class="warn">This number cannot be set to zero. Use a mode select or switch if the battery must have a true idle state.</div>` : nothing}
               ${kind === 'select' ? html`
