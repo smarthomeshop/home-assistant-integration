@@ -95,6 +95,11 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None  # default (verify)
 
     async def _async_update_data(self) -> dict[str, Any]:
+        return await self._async_update_data_attempt(recovery_attempted=False)
+
+    async def _async_update_data_attempt(
+        self, *, recovery_attempted: bool
+    ) -> dict[str, Any]:
         account = self._account()
         api_key = account.get("api_key")
         if not api_key:
@@ -102,15 +107,18 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.last_error = None
             return {}
 
-        url = f"{self.base_url}{PRICES_PATH}"
+        request_key = self._account_request_key(account)
+        requested_contract = request_key[2]
+        requested_location = request_key[3]
+        url = f"{request_key[1]}{PRICES_PATH}"
         # A pinned contract wins over a location (matching the server, which
         # checks ?contract= before ?location=); with neither the server uses
         # the account's active contract for today.
         params = {}
-        if self.contract_id:
-            params["contract"] = self.contract_id
-        elif self.location_id:
-            params["location"] = self.location_id
+        if requested_contract:
+            params["contract"] = requested_contract
+        elif requested_location:
+            params["location"] = requested_location
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Accept": "application/json",
@@ -149,6 +157,42 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except (aiohttp.ClientError, ValueError):
                         pass
                     if body.get("code") == "energy_contract_required":
+                        if self._account_request_key(self._account()) != request_key:
+                            if recovery_attempted:
+                                self.status = "connecting"
+                                raise UpdateFailed(
+                                    "Account selection changed during price refresh"
+                                )
+                            resp.release()
+                            return await self._async_update_data_attempt(
+                                recovery_attempted=True
+                            )
+                        if (
+                            requested_contract
+                            and not recovery_attempted
+                            and await self._async_clear_missing_contract_pin(
+                                requested_contract, request_key
+                            )
+                        ):
+                            LOGGER.info(
+                                "Removed missing energy contract pin %s; "
+                                "retrying with the active account contract",
+                                requested_contract,
+                            )
+                            resp.release()
+                            return await self._async_update_data_attempt(
+                                recovery_attempted=True
+                            )
+                        if self._account_request_key(self._account()) != request_key:
+                            if recovery_attempted:
+                                self.status = "connecting"
+                                raise UpdateFailed(
+                                    "Account selection changed during price refresh"
+                                )
+                            resp.release()
+                            return await self._async_update_data_attempt(
+                                recovery_attempted=True
+                            )
                         self.status = "no_contract"
                         self.last_error = (
                             "No active energy contract for the selected location. "
@@ -193,6 +237,18 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.last_error = None
         self.last_synced = dt_util.utcnow().isoformat()
         return data or {}
+
+    @staticmethod
+    def _account_request_key(account: dict[str, Any]) -> tuple[str, str, str, str]:
+        """Snapshot the account fields that determine a prices request."""
+        contract = account.get("contract_id")
+        location = account.get("location_id")
+        return (
+            str(account.get("api_key") or ""),
+            resolve_api_base_url(account.get("base_url")),
+            str(contract) if contract not in (None, "") else "",
+            str(location) if location not in (None, "") else "",
+        )
 
     # ---- Convenience accessors for sensors / panel ----
 
@@ -380,16 +436,17 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         self.status = "error"
                         self.last_error = "The account service returned an invalid response."
                     return False, [], []
-                contracts = data.get("contracts", []) or []
+                contracts = data.get("contracts")
                 locations = data.get("locations", []) or []
+                if not isinstance(contracts, list) or not isinstance(locations, list):
+                    if update_status:
+                        self.status = "error"
+                        self.last_error = "The account service returned an invalid response."
+                    return False, [], []
                 if update_status:
                     self.status = "ok"
                     self.last_error = None
-                return (
-                    True,
-                    contracts if isinstance(contracts, list) else [],
-                    locations if isinstance(locations, list) else [],
-                )
+                return True, contracts, locations
         except TimeoutError:
             if update_status:
                 self.status = "error"
@@ -412,6 +469,33 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.status = "error"
                 self.last_error = "The account service returned an invalid response."
         return False, [], []
+
+    async def _async_clear_missing_contract_pin(
+        self,
+        pinned_id: str,
+        expected_request_key: tuple[str, str, str, str],
+    ) -> bool:
+        """Clear a pinned contract only when the account confirms it is gone."""
+        valid, contracts, _ = await self._async_fetch_contracts(update_status=False)
+        if not valid or any(
+            str(contract.get("id")) == pinned_id
+            for contract in contracts
+            if isinstance(contract, dict)
+        ):
+            return False
+
+        store = self.hass.data.get(DOMAIN, {}).get("store")
+        if store is None:
+            return False
+        account = store.get_account()
+        if self._account_request_key(account) != expected_request_key:
+            # The user changed the selection while the account check was in
+            # flight. Leave the newer choice untouched.
+            return False
+
+        account["contract_id"] = None
+        await store.async_set_account(account)
+        return True
 
     async def async_validate_account(self) -> bool:
         """Validate the configured token without waiting for a full forecast."""

@@ -44,8 +44,6 @@ interface PriceInsights {
   average: number;
   difference: number;
   differencePercentage: number | null;
-  rank: number;
-  rankedHours: number;
   lowest: PricePeriod;
   highest: PricePeriod;
   nextLower: PricePeriod | null;
@@ -66,9 +64,11 @@ interface HistoryPoint {
 }
 
 interface PowerSeries {
-  id: string;
+  key: string;
   label: string;
   color: string;
+  points: HistoryPoint[];
+  dash?: string;
 }
 
 @customElement('shs-energy-hub')
@@ -93,6 +93,7 @@ export class EnergyHub extends LitElement {
   @state() private _hoverBar = -1;
   @state() private _powerChartWidth = 760;
   @state() private _hoverPowerTime?: number;
+  @state() private _hiddenPowerSeries: string[] = [];
   @state() private _settingsOpen = false;
   @state() private _settingsFocus: 'account' | 'sources' | 'solar-control' | 'battery' | '' = '';
   @state() private _savings: Record<string, number> = {};
@@ -108,6 +109,7 @@ export class EnergyHub extends LitElement {
   private static readonly APP_STATS_URL = 'https://app.smarthomeshop.io/energy-prices';
   private static readonly INITIAL_LOAD_TIMEOUT = 6000;
   private static readonly BACKGROUND_LOAD_TIMEOUT = 12000;
+  private static readonly HISTORY_LOAD_TIMEOUT = 25000;
   private _loadStarted = false;
   private _loading?: Promise<void>;
   private _anchorObserver?: ResizeObserver;
@@ -190,6 +192,43 @@ export class EnergyHub extends LitElement {
     .dlg-x:hover { background: var(--secondary-background-color); color: var(--primary-text-color); }
     .dlg-body { padding: 6px 20px 24px; }
     .dlg-sec { scroll-margin-top: 92px; border-radius: 14px; }
+    .alpha-notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin: 14px 0 20px;
+      padding: 14px 16px;
+      border: 1px solid color-mix(in srgb, var(--shs-amber) 34%, var(--divider-color));
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--shs-amber) 9%, var(--card-background-color));
+    }
+    .alpha-icon {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 9px;
+      color: var(--shs-amber);
+      background: color-mix(in srgb, var(--shs-amber) 15%, var(--card-background-color));
+    }
+    .alpha-icon ha-icon { --mdc-icon-size: 20px; }
+    .alpha-copy { flex: 1; min-width: 0; }
+    .alpha-title { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
+    .alpha-text { margin-top: 3px; color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.5; }
+    .alpha-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 10px;
+      color: var(--shs-blue);
+      font-size: 12.5px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .alpha-link:hover { text-decoration: underline; }
+    .alpha-link:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: 3px; border-radius: 3px; }
+    .alpha-link ha-icon { --mdc-icon-size: 16px; }
     .dlg-sec.focus { animation: sec-focus 1.6s ease-out 1; }
     @keyframes sec-focus {
       0% { box-shadow: 0 0 0 2px var(--shs-blue, #4361ee); }
@@ -206,6 +245,7 @@ export class EnergyHub extends LitElement {
     .p1-badge { font-size: 11.5px; color: var(--secondary-text-color); border: 1px solid var(--divider-color); border-radius: 999px; padding: 2px 10px; }
     .p1-select { flex: 1; min-width: 220px; font-family: inherit; font-size: 13px; color: var(--primary-text-color); background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 10px; padding: 8px 10px; }
     .p1-select:disabled { opacity: 0.6; }
+    .p1-card shs-energy-automations { display: block; margin-top: 14px; }
     .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 9px; background: var(--shs-blue, var(--shs-primary, #4361ee)); color: #fff; font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
     .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .cta-btn ha-icon { --mdc-icon-size: 15px; }
@@ -392,7 +432,6 @@ export class EnergyHub extends LitElement {
     .price-summary { padding: 24px; background: var(--shs-amber-soft); border-right: 1px solid var(--shs-border); }
     .price-kicker { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .price-kicker span:first-child { font-size: 12px; font-weight: 700; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .55px; }
-    .price-rank { padding: 4px 7px; border-radius: 5px; background: var(--card-background-color); font-size: 11px; font-weight: 700; }
     .price-value { margin-top: 16px; font-size: 38px; line-height: 1; font-weight: 760; }
     .price-value span { font-size: 13px; color: var(--secondary-text-color); font-weight: 550; }
     .price-state { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; margin-top: 9px; }
@@ -410,6 +449,24 @@ export class EnergyHub extends LitElement {
     .chart-legend { margin-left: auto; display: flex; gap: 12px; color: var(--secondary-text-color); font-size: 10.5px; }
     .chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
     .chart-legend i { width: 8px; height: 8px; border-radius: 2px; }
+    .power-chart-legend { flex-wrap: wrap; justify-content: flex-end; }
+    .power-legend-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 32px;
+      padding: 4px 6px;
+      border: 0;
+      border-radius: 4px;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      cursor: pointer;
+    }
+    .power-legend-toggle:hover { color: var(--primary-text-color); background: var(--shs-muted-surface); }
+    .power-legend-toggle:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: 1px; }
+    .power-legend-toggle.off { opacity: .48; text-decoration: line-through; }
+    .power-legend-toggle.off i { background: transparent !important; box-shadow: inset 0 0 0 1.5px currentColor; }
     .chart svg { width: 100%; height: 225px; display: block; overflow: visible; }
     .power-surface .chart svg { height: auto; }
     .chart text { fill: var(--secondary-text-color); font-size: 10px; }
@@ -558,6 +615,9 @@ export class EnergyHub extends LitElement {
       .cheapest-strip { padding: 14px 10px; }
       .chart-top { align-items: flex-start; }
       .chart-legend { display: none; }
+      .power-chart-top { flex-direction: column; gap: 6px; }
+      .power-chart-legend { display: flex; margin-left: 0; justify-content: flex-start; gap: 4px 8px; }
+      .power-legend-toggle { min-height: 40px; padding: 7px 6px; }
       .chart svg { height: 205px; }
       .power-surface .chart svg { height: auto; }
       .power-surface { padding: 16px 10px 12px; }
@@ -566,6 +626,7 @@ export class EnergyHub extends LitElement {
       .smart-list { grid-template-columns: 1fr; }
       .smart-item { border-right: 0; border-bottom: 1px solid var(--shs-border); }
       .smart-item:last-child { border-bottom: 0; }
+      .alpha-notice { padding: 13px 14px; }
     }
   `;
 
@@ -802,7 +863,7 @@ export class EnergyHub extends LitElement {
     }
 
     try {
-      const start = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      const start = new Date(this._todayStart()).toISOString();
       const result = await this._callWS<Record<string, any[]>>(
         {
           type: 'history/history_during_period',
@@ -810,9 +871,9 @@ export class EnergyHub extends LitElement {
           entity_ids: ids,
           minimal_response: true,
           no_attributes: true,
-          significant_changes_only: false,
+          significant_changes_only: true,
         },
-        EnergyHub.BACKGROUND_LOAD_TIMEOUT,
+        EnergyHub.HISTORY_LOAD_TIMEOUT,
       );
       const history: Record<string, HistoryPoint[]> = {};
 
@@ -833,18 +894,40 @@ export class EnergyHub extends LitElement {
             v: (invert ? -1 : 1) * scale * Number(point.s ?? point.state),
           };
         }).filter((point: HistoryPoint) => Number.isFinite(point.v) && Number.isFinite(point.t) && point.t > 0);
-        history[id] = this._downsample(points, 180);
+        history[id] = this._downsample(points, 360);
       }
       this._history = history;
     } catch {
-      this._history = {};
+      // Keep the last successful graph on a slow or temporarily unavailable
+      // Recorder instead of making the whole section disappear.
     }
   }
 
   private _downsample(points: HistoryPoint[], maxPoints: number): HistoryPoint[] {
     if (points.length <= maxPoints) return points;
-    const step = (points.length - 1) / (maxPoints - 1);
-    return Array.from({ length: maxPoints }, (_, index) => points[Math.round(index * step)]);
+    if (maxPoints < 4) return [points[0], points[points.length - 1]].slice(0, maxPoints);
+
+    // Keep the minimum and maximum of every time bucket. This preserves short
+    // import/export peaks while still bounding the amount of SVG work.
+    const first = points[0];
+    const last = points[points.length - 1];
+    const interior = points.slice(1, -1);
+    const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
+    const sampled: HistoryPoint[] = [first];
+
+    for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+      const from = Math.floor(bucket * interior.length / bucketCount);
+      const to = Math.floor((bucket + 1) * interior.length / bucketCount);
+      const values = interior.slice(from, to);
+      if (!values.length) continue;
+      const minimum = values.reduce((best, point) => point.v < best.v ? point : best);
+      const maximum = values.reduce((best, point) => point.v > best.v ? point : best);
+      sampled.push(...(minimum.t <= maximum.t ? [minimum, maximum] : [maximum, minimum]));
+    }
+
+    sampled.push(last);
+    return sampled.filter((point, index, all) =>
+      index === 0 || point.t !== all[index - 1].t || point.v !== all[index - 1].v);
   }
 
   // The effective P1 meter: the one picked in Settings, or the only/first
@@ -991,7 +1074,6 @@ export class EnergyHub extends LitElement {
 
     const prices = today.map(row => row.consumer);
     const average = prices.reduce((total, price) => total + price, 0) / prices.length;
-    const sorted = [...prices].sort((a, b) => a - b);
     const lowestRow = today.reduce((best, row) => row.consumer < best.consumer ? row : best, today[0]);
     const highestRow = today.reduce((best, row) => row.consumer > best.consumer ? row : best, today[0]);
     const difference = current - average;
@@ -1017,8 +1099,6 @@ export class EnergyHub extends LitElement {
       average,
       difference,
       differencePercentage,
-      rank: sorted.filter(price => price < current).length + 1,
-      rankedHours: today.length,
       lowest: this._periodFromRow(lowestRow),
       highest: this._periodFromRow(highestRow),
       nextLower: validSummaryNext
@@ -1288,11 +1368,15 @@ export class EnergyHub extends LitElement {
     const belowAverage = insights.difference <= 0;
     const selectedDay = this._priceTab === 'tomorrow' && tomorrow.length ? 'Tomorrow' : 'Today';
     const cheapestBlock = this._cheapestPriceBlock(rows, this._cheapestHours);
+    const contractName = this._account?.contract?.name;
 
     return html`
       <section class="section">
         <div class="section-head">
-          <div class="section-title"><h2>Price outlook</h2><span>All-in consumer price</span></div>
+          <div class="section-title">
+            <h2>Price outlook</h2>
+            <span>${contractName ? `${contractName} - ` : ''}All-in consumer price</span>
+          </div>
           ${tomorrow.length ? html`
             <div class="seg" aria-label="Price day">
               <button class=${this._priceTab === 'today' ? 'on' : ''} @click=${() => { this._priceTab = 'today'; this._hoverBar = -1; }}>Today</button>
@@ -1304,7 +1388,6 @@ export class EnergyHub extends LitElement {
           <div class="price-summary">
             <div class="price-kicker">
               <span>Price now</span>
-              <span class="price-rank">${insights.rank} of ${insights.rankedHours}</span>
             </div>
             <div class="price-value">${this._formatPrice(insights.current)} <span>/kWh</span></div>
             <div class="price-state ${belowAverage ? 'good' : 'bad'}">
@@ -1362,11 +1445,82 @@ export class EnergyHub extends LitElement {
   }
 
   private _powerSeries(): PowerSeries[] {
-    return [
-      { id: this._netEntity(), label: 'Grid', color: '#4361ee' },
-      { id: this._sources.solar_power, label: 'Solar', color: '#d8890b' },
-      { id: this._sources.battery_power, label: 'Battery', color: '#159957' },
-    ].filter(series => series.id && (this._history[series.id]?.length || 0) > 1) as PowerSeries[];
+    const series: PowerSeries[] = [];
+    const now = Date.now();
+    const net = this._netEntity();
+    const grid = this._historyWithCurrent(net, net ? this._history[net] || [] : [], now);
+    if (grid.length > 1) {
+      series.push(
+        {
+          key: 'grid-import',
+          label: 'Grid import',
+          color: 'var(--shs-grid-import-color, #d34a4a)',
+          points: grid.map(point => ({ t: point.t, v: Math.max(0, point.v) })),
+        },
+        {
+          key: 'grid-export',
+          label: 'Grid export',
+          color: 'var(--shs-grid-export-color, #159957)',
+          points: grid.map(point => ({ t: point.t, v: Math.max(0, -point.v) })),
+          dash: '7 3',
+        },
+      );
+    }
+
+    const solar = this._sources.solar_power;
+    const solarPoints = this._historyWithCurrent(
+      solar,
+      solar ? this._history[solar] || [] : [],
+      now,
+      !!this._sources.solar_invert,
+    );
+    if (solar && solarPoints.length > 1) {
+      series.push({
+        key: 'solar',
+        label: 'Solar',
+        color: 'var(--shs-solar-color, #d8890b)',
+        points: solarPoints,
+      });
+    }
+
+    const battery = this._sources.battery_power;
+    const batteryPoints = this._historyWithCurrent(
+      battery,
+      battery ? this._history[battery] || [] : [],
+      now,
+      !!this._sources.battery_invert,
+    );
+    if (battery && batteryPoints.length > 1) {
+      series.push({
+        key: 'battery',
+        label: 'Battery',
+        color: 'var(--shs-battery-color, #4361ee)',
+        points: batteryPoints,
+      });
+    }
+
+    return series;
+  }
+
+  private _historyWithCurrent(
+    entityId: string | undefined,
+    points: HistoryPoint[],
+    now: number,
+    invert = false,
+  ): HistoryPoint[] {
+    const current = this._num(entityId, invert);
+    if (current === null) return points;
+
+    // Recorder only stores changes. Add the current state at one shared "now"
+    // timestamp so stable series still reach the right edge of the chart.
+    return [...points.filter(point => point.t < now), { t: now, v: current }];
+  }
+
+  private _togglePowerSeries(key: string): void {
+    this._hiddenPowerSeries = this._hiddenPowerSeries.includes(key)
+      ? this._hiddenPowerSeries.filter(item => item !== key)
+      : [...this._hiddenPowerSeries, key];
+    this._hoverPowerTime = undefined;
   }
 
   private _renderPowerSection(grid: number | null) {
@@ -1374,14 +1528,15 @@ export class EnergyHub extends LitElement {
     if (!series.length) return nothing;
     const net = this._netEntity();
     const gridHistory = net ? this._history[net] || [] : [];
-    const peakImport = gridHistory.length ? Math.max(0, ...gridHistory.map(point => point.v)) : 0;
-    const peakExport = gridHistory.length ? Math.abs(Math.min(0, ...gridHistory.map(point => point.v))) : 0;
+    const currentGrid = grid ?? 0;
+    const peakImport = gridHistory.length ? Math.max(0, currentGrid, ...gridHistory.map(point => point.v)) : Math.max(0, currentGrid);
+    const peakExport = gridHistory.length ? Math.abs(Math.min(0, currentGrid, ...gridHistory.map(point => point.v))) : Math.abs(Math.min(0, currentGrid));
     const gridLabel = grid === null ? 'Grid now' : grid < 0 ? 'Export now' : 'Import now';
 
     return html`
       <section class="section">
         <div class="section-head">
-          <div class="section-title"><h2>Power trend</h2><span>Last 2 hours</span></div>
+          <div class="section-title"><h2>Power trend</h2><span>Today</span></div>
         </div>
         <div class="surface power-surface">
           <div class="power-summary">
@@ -1464,13 +1619,36 @@ export class EnergyHub extends LitElement {
     return Math.abs(before - target) <= Math.abs(after - target) ? before : after;
   }
 
-  private _setPowerHover(event: PointerEvent, times: number[]): void {
+  private _setPowerHover(
+    event: PointerEvent,
+    times: number[],
+    minimumTime: number,
+    maximumTime: number,
+  ): void {
     const bounds = (event.currentTarget as SVGRectElement).getBoundingClientRect();
     if (bounds.width <= 0 || !times.length) return;
     const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
-    const target = times[0] + ratio * (times[times.length - 1] - times[0]);
+    const target = minimumTime + ratio * (maximumTime - minimumTime);
+    if (target < times[0] || target > times[times.length - 1]) {
+      this._hoverPowerTime = undefined;
+      return;
+    }
     const next = this._nearestPowerTime(times, target);
     if (next !== undefined && next !== this._hoverPowerTime) this._hoverPowerTime = next;
+  }
+
+  private _powerTimeTicks(minimumTime: number, maximumTime: number, width: number): number[] {
+    const desired = width < 430 ? 3 : width < 720 ? 4 : 5;
+    const roughStep = (maximumTime - minimumTime) / Math.max(1, desired - 1);
+    const steps = [1, 2, 3, 4, 6, 12, 24].map(hours => hours * 3600 * 1000);
+    const step = steps.find(candidate => candidate >= roughStep) || steps[steps.length - 1];
+    const ticks = [minimumTime];
+
+    for (let time = minimumTime + step; time < maximumTime - 60000; time += step) {
+      ticks.push(time);
+    }
+    if (maximumTime - ticks[ticks.length - 1] > 60000) ticks.push(maximumTime);
+    return ticks;
   }
 
   private _movePowerHover(event: KeyboardEvent, times: number[]): void {
@@ -1506,19 +1684,18 @@ export class EnergyHub extends LitElement {
     const right = width - 12;
     const top = 22;
     const bottom = height - 34;
-    const points = series.flatMap(item => this._history[item.id]);
-    const minimumTime = Math.min(...points.map(point => point.t));
-    const maximumTime = Math.max(...points.map(point => point.t));
-    const scale = this._powerScale(points.map(point => point.v));
+    const visibleSeries = series.filter(item => !this._hiddenPowerSeries.includes(item.key));
+    const points = visibleSeries.flatMap(item => item.points);
+    const minimumTime = this._todayStart();
+    const maximumTime = Math.max(Date.now(), minimumTime + 1);
+    const scale = this._powerScale(points.length ? points.map(point => point.v) : [0]);
     const maximumValue = scale.maximum;
     const minimumValue = scale.minimum;
     const range = Math.max(1, maximumValue - minimumValue);
     const x = (time: number) => maximumTime === minimumTime ? right : left + (time - minimumTime) / (maximumTime - minimumTime) * (right - left);
     const y = (value: number) => top + (maximumValue - value) / range * (bottom - top);
     const zeroY = y(0);
-    const timeTickCount = width < 430 ? 3 : width < 720 ? 4 : 5;
-    const timeTicks = Array.from({ length: timeTickCount }, (_, index) =>
-      minimumTime + (maximumTime - minimumTime) * index / (timeTickCount - 1));
+    const timeTicks = this._powerTimeTicks(minimumTime, maximumTime, width);
     const hoverTimes = [...new Set(points.map(point => point.t))].sort((a, b) => a - b);
     const hoverTime = this._hoverPowerTime === undefined
       ? undefined
@@ -1526,21 +1703,38 @@ export class EnergyHub extends LitElement {
     const hoverX = hoverTime === undefined ? undefined : x(hoverTime);
     const hoveredSeries = hoverTime === undefined
       ? []
-      : series.map(item => ({ item, point: this._nearestPowerPoint(this._history[item.id], hoverTime) }))
+      : visibleSeries.map(item => ({ item, point: this._nearestPowerPoint(item.points, hoverTime) }))
         .filter((entry): entry is { item: PowerSeries; point: HistoryPoint } => !!entry.point);
+    const hoverDescription = hoveredSeries.map(entry => {
+      const formatted = this._formatPower(entry.point.v);
+      return `${entry.item.label} ${formatted.value} ${formatted.unit}`;
+    }).join(', ');
 
     return html`
       <div class="chart">
-        <div class="chart-top">
+        <div class="chart-top power-chart-top">
           <div class="chart-title">Live power (W)</div>
-          <div class="chart-legend">${series.map(item => html`<span><i style="background:${item.color}"></i>${item.label}</span>`)}</div>
+          <div class="chart-legend power-chart-legend" role="group" aria-label="Power chart series">
+            ${series.map(item => {
+              const visible = !this._hiddenPowerSeries.includes(item.key);
+              return html`
+                <button
+                  type="button"
+                  class=${`power-legend-toggle${visible ? '' : ' off'}`}
+                  aria-pressed=${visible ? 'true' : 'false'}
+                  title=${`${visible ? 'Hide' : 'Show'} ${item.label}`}
+                  @click=${() => this._togglePowerSeries(item.key)}
+                ><i style="background:${item.color}"></i>${item.label}</button>
+              `;
+            })}
+          </div>
         </div>
         <svg
           class="power-chart-svg"
           viewBox="0 0 ${width} ${height}"
           style=${`height:${height}px`}
           role="group"
-          aria-label="Interactive power history for the last two hours"
+          aria-label="Interactive power history for today"
         >
           ${scale.ticks.map(tick => svg`
             <line class=${Math.abs(tick) < .01 ? 'zero' : 'grid'} x1=${left} y1=${y(tick)} x2=${right} y2=${y(tick)}></line>
@@ -1549,8 +1743,8 @@ export class EnergyHub extends LitElement {
           ${timeTicks.slice(1, -1).map(time => svg`
             <line class="grid time-grid" x1=${x(time)} y1=${top} x2=${x(time)} y2=${bottom}></line>
           `)}
-          ${series.map(item => {
-            const history = this._history[item.id];
+          ${visibleSeries.map(item => {
+            const history = item.points;
             const path = history
               .map((point, index) => `${index === 0 ? 'M' : 'L'}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`)
               .join(' ');
@@ -1559,26 +1753,44 @@ export class EnergyHub extends LitElement {
             const area = `${path} L${x(last.t).toFixed(1)},${zeroY.toFixed(1)} L${x(first.t).toFixed(1)},${zeroY.toFixed(1)} Z`;
             return svg`
               <path class="power-area" d=${area} fill=${item.color}></path>
-              <path class="power-line" d=${path} fill="none" stroke=${item.color} stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round"></path>
+              <path
+                class="power-line"
+                d=${path}
+                fill="none"
+                stroke=${item.color}
+                stroke-width="2.35"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-dasharray=${item.dash || nothing}
+              ></path>
               <circle class="power-endpoint" cx=${x(last.t)} cy=${y(last.v)} r="3" fill=${item.color} stroke="var(--card-background-color)" stroke-width="1.5"></circle>
             `;
           })}
           ${timeTicks.map((time, index) => svg`
             <text x=${x(time)} y=${height - 10} text-anchor=${index === 0 ? 'start' : index === timeTicks.length - 1 ? 'end' : 'middle'}>${this._time(time)}</text>
           `)}
+          ${visibleSeries.length ? nothing : svg`
+            <text class="power-tip-label" x=${(left + right) / 2} y=${(top + bottom) / 2} text-anchor="middle">
+              Select a series in the legend
+            </text>
+          `}
           <rect
             class="power-hit"
             x=${left}
             y=${top}
             width=${right - left}
             height=${bottom - top}
-            tabindex="0"
+            tabindex=${visibleSeries.length ? '0' : '-1'}
             role="img"
             aria-label=${hoverTime === undefined
-              ? 'Move over the chart or use the left and right arrow keys to inspect power values'
-              : `Power values at ${this._powerTime(hoverTime)}`}
-            @pointermove=${(event: PointerEvent) => this._setPowerHover(event, hoverTimes)}
-            @pointerdown=${(event: PointerEvent) => this._setPowerHover(event, hoverTimes)}
+              ? visibleSeries.length
+                ? 'Move over the chart or use the left and right arrow keys to inspect power values'
+                : 'No power series selected'
+              : `Power values at ${this._powerTime(hoverTime)}: ${hoverDescription}`}
+            @pointermove=${(event: PointerEvent) =>
+              this._setPowerHover(event, hoverTimes, minimumTime, maximumTime)}
+            @pointerdown=${(event: PointerEvent) =>
+              this._setPowerHover(event, hoverTimes, minimumTime, maximumTime)}
             @pointerleave=${() => { this._hoverPowerTime = undefined; }}
             @focus=${() => { if (this._hoverPowerTime === undefined) this._hoverPowerTime = hoverTimes[hoverTimes.length - 1]; }}
             @keydown=${(event: KeyboardEvent) => this._movePowerHover(event, hoverTimes)}
@@ -1625,12 +1837,9 @@ export class EnergyHub extends LitElement {
         ${entries.map((entry, index) => {
           const rowY = y + 36 + index * 20;
           const formatted = this._formatPower(entry.point.v);
-          const label = entry.item.label === 'Grid'
-            ? entry.point.v < 0 ? 'Grid export' : 'Grid import'
-            : entry.item.label;
           return svg`
             <circle cx=${x + 12} cy=${rowY - 3} r="3" fill=${entry.item.color}></circle>
-            <text class="power-tip-label" x=${x + 22} y=${rowY}>${label}</text>
+            <text class="power-tip-label" x=${x + 22} y=${rowY}>${entry.item.label}</text>
             <text class="power-tip-value" x=${x + width - 10} y=${rowY} text-anchor="end">${formatted.value} ${formatted.unit}</text>
           `;
         })}
@@ -2084,6 +2293,26 @@ export class EnergyHub extends LitElement {
               </shs-energy-sources>
             </div>
             <div class="dlg-sec ${this._settingsFocus === 'solar-control' ? 'focus' : ''}" data-sec="solar-control">
+              <div class="alpha-notice" role="note" aria-label="Smart Energy alpha notice">
+                <div class="alpha-icon"><ha-icon icon="mdi:flask-outline"></ha-icon></div>
+                <div class="alpha-copy">
+                  <div class="alpha-title">Smart Energy is in alpha</div>
+                  <div class="alpha-text">
+                    These features are still in active development. If you use or test them, join us on Discord.
+                    Tell us what you are setting up, what works, what does not, and share feedback to help shape the next release.
+                  </div>
+                  <a
+                    class="alpha-link"
+                    href="https://smarthomeshop.io/discord"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ha-icon icon="mdi:discord"></ha-icon>
+                    Join the SmartHomeShop Discord
+                    <ha-icon icon="mdi:open-in-new"></ha-icon>
+                  </a>
+                </div>
+              </div>
               <div class="p1-card">
                 <div class="p1-head">
                   <ha-icon icon="mdi:solar-power-variant-outline"></ha-icon>
@@ -2160,6 +2389,65 @@ export class EnergyHub extends LitElement {
 
   private _shortPower(watts: number): string {
     return Math.abs(watts) >= 1000 ? `${(watts / 1000).toFixed(1)}k` : String(Math.round(watts));
+  }
+
+  private _todayStart(): number {
+    const timeZone = this.hass.config?.time_zone;
+    if (!timeZone) {
+      const local = new Date();
+      local.setHours(0, 0, 0, 0);
+      return local.getTime();
+    }
+
+    try {
+      const dateFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+      const dateParts = Object.fromEntries(
+        dateFormatter.formatToParts(new Date())
+          .filter(part => part.type !== 'literal')
+          .map(part => [part.type, Number(part.value)]),
+      );
+      const targetWallTime = Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day);
+      const wallClockFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        hourCycle: 'h23',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      let timestamp = targetWallTime;
+
+      // Resolve the UTC instant whose wall-clock representation in the Home
+      // Assistant timezone is 00:00 today. A second pass handles DST offsets.
+      for (let pass = 0; pass < 2; pass += 1) {
+        const wallParts = Object.fromEntries(
+          wallClockFormatter.formatToParts(new Date(timestamp))
+            .filter(part => part.type !== 'literal')
+            .map(part => [part.type, Number(part.value)]),
+        );
+        const shownWallTime = Date.UTC(
+          wallParts.year,
+          wallParts.month - 1,
+          wallParts.day,
+          wallParts.hour,
+          wallParts.minute,
+          wallParts.second,
+        );
+        timestamp += targetWallTime - shownWallTime;
+      }
+      return timestamp;
+    } catch {
+      const local = new Date();
+      local.setHours(0, 0, 0, 0);
+      return local.getTime();
+    }
   }
 
   private _time(timestamp: number): string {
