@@ -3,13 +3,14 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 
 /**
- * Optional account connection for dynamic energy prices.
+ * Optional account connection for resolved energy contract prices.
  * The integration itself is fully local; this only pulls live spot prices
  * from the SmartHomeShop.io account API when a key is provided.
  */
 @customElement('shs-account-prices')
 export class AccountPrices extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
+  @property({ attribute: false }) public refreshToken = '';
   @state() private _account: any | null = null;
   @state() private _apiKeyInput = '';
   @state() private _baseUrlInput = '';
@@ -69,6 +70,7 @@ export class AccountPrices extends LitElement {
     .btn.ghost.danger { color: #ef4444; }
     .hint { font-size: 11.5px; color: var(--secondary-text-color); margin-top: 12px; line-height: 1.5; }
     .warn { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.3); border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 12px; color: var(--primary-text-color); line-height: 1.45; }
+    .notice { background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.32); border-radius: 8px; padding: 10px 12px; margin-top: 10px; font-size: 12px; color: var(--primary-text-color); line-height: 1.45; }
     .hint code { background: var(--secondary-background-color); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
     .linkbtn { margin-top: 10px; background: none; border: none; padding: 0; color: var(--shs-primary); font-size: 12px; font-family: inherit; cursor: pointer; }
     .linkbtn:hover { text-decoration: underline; }
@@ -79,6 +81,12 @@ export class AccountPrices extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     this._load();
+  }
+
+  protected updated(changed: Map<PropertyKey, unknown>): void {
+    if (changed.has('refreshToken') && changed.get('refreshToken') !== undefined) {
+      void this._load();
+    }
   }
 
   private async _callWS<T = any>(message: Record<string, unknown>, timeoutMs = 20000): Promise<T> {
@@ -329,9 +337,9 @@ export class AccountPrices extends LitElement {
     const status = a?.status || 'unconfigured';
     const cur = a?.current;
     const statusText: Record<string, string> = {
-      unconfigured: 'Connect once here to use live dynamic spot prices across SmartHomeShop Energy. The integration keeps working locally without an account.',
-      connecting: 'Checking your API key and loading dynamic energy prices...',
-      ok: 'Connected - live prices are being fetched.',
+      unconfigured: 'Connect once here to use your fixed, variable or dynamic energy contract across SmartHomeShop Energy. The integration keeps working locally without an account.',
+      connecting: 'Checking your API key and loading energy prices...',
+      ok: 'Connected - your contract prices are being fetched.',
       no_contract: 'Connected, but the selected location has no active energy contract yet, so there are no prices to show.',
       unauthorized: 'That API key is invalid or was revoked.',
       forbidden: 'The price service rejected this key. Create a new API token in your account.',
@@ -344,7 +352,7 @@ export class AccountPrices extends LitElement {
       <div class="card">
         <div class="head">
           <ha-icon icon="mdi:flash"></ha-icon>
-          <span class="head-title">Dynamic energy prices</span>
+          <span class="head-title">Energy contract & prices</span>
           <span class="optional">Optional</span>
         </div>
         <div class="body">
@@ -378,7 +386,7 @@ export class AccountPrices extends LitElement {
                 ${this._locations.map((loc) => html`
                   <option value=${String(loc.id)} ?selected=${String(a?.location_id) === String(loc.id) && !a?.contract_id}>
                     ${loc.name}${loc.active_contract
-                      ? ` · ${loc.active_contract.name}${loc.active_contract.provider ? ` (${loc.active_contract.provider})` : ''}`
+                      ? ` · ${loc.active_contract.name}${loc.active_contract.type ? ` · ${loc.active_contract.type}` : ''}${loc.active_contract.provider_details?.name ? ` (${loc.active_contract.provider_details.name})` : typeof loc.active_contract.provider === 'string' ? ` (${loc.active_contract.provider})` : ''}`
                       : ' · no active contract'}
                   </option>`)}
               </select>
@@ -403,7 +411,7 @@ export class AccountPrices extends LitElement {
                 <option value="" ?selected=${!a?.contract_id}>Active contract (automatic)</option>
                 ${this._contracts.map((c) => html`
                   <option value=${String(c.id)} ?selected=${String(a?.contract_id) === String(c.id)}>
-                    ${c.name}${c.supplier ? ` · ${c.supplier}` : ''}
+                    ${c.name}${c.type ? ` · ${c.type}` : ''}${c.provider_details?.name ? ` · ${c.provider_details.name}` : typeof c.supplier === 'string' ? ` · ${c.supplier}` : ''}
                   </option>`)}
               </select>
             </div>
@@ -425,13 +433,33 @@ export class AccountPrices extends LitElement {
 
           ${status === 'ok' && cur ? html`
             <div class="chips">
-              ${this._chip('Electricity now', html`€ ${(cur.electricity ?? 0).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.electricity)}
+              ${cur.electricity != null
+                ? this._chip('Electricity now', html`€ ${Number(cur.electricity).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.electricity)
+                : nothing}
+              ${a?.capabilities?.requires_tariff_selection ? html`
+                ${a?.tariffs?.electricity_t1 != null ? this._chip('Import T1', html`€ ${Number(a.tariffs.electricity_t1).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.import_t1) : nothing}
+                ${a?.tariffs?.electricity_t2 != null ? this._chip('Import T2', html`€ ${Number(a.tariffs.electricity_t2).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.import_t2) : nothing}
+                ${a?.tariffs?.feed_in_t1 != null ? this._chip('Feed-in T1', html`€ ${Number(a.tariffs.feed_in_t1).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.feed_in_t1) : nothing}
+                ${a?.tariffs?.feed_in_t2 != null ? this._chip('Feed-in T2', html`€ ${Number(a.tariffs.feed_in_t2).toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.feed_in_t2) : nothing}
+              ` : nothing}
               ${cur.level ? this._chip('Tariff level', html`<span style="text-transform: capitalize;">${String(cur.level).replace('_', ' ')}</span>`, a?.entities?.level) : nothing}
               ${cur.feed_in != null ? this._chip('Feed-in now', html`€ ${cur.feed_in.toFixed(3)} <span class="unit">/kWh</span>`, a?.entities?.feed_in) : nothing}
               ${cur.gas != null ? this._chip('Gas now', html`€ ${cur.gas.toFixed(3)} <span class="unit">/m³</span>`, a?.entities?.gas) : nothing}
-              ${a?.contract?.tariffs?.water > 0 ? this._chip('Water', html`€ ${Number(a.contract.tariffs.water).toFixed(4)} <span class="unit">/m³</span>`) : nothing}
+              ${cur.water != null ? this._chip('Water', html`€ ${Number(cur.water).toFixed(4)} <span class="unit">/m³</span>`, a?.entities?.water) : nothing}
+              ${a?.fixed_costs?.daily != null ? this._chip('Net fixed/day', html`€ ${Number(a.fixed_costs.daily).toFixed(3)} <span class="unit">/day</span>`, a?.entities?.fixed_daily) : nothing}
+              ${a?.fixed_costs?.yearly != null ? this._chip('Net fixed/year', html`€ ${Number(a.fixed_costs.yearly).toFixed(2)} <span class="unit">/year</span>`, a?.entities?.fixed_yearly) : nothing}
             </div>
-            ${a?.summary ? html`
+            ${a?.capabilities?.requires_tariff_selection ? html`
+              <div class="notice">
+                ${a?.capabilities?.tariff_entity
+                  ? html`The selected P1 meter's tariff indicator is currently unavailable or has an unknown value. T1 and T2 remain separate until a valid tariff is received.`
+                  : html`No electricity tariff indicator was found on the selected P1 meter. T1 and T2 remain separate; SmartHomeShop never guesses.`}
+              </div>
+            ` : nothing}
+            ${a?.capabilities?.is_fallback ? html`
+              <div class="warn">Quarter-hour prices are temporarily unavailable. The API is supplying hourly fallback prices; SmartHomeShop will switch back automatically.</div>
+            ` : nothing}
+            ${a?.capabilities?.price_optimisation && a?.summary ? html`
               <div class="summary-row">
                 ${a.summary.cheap_now != null ? html`
                   <span class="chip-tag ${a.summary.cheap_now ? 'good' : ''}">
@@ -448,9 +476,10 @@ export class AccountPrices extends LitElement {
             <div class="hint">
               Point the Home Assistant Energy Dashboard at
               <code>sensor.smarthomeshop_energy_prices_electricity_price</code>
-              ("use an entity with current price") for accurate dynamic cost tracking. There are
-              also sensors for the average/low/high price and the cheapest 1-6&nbsp;hour blocks,
-              plus a <code>binary_sensor...cheap_electricity_now</code> for easy automations.
+              ("use an entity with current price") for accurate cost tracking.
+              ${a?.capabilities?.price_optimisation
+                ? html`Average/low/high and cheapest-block sensors are available for smart automations.`
+                : html`This ${a?.contract?.type || 'fixed'} contract has no intraday price curve, so cheapest-hour automations and Smart Savings stay unavailable.`}
             </div>
           ` : nothing}
 
@@ -486,7 +515,7 @@ export class AccountPrices extends LitElement {
               ` : nothing}
             </div>
             <div class="hint">
-              Fixed prices are set above and are free. For live dynamic spot prices, create an
+              To load fixed, variable or dynamic contract prices, create an
               API key in your account at <b>smarthomeshop.io → Settings → API tokens</b>
               (free with any account) and paste it here.
             </div>

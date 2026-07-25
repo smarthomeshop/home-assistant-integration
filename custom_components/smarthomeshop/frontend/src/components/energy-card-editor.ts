@@ -2,7 +2,7 @@ import { css, html, LitElement, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
 
-type EnergyCardType = 'live' | 'price' | 'power' | 'savings' | 'automations';
+type EnergyCardType = 'live' | 'price' | 'power' | 'costs' | 'savings' | 'automations';
 
 @customElement('smarthomeshop-energy-card-editor')
 export class SmartHomeShopEnergyCardEditor extends LitElement {
@@ -130,6 +130,7 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
       live: 'Live energy',
       price: 'Price outlook',
       power: 'Power trend',
+      costs: 'Electricity costs',
       savings: 'Smart savings',
       automations: 'Smart automations',
     }[this.cardType];
@@ -175,6 +176,19 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
         ${this.toggle('show_grid_export', 'Grid export line', 'Power returned to the grid')}
         ${this.toggle('show_solar', 'Solar line', 'Solar production during the day')}
         ${this.toggle('show_battery', 'Battery line', 'Charging and discharging power')}
+      `;
+    }
+    if (this.cardType === 'costs') {
+      return html`
+        ${this.toggle('show_details', 'Import and return details', 'Show today’s kWh and value for both grid directions')}
+        ${this.toggle('show_prices', 'Average prices', 'Show the measured average import and return price per kWh')}
+        ${this.toggle(
+          'include_fixed_daily_cost',
+          'Include fixed daily cost',
+          'Add the full daily contract charge to today’s net electricity cost',
+          false,
+        )}
+        ${this.toggle('show_explanation', 'Calculation explanation', 'Explain the price source, coverage and contract charges')}
       `;
     }
     if (this.cardType === 'savings') {

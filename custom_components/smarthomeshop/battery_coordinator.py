@@ -133,6 +133,11 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         config = self._config()
         if not config.get("enabled"):
             return empty_plan("disabled", "Battery planning is disabled")
+        if not self.prices.supports_price_optimisation():
+            return empty_plan(
+                "not_ready",
+                "Battery price optimisation requires a dynamic energy contract",
+            )
         forecast = self.prices.forecast()
         starts = [str(item.get("start") or "") for item in forecast]
         soc = self._state_number(config.get("soc_sensor"))

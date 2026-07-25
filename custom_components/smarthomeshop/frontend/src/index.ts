@@ -29,6 +29,7 @@ import {
 import { SmartHomeShopEnergyLiveCard } from './components/energy-live-card';
 import { SmartHomeShopEnergyPriceCard } from './components/energy-price-card';
 import { SmartHomeShopEnergyPowerCard } from './components/energy-power-card';
+import { SmartHomeShopEnergyCostCard } from './components/energy-cost-card';
 import { SmartHomeShopEnergySavingsCard } from './components/energy-savings-card';
 import { SmartHomeShopEnergyAutomationsCard } from './components/energy-automations-card';
 import { SmartHomeShopEnergyCardEditor } from './components/energy-card-editor';
@@ -155,6 +156,7 @@ const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
   ['smarthomeshop-energy-live-card', SmartHomeShopEnergyLiveCard],
   ['smarthomeshop-energy-price-card', SmartHomeShopEnergyPriceCard],
   ['smarthomeshop-energy-power-card', SmartHomeShopEnergyPowerCard],
+  ['smarthomeshop-energy-cost-card', SmartHomeShopEnergyCostCard],
   ['smarthomeshop-energy-savings-card', SmartHomeShopEnergySavingsCard],
   ['smarthomeshop-water-card-editor', SmartHomeShopWaterCardEditor],
   ['smarthomeshop-waterp1-card-editor', SmartHomeShopWaterP1CardEditor],
@@ -282,6 +284,14 @@ window.customCards.push({
 });
 
 window.customCards.push({
+  type: 'smarthomeshop-energy-cost-card',
+  name: 'SmartHomeShop Energy Costs Card',
+  description: 'Today’s imported electricity cost, return value and net balance',
+  preview: true,
+  documentationURL: 'https://smarthomeshop.io',
+});
+
+window.customCards.push({
   type: 'smarthomeshop-energy-savings-card',
   name: 'SmartHomeShop Smart Savings Card',
   description: 'Measured savings from battery control and smart schedules',
@@ -313,6 +323,7 @@ export {
   SmartHomeShopEnergyLiveCard,
   SmartHomeShopEnergyPriceCard,
   SmartHomeShopEnergyPowerCard,
+  SmartHomeShopEnergyCostCard,
   SmartHomeShopEnergySavingsCard,
   SmartHomeShopEnergyAutomationsCard,
   SmartHomeShopEnergyCardEditor,

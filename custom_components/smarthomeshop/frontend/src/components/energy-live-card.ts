@@ -5,6 +5,8 @@ import {
   energyCardStyles,
   fireMoreInfo,
   formatPower,
+  gridPower,
+  isGridUnavailable,
   isEntityUnavailable,
   stateNumber,
   type BaseEnergyCardConfig,
@@ -237,7 +239,7 @@ export class SmartHomeShopEnergyLiveCard extends EnergyCardBase<EnergyLiveCardCo
     }
 
     const sources = this.context.sources;
-    const grid = stateNumber(this.hass, this.context.netEntity);
+    const grid = gridPower(this.hass, this.context);
     const solar = sources.solar_power
       ? Math.max(0, stateNumber(this.hass, sources.solar_power, !!sources.solar_invert) ?? 0)
       : 0;
@@ -245,7 +247,7 @@ export class SmartHomeShopEnergyLiveCard extends EnergyCardBase<EnergyLiveCardCo
       ? stateNumber(this.hass, sources.battery_power, !!sources.battery_invert)
       : null;
     const soc = stateNumber(this.hass, sources.battery_soc);
-    const contributorDead = isEntityUnavailable(this.hass, this.context.netEntity)
+    const contributorDead = isGridUnavailable(this.hass, this.context)
       || (!!sources.solar_power && isEntityUnavailable(this.hass, sources.solar_power))
       || (!!sources.battery_power && isEntityUnavailable(this.hass, sources.battery_power));
     const house = grid !== null && !contributorDead
@@ -262,7 +264,7 @@ export class SmartHomeShopEnergyLiveCard extends EnergyCardBase<EnergyLiveCardCo
       this.config.show_grid !== false
         ? this._row(
           this._t('Grid'),
-          this.context.netEntity,
+          this.context.netEntity || this.context.gridImportEntity || this.context.gridExportEntity,
           grid,
           grid !== null && grid < -5 ? 'mdi:transmission-tower-export' : 'mdi:transmission-tower-import',
           grid === null || Math.abs(grid) <= 5 ? '' : grid > 5 ? 'import' : 'export',

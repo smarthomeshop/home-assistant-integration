@@ -166,6 +166,27 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
         font-size: 10px; font-weight: 680; cursor: pointer;
       }
       .hours button.active { color: var(--primary-text-color); background: var(--shs-surface); }
+      .contract-overview {
+        padding: 18px;
+        display: grid;
+        gap: 14px;
+        border: 1px solid var(--shs-line);
+        border-radius: 14px;
+        background: var(--shs-surface);
+      }
+      .contract-banner { display: flex; align-items: center; gap: 12px; }
+      .contract-banner ha-icon {
+        width: 38px; height: 38px; padding: 9px; border-radius: 11px;
+        color: var(--shs-blue); background: var(--shs-blue-soft);
+      }
+      .contract-name { font-size: 15px; font-weight: 740; }
+      .contract-meta { margin-top: 3px; color: var(--secondary-text-color); font-size: 10.5px; }
+      .tariff-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); gap: 9px; }
+      .tariff { min-width: 0; padding: 12px; border-radius: 10px; background: var(--card-background-color); }
+      .tariff-label { color: var(--secondary-text-color); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+      .tariff-value { margin-top: 4px; font-size: 15px; font-weight: 740; }
+      .tariff-value span { color: var(--secondary-text-color); font-size: 9px; font-weight: 500; }
+      .contract-note { color: var(--secondary-text-color); font-size: 10.5px; line-height: 1.45; }
 
       @container (max-width: 690px) {
         .price-layout { grid-template-columns: 1fr; margin: 0 -14px; }
@@ -246,7 +267,7 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
     const now = Date.now();
     const currentRow = today.find((row) => {
       const start = Date.parse(row.start);
-      return start <= now && start + 3600000 > now;
+      return start <= now && this._rowEnd(row) > now;
     });
     const current = currentRow?.consumer ?? Number(this.context?.account?.current?.electricity);
     if (!Number.isFinite(current)) return null;
@@ -266,21 +287,42 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
       nextLower,
       feedIn: currentRow?.feed_in ?? Number(this.context?.account?.current?.feed_in),
       spread: highest.consumer - lowest.consumer,
-      negative: today.filter((row) => row.consumer < 0).length,
+      negative: today
+        .filter((row) => row.consumer < 0)
+        .reduce((sum, row) => sum + (this._rowEnd(row) - Date.parse(row.start)) / 3600000, 0),
     };
   }
 
+  private _rowEnd(row: PriceRow): number {
+    const explicit = row.end ? Date.parse(row.end) : Number.NaN;
+    if (Number.isFinite(explicit)) return explicit;
+    return Date.parse(row.start) + (row.resolution === 'quarter-hour' ? 900000 : 3600000);
+  }
+
   private _cheapest(rows: PriceRow[], hours: number) {
-    if (rows.length < hours) return null;
     const sorted = [...rows].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
     let result: { start: string; end: number; average: number } | null = null;
-    for (let index = 0; index + hours <= sorted.length; index += 1) {
-      const block = sorted.slice(index, index + hours);
-      const starts = block.map((row) => Date.parse(row.start));
-      if (!starts.slice(1).every((start, offset) => Math.abs(start - starts[offset] - 3600000) < 1000)) continue;
-      const average = block.reduce((sum, row) => sum + row.consumer, 0) / hours;
+    for (let index = 0; index < sorted.length; index += 1) {
+      const block: PriceRow[] = [];
+      const targetEnd = Date.parse(sorted[index].start) + hours * 3600000;
+      let cursor = Date.parse(sorted[index].start);
+      for (let offset = index; offset < sorted.length && cursor < targetEnd; offset += 1) {
+        const row = sorted[offset];
+        if (Math.abs(Date.parse(row.start) - cursor) >= 1000) break;
+        block.push(row);
+        cursor = this._rowEnd(row);
+      }
+      if (!block.length || Math.abs(cursor - targetEnd) >= 1000) continue;
+      const duration = block.reduce(
+        (sum, row) => sum + (this._rowEnd(row) - Date.parse(row.start)) / 3600000,
+        0,
+      );
+      const average = block.reduce(
+        (sum, row) => sum + row.consumer * ((this._rowEnd(row) - Date.parse(row.start)) / 3600000),
+        0,
+      ) / duration;
       if (!result || average < result.average) {
-        result = { start: block[0].start, end: starts[starts.length - 1] + 3600000, average };
+        result = { start: block[0].start, end: cursor, average };
       }
     }
     return result;
@@ -305,7 +347,7 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
     const now = Date.now();
     const nowIndex = rows.findIndex((row) => {
       const start = Date.parse(row.start);
-      return start <= now && start + 3600000 > now;
+      return start <= now && this._rowEnd(row) > now;
     });
     const color = (value: number) => {
       const ratio = maximum === minimum ? .5 : (value - minimum) / (maximum - minimum);
@@ -320,8 +362,8 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
       ? `${formatTime(rows[hover].start)} ${formatPrice(rows[hover].consumer)}/kWh`
       : '';
     const chartLabel = [
-      this._t('Hourly electricity prices'),
-      this._t('Use the left and right arrow keys to inspect each hour.'),
+      this._t(rows[0]?.resolution === 'quarter-hour' ? 'Quarter-hour electricity prices' : 'Hourly electricity prices'),
+      this._t('Use the left and right arrow keys to inspect each price period.'),
       selected,
     ].filter(Boolean).join(' ');
 
@@ -365,7 +407,7 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
       </svg>
       <div class="sr-only" aria-live="polite">${selected}</div>
       <table class="sr-only">
-        <caption>${this._t('Hourly electricity prices')}</caption>
+        <caption>${this._t(rows[0]?.resolution === 'quarter-hour' ? 'Quarter-hour electricity prices' : 'Hourly electricity prices')}</caption>
         <tbody>
           ${rows.map(row => html`<tr><th>${formatTime(row.start)}</th><td>${formatPrice(row.consumer)}/kWh</td></tr>`)}
         </tbody>
@@ -398,6 +440,85 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
     `;
   }
 
+  private _renderContractOverview() {
+    const account = this.context?.account || {};
+    const contract = account.contract || {};
+    const tariffs = account.tariffs || {};
+    const current = account.current || {};
+    const fixed = account.fixed_costs || {};
+    const type = String(contract.type || 'fixed');
+    let values: Array<[string, unknown, string]> = account.capabilities?.requires_tariff_selection
+      ? [
+        ['Import T1', tariffs.electricity_t1, '/kWh'],
+        ['Import T2', tariffs.electricity_t2, '/kWh'],
+        ['Feed-in T1', tariffs.feed_in_t1, '/kWh'],
+        ['Feed-in T2', tariffs.feed_in_t2, '/kWh'],
+      ]
+      : [
+        ['Import now', current.electricity, '/kWh'],
+        ['Feed-in now', current.feed_in, '/kWh'],
+      ];
+    if (!values.some(([, value]) => Number.isFinite(Number(value)))) {
+      const labels: Record<string, string> = {
+        electricity_t1: 'Import T1',
+        electricity_t2: 'Import T2',
+        electricity_single: 'Import',
+        feed_in_t1: 'Feed-in T1',
+        feed_in_t2: 'Feed-in T2',
+        feed_in_single: 'Feed-in',
+        feed_in: 'Feed-in',
+      };
+      values = Object.entries(tariffs)
+        .filter(([key, value]) =>
+          (key.startsWith('electricity_') || key.startsWith('feed_in'))
+          && Number.isFinite(Number(value)))
+        .map(([key, value]) => [labels[key] || key.split('_').join(' '), value, '/kWh']);
+    }
+    values.push(
+      ['Gas', current.gas ?? tariffs.gas, '/m³'],
+      ['Water', current.water ?? tariffs.water, '/m³'],
+      ['Fixed cost/day', fixed.daily, '/day'],
+      ['Fixed cost/year', fixed.yearly, '/year'],
+    );
+    return html`
+      <ha-card>
+        <div class="card-shell">
+          ${this.renderHeader(
+            this._t('Energy prices'),
+            `${contract.name || this._t('Energy contract')} · ${type.charAt(0).toUpperCase()}${type.slice(1)}`,
+            'mdi:file-document-outline',
+          ) ? html`
+            <div class="card-head">
+              <div class="head-main">
+                <div class="head-icon"><ha-icon icon="mdi:file-document-outline"></ha-icon></div>
+                <div><h2 class="head-title">${this._t('Energy prices')}</h2><div class="head-subtitle">${contract.name || this._t('Energy contract')}</div></div>
+              </div>
+            </div>` : nothing}
+          <div class="contract-overview">
+            <div class="contract-banner">
+              <ha-icon icon="mdi:receipt-text-outline"></ha-icon>
+              <div><div class="contract-name">${contract.provider_details?.name || contract.provider || contract.supplier || contract.name}</div>
+              <div class="contract-meta">${type.charAt(0).toUpperCase()}${type.slice(1)} contract${contract.product ? ` · ${contract.product}` : ''}</div></div>
+            </div>
+            <div class="tariff-grid">
+              ${values
+                .filter(([, value]) => Number.isFinite(Number(value)))
+                .map(([label, value, unit]) => html`
+                  <div class="tariff"><div class="tariff-label">${label}</div>
+                  <div class="tariff-value">${formatPrice(Number(value))}<span>${unit}</span></div></div>
+                `)}
+            </div>
+            <div class="contract-note">
+              ${account.capabilities?.requires_tariff_selection
+                ? this._t('The active T1/T2 tariff is unknown. Both tariffs are shown separately; SmartHomeShop never guesses.')
+                : this._t('This contract has no changing intraday price curve, so cheapest-hour controls and price optimisation are not shown.')}
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
   protected render() {
     if (!this.hass) return nothing;
     if (this.loading && !this.context) {
@@ -405,14 +526,28 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
     }
     const today = priceRows(this.hass, this.context, 'today');
     const tomorrow = priceRows(this.hass, this.context, 'tomorrow');
+    if (
+      this.context?.account?.status === 'ok'
+      && this.context.account?.capabilities?.price_optimisation === false
+    ) {
+      return this._renderContractOverview();
+    }
     if (!today.length && !tomorrow.length) {
       const noContract = this.context?.account?.status === 'no_contract';
+      const activeDynamic = this.context?.account?.status === 'ok'
+        && this.context?.account?.contract?.type === 'dynamic';
       return html`
         <ha-card>
           <div class="empty" role="status">
             <ha-icon icon=${noContract ? 'mdi:file-document-alert-outline' : 'mdi:chart-timeline-variant-shimmer'}></ha-icon>
-            <strong>${this._t(noContract ? 'No active energy contract' : 'No price forecast yet')}</strong>
-            <span>${this._t(noContract ? 'Select an active SmartHomeShop energy contract in Energy Settings.' : 'Connect dynamic prices in SmartHomeShop Energy Settings.')}</span>
+            <strong>${this._t(noContract
+              ? 'No active energy contract'
+              : activeDynamic ? 'Price data is being fetched' : 'No contract prices available')}</strong>
+            <span>${this._t(noContract
+              ? 'Select an active SmartHomeShop energy contract in Energy Settings.'
+              : activeDynamic
+                ? 'Your dynamic contract is active. Daily prices appear here as soon as confirmed prices or a forecast is available.'
+                : 'Check the selected contract in SmartHomeShop Energy Settings.')}</span>
           </div>
         </ha-card>
       `;
@@ -427,13 +562,22 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
     const rows = day === 'tomorrow' ? tomorrow : today;
     const insights = this._insights(today, tomorrow);
     if (!rows.length || !insights) return nothing;
+    const predicted = rows.every((row) => row.kind === 'predicted');
+    const confidenceValues = rows
+      .map((row) => row.confidence)
+      .filter((value): value is number => Number.isFinite(value));
+    const confidence = confidenceValues.length
+      ? confidenceValues.reduce((total, value) => total + value, 0) / confidenceValues.length
+      : null;
     const below = insights.difference <= 0;
     const hours = Math.max(1, Math.min(6, Number(this.config.cheapest_hours || 3)));
     const cheapest = this._cheapest(rows, hours);
     const contractName = this.context?.account?.contract?.name;
     const header = this.renderHeader(
       this._t('Price outlook'),
-      contractName ? `${contractName} · ${this._t('all-in price')}` : this._t('All-in consumer price'),
+      contractName
+        ? `${contractName} · ${this._t(predicted ? 'Predicted all-in price' : 'all-in price')}`
+        : this._t(predicted ? 'Predicted all-in consumer price' : 'All-in consumer price'),
       'mdi:chart-bar',
     );
 
@@ -460,11 +604,18 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
           <div class="price-layout">
             <button class="summary" type="button" aria-label=${this._t('Open price entity details')}
               @click=${() => fireMoreInfo(this, this.context?.priceEntity)}>
-              <div class="summary-label">${this._t(day === 'tomorrow' ? 'Current price' : 'Price now')}</div>
+              <div class="summary-label">${this._t(predicted
+                ? (day === 'tomorrow' ? 'Estimated price' : 'Estimated price now')
+                : (day === 'tomorrow' ? 'Current price' : 'Price now'))}</div>
               <div class="summary-price">${formatPrice(insights.current)}<span>/kWh</span></div>
               <div class="price-state ${below ? '' : 'high'}">
-                <ha-icon icon=${below ? 'mdi:trending-down' : 'mdi:trending-up'}></ha-icon>
-                ${insights.percentage === null
+                <ha-icon icon=${predicted ? 'mdi:chart-timeline-variant-shimmer' : (below ? 'mdi:trending-down' : 'mdi:trending-up')}></ha-icon>
+                ${predicted
+                  ? this._t(
+                    confidence === null ? 'Forecast · not used for automation' : 'Forecast · {value}% confidence',
+                    { value: confidence === null ? '' : Math.round(confidence * 100) },
+                  )
+                  : insights.percentage === null
                   ? this._t(below ? 'Below daily average' : 'Above daily average')
                   : this._t(below ? '{value}% below average' : '{value}% above average', {
                     value: Math.abs(insights.percentage).toFixed(0),
@@ -472,8 +623,8 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
               </div>
               ${this.config.show_facts !== false ? html`
                 <div class="facts">
-                  <div class="fact"><div class="fact-label">${this._t('Daily average')}</div><div class="fact-value">${formatPrice(insights.average)}</div></div>
-                  <div class="fact"><div class="fact-label">${this._t('Feed-in now')}</div><div class="fact-value">${formatPrice(insights.feedIn)}</div></div>
+                  <div class="fact"><div class="fact-label">${this._t(predicted ? 'Forecast average' : 'Daily average')}</div><div class="fact-value">${formatPrice(insights.average)}</div></div>
+                  <div class="fact"><div class="fact-label">${this._t(predicted ? 'Estimated feed-in now' : 'Feed-in now')}</div><div class="fact-value">${formatPrice(insights.feedIn)}</div></div>
                   <div class="fact"><div class="fact-label">${this._t('Next lower')}</div><div class="fact-value">${insights.nextLower
                     ? this._t('{time}, save {price}', { time: formatTime(insights.nextLower.start), price: formatPrice(insights.current - insights.nextLower.consumer) })
                     : this._t('None today')}</div></div>
@@ -487,7 +638,12 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
             </button>
             <div class="chart-column">
               <div class="chart-heading">
-                <div class="chart-title">${this._t('{day} by hour (EUR/kWh)', { day: this._t(day === 'tomorrow' ? 'Tomorrow' : 'Today') })}</div>
+                <div class="chart-title">${this._t(
+                  rows[0]?.resolution === 'quarter-hour'
+                    ? (predicted ? '{day} forecast by quarter hour (EUR/kWh)' : '{day} by quarter hour (EUR/kWh)')
+                    : (predicted ? '{day} forecast by hour (EUR/kWh)' : '{day} by hour (EUR/kWh)'),
+                  { day: this._t(day === 'tomorrow' ? 'Tomorrow' : 'Today') },
+                )}</div>
                 <div class="legend"><span><i style="background:#159957"></i>${this._t('Lower')}</span><span><i style="background:#d34a4a"></i>${this._t('Higher')}</span></div>
               </div>
               <div class="chart-host">${this._chart(rows)}</div>
@@ -497,7 +653,10 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
           ${this.config.show_cheapest_block !== false ? html`
             <div class="cheapest">
               <div>
-                <div class="cheapest-label">${this._t('Cheapest consecutive block · {day}', { day: this._t(day === 'tomorrow' ? 'Tomorrow' : 'Today') })}</div>
+                <div class="cheapest-label">${this._t(
+                  predicted ? 'Cheapest predicted block · {day}' : 'Cheapest consecutive block · {day}',
+                  { day: this._t(day === 'tomorrow' ? 'Tomorrow' : 'Today') },
+                )}</div>
                 <div class="cheapest-value">
                   ${cheapest
                     ? html`${formatTime(cheapest.start)}–${formatTime(cheapest.end)}<span>${this._t('{price}/kWh average', { price: formatPrice(cheapest.average) })}</span>`

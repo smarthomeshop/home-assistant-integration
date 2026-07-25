@@ -13,9 +13,13 @@ export interface EnergySources {
 
 export interface PriceRow {
   start: string;
+  end?: string;
+  resolution?: 'hour' | 'quarter-hour';
   market?: number;
   consumer: number;
   feed_in?: number;
+  kind?: 'confirmed' | 'predicted';
+  confidence?: number;
 }
 
 export interface HistoryPoint {
@@ -26,13 +30,27 @@ export interface HistoryPoint {
   end?: number;
 }
 
+export interface DailyElectricityCost {
+  importedKwh: number;
+  exportedKwh: number;
+  importCost: number;
+  exportValue: number;
+  netCost: number;
+  averageImportPrice: number | null;
+  averageExportPrice: number | null;
+  coverage: number;
+  predictedPrices: boolean;
+}
+
 export interface EnergyContext {
   sources: EnergySources;
   netEntity?: string;
+  gridImportEntity?: string;
+  gridExportEntity?: string;
   priceEntity?: string;
   priceEntities: Record<string, string | null>;
   account: Record<string, any>;
-  savings: Record<string, number>;
+  savings: Record<string, any>;
 }
 
 export interface BaseEnergyCardConfig {
@@ -80,18 +98,28 @@ const callWS = async <T>(
   }
 };
 
-const resolveNetEntity = (hass: HomeAssistant, sources: EnergySources): string | undefined => {
+const resolveGridEntities = (
+  hass: HomeAssistant,
+  sources: EnergySources,
+): Pick<EnergyContext, 'netEntity' | 'gridImportEntity' | 'gridExportEntity'> => {
   const entries = Object.values(hass.entities || {});
   const selected = sources.p1_device
-    ? entries.find((entry) =>
-      entry.device_id === sources.p1_device
-      && entry.entity_id.startsWith('sensor.')
-      && entry.entity_id.includes('_net_grid_power'))
-    : undefined;
-  if (selected) return selected.entity_id;
+    ? entries.filter((entry) =>
+      entry.device_id === sources.p1_device && entry.entity_id.startsWith('sensor.'))
+    : [];
+  const netEntity = selected.find((entry) => entry.entity_id.includes('_net_grid_power'))?.entity_id;
+  const gridImportEntity = selected.find((entry) => entry.entity_id.endsWith('_power_consumed'))?.entity_id;
+  const gridExportEntity = selected.find((entry) => entry.entity_id.endsWith('_power_produced'))?.entity_id;
+  if (netEntity || gridImportEntity || gridExportEntity) {
+    return { netEntity, gridImportEntity, gridExportEntity };
+  }
 
-  return Object.keys(hass.states || {})
-    .find((entityId) => entityId.startsWith('sensor.') && entityId.includes('_net_grid_power'));
+  return {
+    netEntity: Object.keys(hass.states || {})
+      .find((entityId) => entityId.startsWith('sensor.') && entityId.includes('_net_grid_power')),
+    gridImportEntity: undefined,
+    gridExportEntity: undefined,
+  };
 };
 
 export const loadEnergyContext = async (
@@ -100,9 +128,10 @@ export const loadEnergyContext = async (
 ): Promise<EnergyContext> => {
   const fresh = contextCache && Date.now() - contextCache.loadedAt < 30000;
   if (!force && fresh) {
+    const grid = resolveGridEntities(hass, contextCache!.value.sources);
     return {
       ...contextCache!.value,
-      netEntity: resolveNetEntity(hass, contextCache!.value.sources),
+      ...grid,
     };
   }
   // A forced refresh may bypass the cache, but never an identical request that
@@ -115,13 +144,14 @@ export const loadEnergyContext = async (
       callWS<{ sources: EnergySources }>(hass, { type: 'smarthomeshop/energy_sources' }),
       callWS<{ entities: Record<string, string | null> }>(hass, { type: 'smarthomeshop/prices/entities' }),
       callWS<Record<string, any>>(hass, { type: 'smarthomeshop/account' }, 12000),
-      callWS<{ savings: Record<string, number> }>(hass, { type: 'smarthomeshop/savings' }),
+      callWS<{ savings: Record<string, any> }>(hass, { type: 'smarthomeshop/savings' }),
     ]);
 
     const sources = sourcesResult.status === 'fulfilled' ? sourcesResult.value.sources || {} : {};
+    const grid = resolveGridEntities(hass, sources);
     const value: EnergyContext = {
       sources,
-      netEntity: resolveNetEntity(hass, sources),
+      ...grid,
       priceEntity: pricesResult.status === 'fulfilled'
         ? pricesResult.value.entities?.electricity_price || undefined
         : undefined,
@@ -146,6 +176,8 @@ export const loadPowerHistory = async (
 ): Promise<Record<string, HistoryPoint[]>> => {
   const ids = [
     context.netEntity,
+    context.gridImportEntity,
+    context.gridExportEntity,
     context.sources.solar_power,
     context.sources.battery_power,
   ].filter(Boolean) as string[];
@@ -304,6 +336,73 @@ export const isEntityUnavailable = (hass: HomeAssistant, entityId?: string): boo
   return !state || state.state === 'unknown' || state.state === 'unavailable';
 };
 
+export const gridPower = (
+  hass: HomeAssistant,
+  context: EnergyContext | undefined,
+): number | null => {
+  if (!context) return null;
+  const net = stateNumber(hass, context.netEntity);
+  if (net !== null) return net;
+  const imported = stateNumber(hass, context.gridImportEntity);
+  const exported = stateNumber(hass, context.gridExportEntity);
+  if ((context.gridImportEntity && imported === null)
+    || (context.gridExportEntity && exported === null)) return null;
+  if (imported === null && exported === null) return null;
+  return (imported ?? 0) - (exported ?? 0);
+};
+
+export const isGridUnavailable = (
+  hass: HomeAssistant,
+  context: EnergyContext | undefined,
+): boolean => {
+  if (!context) return false;
+  if (context.netEntity && !isEntityUnavailable(hass, context.netEntity)) return false;
+  const rawIds = [context.gridImportEntity, context.gridExportEntity].filter(Boolean) as string[];
+  if (rawIds.length) return rawIds.some((entityId) => isEntityUnavailable(hass, entityId));
+  return !!context.netEntity && isEntityUnavailable(hass, context.netEntity);
+};
+
+export const gridHistory = (
+  context: EnergyContext | undefined,
+  history: Record<string, HistoryPoint[]>,
+): HistoryPoint[] => {
+  if (!context) return [];
+  const imported = context.gridImportEntity ? history[context.gridImportEntity] || [] : [];
+  const exported = context.gridExportEntity ? history[context.gridExportEntity] || [] : [];
+  const net = context.netEntity ? history[context.netEntity] || [] : [];
+  // Raw import/export entities often have a full Recorder history while the
+  // integration's combined helper may only exist since the last restart.
+  // Prefer the raw pair once it contains a useful series, otherwise fall back
+  // to the signed helper.
+  if (imported.length + exported.length < 2) return net;
+
+  const timestamps = [...new Set([
+    ...imported.map((point) => point.t),
+    ...exported.map((point) => point.t),
+  ])].sort((a, b) => a - b);
+  let importIndex = 0;
+  let exportIndex = 0;
+  let importPoint: HistoryPoint | undefined;
+  let exportPoint: HistoryPoint | undefined;
+  return timestamps.map((timestamp) => {
+    while (importIndex < imported.length && imported[importIndex].t <= timestamp) {
+      importPoint = imported[importIndex++];
+    }
+    while (exportIndex < exported.length && exported[exportIndex].t <= timestamp) {
+      exportPoint = exported[exportIndex++];
+    }
+    const importedValue = importPoint?.v ?? 0;
+    const exportedValue = exportPoint?.v ?? 0;
+    return {
+      t: timestamp,
+      end: Math.max(importPoint?.end ?? timestamp, exportPoint?.end ?? timestamp),
+      v: importedValue - exportedValue,
+      min: (importPoint?.min ?? importedValue) - (exportPoint?.max ?? exportedValue),
+      max: (importPoint?.max ?? importedValue) - (exportPoint?.min ?? exportedValue),
+    };
+  });
+};
+
 export const formatPower = (
   watts: number | null,
   absolute = false,
@@ -336,17 +435,127 @@ export const priceRows = (
   const attributes = context?.priceEntity
     ? hass.states[context.priceEntity]?.attributes
     : undefined;
-  const rows = day === 'today' ? attributes?.prices_today : attributes?.prices_tomorrow;
-  return Array.isArray(rows)
-    ? rows.filter((row: any) =>
+  const confirmed = day === 'today' ? attributes?.prices_today : attributes?.prices_tomorrow;
+  const rows = Array.isArray(confirmed) && confirmed.length
+    ? confirmed
+    : (Array.isArray(attributes?.forecast)
+      ? attributes.forecast.filter((row: any) => {
+        if (!row || typeof row.start !== 'string') return false;
+        const target = new Date();
+        if (day === 'tomorrow') target.setDate(target.getDate() + 1);
+        const start = new Date(row.start);
+        return Number.isFinite(start.getTime())
+          && start.getFullYear() === target.getFullYear()
+          && start.getMonth() === target.getMonth()
+          && start.getDate() === target.getDate();
+      })
+      : []);
+  return rows
+    .filter((row: any) =>
       row && typeof row.start === 'string' && Number.isFinite(Number(row.consumer)))
-      .map((row: any) => ({
+    .map((row: any) => ({
         start: row.start,
+        end: typeof row.end === 'string' ? row.end : undefined,
+        resolution: row.resolution === 'quarter-hour' ? 'quarter-hour' : 'hour',
         market: Number.isFinite(Number(row.market)) ? Number(row.market) : undefined,
         consumer: Number(row.consumer),
         feed_in: Number.isFinite(Number(row.feed_in)) ? Number(row.feed_in) : undefined,
-      }))
-    : [];
+        kind: row.kind === 'predicted' ? 'predicted' : 'confirmed',
+        confidence: Number.isFinite(Number(row.confidence))
+          ? Math.max(0, Math.min(1, Number(row.confidence)))
+          : undefined,
+      }));
+};
+
+const priceRowEnd = (row: PriceRow): number => {
+  const explicit = row.end ? Date.parse(row.end) : Number.NaN;
+  if (Number.isFinite(explicit)) return explicit;
+  return Date.parse(row.start) + (row.resolution === 'quarter-hour' ? 900000 : 3600000);
+};
+
+export const calculateDailyElectricityCost = (
+  hass: HomeAssistant,
+  context: EnergyContext | undefined,
+  history: Record<string, HistoryPoint[]>,
+): DailyElectricityCost | null => {
+  if (!context) return null;
+  const now = Date.now();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const current = gridPower(hass, context);
+  const recorded = gridHistory(context, history);
+  const points = [
+    ...recorded.filter((point) => point.t < now),
+    ...(current === null ? [] : [{ t: now, end: now, v: current, min: current, max: current }]),
+  ]
+    .filter((point) => point.t <= now && (point.end ?? point.t) >= startOfDay.getTime())
+    .sort((first, second) => first.t - second.t);
+  if (points.length < 2) return null;
+
+  const contractType = String(context.account?.contract?.type || '').toLowerCase();
+  const dynamic = contractType === 'dynamic';
+  const rows = dynamic ? priceRows(hass, context, 'today') : [];
+  const staticImportPrice = Number(context.account?.current?.electricity);
+  const staticExportPrice = Number(context.account?.current?.feed_in);
+
+  let importedKwh = 0;
+  let exportedKwh = 0;
+  let importCost = 0;
+  let exportValue = 0;
+  let pricedKwh = 0;
+  let measuredKwh = 0;
+
+  const pricesAt = (timestamp: number): { imported: number; exported: number } => {
+    if (!dynamic) return { imported: staticImportPrice, exported: staticExportPrice };
+    const row = rows.find((item) => {
+      const start = Date.parse(item.start);
+      return Number.isFinite(start) && start <= timestamp && priceRowEnd(item) > timestamp;
+    });
+    return {
+      imported: Number(row?.consumer),
+      exported: Number(row?.feed_in ?? context.account?.current?.feed_in),
+    };
+  };
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const point = points[index];
+    const next = points[index + 1];
+    const segmentStart = Math.max(startOfDay.getTime(), point.t);
+    const segmentEnd = Math.min(now, point.end ?? next.t, next.t);
+    if (!Number.isFinite(point.v) || segmentEnd <= segmentStart) continue;
+
+    const energyKwh = Math.abs(point.v) / 1000 * ((segmentEnd - segmentStart) / 3600000);
+    if (!Number.isFinite(energyKwh)) continue;
+    measuredKwh += energyKwh;
+    const prices = pricesAt(segmentStart + (segmentEnd - segmentStart) / 2);
+
+    if (point.v >= 0) {
+      importedKwh += energyKwh;
+      if (Number.isFinite(prices.imported)) {
+        importCost += energyKwh * prices.imported;
+        pricedKwh += energyKwh;
+      }
+    } else {
+      exportedKwh += energyKwh;
+      if (Number.isFinite(prices.exported)) {
+        exportValue += energyKwh * prices.exported;
+        pricedKwh += energyKwh;
+      }
+    }
+  }
+
+  if (importedKwh === 0 && exportedKwh === 0) return null;
+  return {
+    importedKwh,
+    exportedKwh,
+    importCost,
+    exportValue,
+    netCost: importCost - exportValue,
+    averageImportPrice: importedKwh > 0 ? importCost / importedKwh : null,
+    averageExportPrice: exportedKwh > 0 ? exportValue / exportedKwh : null,
+    coverage: measuredKwh > 0 ? Math.max(0, Math.min(1, pricedKwh / measuredKwh)) : 1,
+    predictedPrices: dynamic && rows.length > 0 && rows.every((row) => row.kind === 'predicted'),
+  };
 };
 
 export const fireMoreInfo = (element: HTMLElement, entityId?: string): void => {

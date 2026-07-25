@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
@@ -43,10 +44,19 @@ async def load_plugins(hass: HomeAssistant, name: str) -> None:
 
     # Add the main JavaScript file to the frontend
     # The version parameter is used for cache busting
-    add_extra_js_url(hass, f"{FRONTEND_URL_BASE}/smarthomeshop-cards.js?v={VERSION}")
+    frontend_file = Path(
+        hass.config.path(f"custom_components/{name}/www/smarthomeshop-cards.js")
+    )
+    build_token = frontend_file.stat().st_mtime_ns if frontend_file.exists() else 0
+    add_extra_js_url(
+        hass,
+        (
+            f"{FRONTEND_URL_BASE}/smarthomeshop-cards.js"
+            f"?v={VERSION}&build={build_token}"
+        ),
+    )
 
     _LOGGER.info("SmartHomeShop.io frontend plugins registered at %s/", FRONTEND_URL_BASE)
-
 
 
 

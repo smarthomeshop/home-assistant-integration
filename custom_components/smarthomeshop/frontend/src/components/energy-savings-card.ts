@@ -200,6 +200,17 @@ export class SmartHomeShopEnergySavingsCard extends EnergyCardBase<EnergySavings
         </ha-card>
       `;
     }
+    if (this.context?.savings?.supported === false) {
+      return html`
+        <ha-card>
+          <div class="empty" role="status">
+            <ha-icon icon="mdi:piggy-bank-outline"></ha-icon>
+            <strong>${t('Smart Savings requires dynamic prices')}</strong>
+            <span>${t('Your fixed or variable contract is connected correctly. Savings from shifting usage can only be measured when prices change during the day.')}</span>
+          </div>
+        </ha-card>
+      `;
+    }
 
     const savings = this.context?.savings || {};
     const today = Number(savings.today_eur || 0);

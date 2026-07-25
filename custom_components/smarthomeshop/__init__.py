@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from homeassistant.const import Platform
 from homeassistant.config_entries import ConfigEntry
@@ -165,13 +166,18 @@ async def async_register_panel(hass: HomeAssistant) -> None:
         frontend.async_remove_panel(hass, DOMAIN)
 
     # Register the panel
+    panel_file = Path(panel_path) / "smarthomeshop-panel.js"
+    build_token = panel_file.stat().st_mtime_ns if panel_file.exists() else 0
     await panel_custom.async_register_panel(
         hass=hass,
         frontend_url_path=DOMAIN,
         webcomponent_name=PANEL_NAME,
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{PANEL_URL}/smarthomeshop-panel.js?v={VERSION}",
+        module_url=(
+            f"{PANEL_URL}/smarthomeshop-panel.js"
+            f"?v={VERSION}&build={build_token}"
+        ),
         embed_iframe=False,
         require_admin=False,
         config={"version": VERSION},
@@ -259,6 +265,11 @@ async def async_setup_entry(
 
     # Apply option changes (prices, leak settings, fuse, …) without a restart.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    if product_type in (PRODUCT_P1METERKIT, PRODUCT_WATERP1METERKIT):
+        prices = hass.data.get(DOMAIN, {}).get("prices")
+        if prices is not None:
+            prices.async_refresh_tariff_source()
 
     LOGGER.info("SmartHomeShop.io integration setup complete for %s", entry.title)
     return True

@@ -62,6 +62,8 @@ class SavingsTracker:
         day_ok = self._data.get("day_date") == now.date().isoformat()
         month_ok = self._data.get("month_key") == now.strftime("%Y-%m")
         return {
+            "supported": self._prices.supports_price_optimisation(),
+            "contract_type": self._prices.contract_type(),
             "today_eur": round(self._data.get("day_eur", 0.0), 4) if day_ok else 0.0,
             "today_battery_eur": round(self._data.get("day_battery_eur", 0.0), 4) if day_ok else 0.0,
             "today_schedule_eur": round(self._data.get("day_schedule_eur", 0.0), 4) if day_ok else 0.0,
@@ -79,6 +81,8 @@ class SavingsTracker:
         self._load()
         store = self._store()
         if store is None:
+            return
+        if not self._prices.supports_price_optimisation():
             return
 
         price = self._prices.electricity_price()

@@ -692,6 +692,7 @@ export class EnergyAutomations extends LitElement {
 
   @state() private _priceEntities: Record<string, string | null> = {};
   @state() private _contractActive = false;
+  @state() private _priceOptimisation = false;
   @state() private _sources: Record<string, any> = {};
   @state() private _loaded = false;
   @state() private _created: Record<string, string> = {};
@@ -799,8 +800,9 @@ export class EnergyAutomations extends LitElement {
     try {
       const px = await this.hass.callWS<{ entities: Record<string, string | null> }>({ type: 'smarthomeshop/prices/entities' });
       this._priceEntities = px.entities || {};
-      const cfg = await this.hass.callWS<{ contract_active?: boolean }>({ type: 'smarthomeshop/device/config', device_id: this.deviceId });
+      const cfg = await this.hass.callWS<{ contract_active?: boolean; price_optimisation?: boolean }>({ type: 'smarthomeshop/device/config', device_id: this.deviceId });
       this._contractActive = !!cfg.contract_active;
+      this._priceOptimisation = !!cfg.price_optimisation;
       const s = await this.hass.callWS<{ sources: Record<string, any> }>({ type: 'smarthomeshop/energy_sources' });
       this._sources = s.sources || {};
     } catch (err) { console.error('energy-automations: load failed', err); }
@@ -830,7 +832,7 @@ export class EnergyAutomations extends LitElement {
   }
 
   private _missingRequirement(s: EnergyScenario): string {
-    const hasPrices = this._contractActive;
+    const hasPrices = this._contractActive && this._priceOptimisation;
     const hasGridMeter = !!this._netEntity();
     if (s.requires === 'contract' && !hasPrices) return 'Needs dynamic prices';
     if (s.requires === 'solar' && !hasGridMeter) return 'Needs grid meter';

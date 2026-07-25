@@ -1,4 +1,4 @@
-"""Binary sensors for the dynamic energy prices.
+"""Binary sensors for energy prices.
 
 These are the steering primitives automations trigger on: "cheap right now"
 (below today's average), "inside the cheapest N-hour window now" (the correct
@@ -28,7 +28,7 @@ def _prices_device_info() -> DeviceInfo:
         identifiers={(DOMAIN, "energy_prices")},
         name="SmartHomeShop Energy Prices",
         manufacturer="SmartHomeShop.io",
-        model="Dynamic energy prices",
+        model="Cloud energy contract",
         entry_type=DeviceEntryType.SERVICE,
         sw_version=VERSION,
     )
@@ -54,7 +54,11 @@ class SmartHomeShopCheapNowBinarySensor(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.status == "ok" and self.coordinator.cheap_now() is not None
+        return (
+            self.coordinator.status == "ok"
+            and self.coordinator.supports_price_optimisation()
+            and self.coordinator.cheap_now() is not None
+        )
 
 
 class SmartHomeShopContractActiveBinarySensor(
@@ -100,7 +104,10 @@ class SmartHomeShopTomorrowPricesBinarySensor(
 
     @property
     def available(self) -> bool:
-        return self.coordinator.status == "ok"
+        return (
+            self.coordinator.status == "ok"
+            and self.coordinator.supports_price_optimisation()
+        )
 
 
 class SmartHomeShopCheapestWindowNowBinarySensor(
@@ -155,7 +162,10 @@ class SmartHomeShopCheapestWindowNowBinarySensor(
         # Stay available on cached price data during a transient poll failure,
         # matching the schedule sensors: a hiccup must not flip steering
         # automations to 'unavailable' mid-window.
-        return self._window() is not None
+        return (
+            self.coordinator.supports_price_optimisation()
+            and self._window() is not None
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

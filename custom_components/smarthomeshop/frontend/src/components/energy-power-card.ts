@@ -5,6 +5,8 @@ import {
   energyCardStyles,
   ensureStatisticsChart,
   formatPower,
+  gridHistory,
+  gridPower,
   loadPowerHistory,
   stateNumber,
   type BaseEnergyCardConfig,
@@ -135,6 +137,8 @@ export class SmartHomeShopEnergyPowerCard extends EnergyCardBase<EnergyPowerCard
   protected async afterContextLoaded(): Promise<void> {
     if (!this.hass || !this.context) return;
     const probe = this.context.netEntity
+      || this.context.gridImportEntity
+      || this.context.gridExportEntity
       || this.context.sources.solar_power
       || this.context.sources.battery_power;
     const [historyResult, chartReady] = await Promise.all([
@@ -177,16 +181,23 @@ export class SmartHomeShopEnergyPowerCard extends EnergyCardBase<EnergyPowerCard
     };
   }
 
+  private _gridWithCurrent(now: number): HistoryPoint[] {
+    if (!this.hass || !this.context) return [];
+    const points = gridHistory(this.context, this.history);
+    const current = gridPower(this.hass, this.context);
+    if (current === null) return points;
+    return [
+      ...points.filter((point) => point.t < now),
+      { t: now, end: now, v: current, min: current, max: current },
+    ];
+  }
+
   private _series(): PowerSeries[] {
     if (!this.context) return [];
     const result: PowerSeries[] = [];
     const sources = this.context.sources;
     const now = Date.now();
-    const grid = this._withCurrent(
-      this.context.netEntity,
-      this.context.netEntity ? this.history[this.context.netEntity] || [] : [],
-      now,
-    );
+    const grid = this._gridWithCurrent(now);
     if (grid.length > 1 && this.config.show_grid_import !== false) {
       result.push({
         key: 'grid-import',
@@ -292,10 +303,10 @@ export class SmartHomeShopEnergyPowerCard extends EnergyCardBase<EnergyPowerCard
       `;
     }
 
-    const grid = stateNumber(this.hass, this.context?.netEntity);
-    const gridHistory = this.context?.netEntity ? this.history[this.context.netEntity] || [] : [];
-    const peakImport = Math.max(0, grid ?? 0, ...gridHistory.map((point) => point.max ?? point.v));
-    const peakExport = Math.abs(Math.min(0, grid ?? 0, ...gridHistory.map((point) => point.min ?? point.v)));
+    const grid = gridPower(this.hass, this.context);
+    const historicalGrid = gridHistory(this.context, this.history);
+    const peakImport = Math.max(0, grid ?? 0, ...historicalGrid.map((point) => point.max ?? point.v));
+    const peakExport = Math.abs(Math.min(0, grid ?? 0, ...historicalGrid.map((point) => point.min ?? point.v)));
     const current = formatPower(grid, true);
     const importPeak = formatPower(peakImport);
     const exportPeak = formatPower(peakExport);

@@ -581,6 +581,10 @@ async def ws_get_device_config(hass: HomeAssistant, connection, msg: dict) -> No
         "fields": _config_fields(product_type, dict(entry.options), ha_prices, tariffs),
         "contract_active": contract is not None,
         "contract_name": (contract or {}).get("name"),
+        "price_optimisation": bool(
+            prices and prices.supports_price_optimisation()
+        ),
+        "contract_type": prices.contract_type() if prices else None,
     })
 
 
@@ -765,6 +769,16 @@ def _account_result(hass: HomeAssistant) -> dict:
         "level": _price_entity("electricity_price_level"),
         "feed_in": _price_entity("electricity_feed_in_price"),
         "gas": _price_entity("gas_price"),
+        "water": _price_entity("water_price"),
+        "contract_name": _price_entity("contract_name"),
+        "provider": _price_entity("energy_provider"),
+        "contract_type": _price_entity("contract_type"),
+        "import_t1": _price_entity("electricity_import_t1_price"),
+        "import_t2": _price_entity("electricity_import_t2_price"),
+        "feed_in_t1": _price_entity("electricity_export_t1_price"),
+        "feed_in_t2": _price_entity("electricity_export_t2_price"),
+        "fixed_daily": _price_entity("net_fixed_cost_daily"),
+        "fixed_yearly": _price_entity("net_fixed_cost_yearly"),
     }
     if prices is not None and prices.status == "ok":
         result["current"] = {
@@ -772,9 +786,30 @@ def _account_result(hass: HomeAssistant) -> dict:
             "electricity_market": prices.electricity_market_price(),
             "feed_in": prices.electricity_feed_in(),
             "gas": prices.gas_price(),
+            "water": prices.water_price(),
             "level": prices.electricity_level(),
         }
         result["contract"] = prices.contract()
+        result["capabilities"] = {
+            "price_optimisation": prices.supports_price_optimisation(),
+            "requires_tariff_selection": (
+                prices.requires_tariff_selection()
+                and prices.active_tariff_code() is None
+            ),
+            "contract_requires_tariff_selection": (
+                prices.requires_tariff_selection()
+            ),
+            "active_tariff": prices.active_tariff_code(),
+            "tariff_entity": prices.active_tariff_entity_id(),
+            "tariff_raw": prices.active_tariff_raw(),
+            "effective_resolution": prices.effective_resolution(),
+            "is_fallback": prices.price_is_fallback(),
+        }
+        result["tariffs"] = prices.contract_tariffs()
+        result["fixed_costs"] = {
+            "daily": prices.net_fixed_cost_daily(),
+            "yearly": prices.net_fixed_cost_yearly(),
+        }
         result["summary"] = {
             "average": prices.average_today(),
             "lowest": prices.lowest_today(),
@@ -877,6 +912,16 @@ def ws_get_price_entities(hass: HomeAssistant, connection, msg: dict) -> None:
         "electricity_price": eid("sensor", "electricity_price"),
         "price_level": eid("sensor", "electricity_price_level"),
         "feed_in_price": eid("sensor", "electricity_feed_in_price"),
+        "water_price": eid("sensor", "water_price"),
+        "contract_name": eid("sensor", "contract_name"),
+        "energy_provider": eid("sensor", "energy_provider"),
+        "contract_type": eid("sensor", "contract_type"),
+        "electricity_import_t1_price": eid("sensor", "electricity_import_t1_price"),
+        "electricity_import_t2_price": eid("sensor", "electricity_import_t2_price"),
+        "electricity_export_t1_price": eid("sensor", "electricity_export_t1_price"),
+        "electricity_export_t2_price": eid("sensor", "electricity_export_t2_price"),
+        "net_fixed_cost_daily": eid("sensor", "net_fixed_cost_daily"),
+        "net_fixed_cost_yearly": eid("sensor", "net_fixed_cost_yearly"),
         "cheap_now": eid("binary_sensor", "cheap_now"),
         "contract_active": eid("binary_sensor", "contract_active"),
         "tomorrow_available": eid("binary_sensor", "tomorrow_available"),
@@ -1139,6 +1184,9 @@ async def ws_set_energy_sources(hass: HomeAssistant, connection, msg: dict) -> N
     saved = await store.async_set_energy_sources(
         {**store.get_energy_sources(), **config}
     )
+    prices = hass.data.get(DOMAIN, {}).get("prices")
+    if prices is not None:
+        prices.async_refresh_tariff_source()
     connection.send_result(msg["id"], {"sources": saved})
 
 

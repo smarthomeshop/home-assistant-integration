@@ -25,11 +25,21 @@ interface P1Device {
   online: boolean;
 }
 
+interface P1PowerMapping {
+  net?: string;
+  imported?: string;
+  exported?: string;
+}
+
 interface PriceRow {
   start: string;
+  end?: string;
+  resolution?: 'hour' | 'quarter-hour';
   market?: number;
   consumer: number;
   feed_in?: number;
+  kind?: 'confirmed' | 'predicted';
+  confidence?: number;
 }
 
 interface PricePeriod {
@@ -83,6 +93,18 @@ interface StatisticValue {
   max: number;
 }
 
+interface DailyElectricityCost {
+  importedKwh: number;
+  exportedKwh: number;
+  importCost: number;
+  exportValue: number;
+  netCost: number;
+  averageImportPrice: number | null;
+  averageExportPrice: number | null;
+  coverage: number;
+  predictedPrices: boolean;
+}
+
 interface CardHelpers {
   createCardElement(config: Record<string, unknown>): HTMLElement;
 }
@@ -106,7 +128,7 @@ export class EnergyHub extends LitElement {
   @state() private _p1Devices: P1Device[] = [];
   @state() private _netEntityId?: string;
   @state() private _p1Saving = false;
-  private _netByDevice: Record<string, string> = {};
+  private _powerByDevice: Record<string, P1PowerMapping> = {};
   private _entitiesByDevice: Record<string, DeviceEntity[]> = {};
   private _historyQueued = false;
   @state() private _account: any = null;
@@ -123,7 +145,8 @@ export class EnergyHub extends LitElement {
   @state() private _statisticsChartReady = false;
   @state() private _settingsOpen = false;
   @state() private _settingsTab: EnergySettingsTab = 'connection';
-  @state() private _savings: Record<string, number> = {};
+  @state() private _savings: Record<string, any> = {};
+  @state() private _includeFixedDailyCost = false;
   @state() private _wizardDone = false;
   @state() private _wizardKeyInput = '';
   @state() private _wizardBusy = false;
@@ -137,6 +160,7 @@ export class EnergyHub extends LitElement {
   private static readonly INITIAL_LOAD_TIMEOUT = 6000;
   private static readonly BACKGROUND_LOAD_TIMEOUT = 12000;
   private static readonly HISTORY_LOAD_TIMEOUT = 25000;
+  private static readonly FIXED_DAILY_COST_PREFERENCE = 'smarthomeshop.energy.include_fixed_daily_cost';
   private _loadStarted = false;
   private _loading?: Promise<void>;
   private _accountLoading?: Promise<void>;
@@ -386,6 +410,17 @@ export class EnergyHub extends LitElement {
     .section-title { display: flex; align-items: baseline; gap: 9px; }
     .section-title h2 { font-size: 17px; line-height: 1.2; margin: 0; font-weight: 720; }
     .section-title span { font-size: 12px; color: var(--secondary-text-color); }
+    .cost-preference {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--secondary-text-color);
+      font-size: 11.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .cost-preference ha-switch { flex: 0 0 auto; }
 
     .surface {
       background: var(--card-background-color);
@@ -527,6 +562,7 @@ export class EnergyHub extends LitElement {
     .price-state { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; margin-top: 9px; }
     .price-state.good { color: var(--shs-green); }
     .price-state.bad { color: var(--shs-red); }
+    .price-state.forecast { color: var(--primary-color); }
     .price-state ha-icon { --mdc-icon-size: 16px; }
     .price-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 23px; border-top: 1px solid var(--shs-border); }
     .price-fact { padding: 12px 8px 0 0; min-width: 0; }
@@ -683,6 +719,91 @@ export class EnergyHub extends LitElement {
     .power-stat-label { color: var(--secondary-text-color); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; }
     .power-stat-value { font-size: 17px; font-weight: 740; margin-top: 4px; }
 
+    .cost-surface {
+      display: grid;
+      grid-template-columns: minmax(245px, .72fr) minmax(0, 1.28fr);
+    }
+    .cost-balance {
+      min-height: 180px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-right: 1px solid var(--shs-border);
+      background: var(--shs-muted-surface);
+    }
+    .cost-balance.positive { background: var(--shs-red-soft); }
+    .cost-balance.negative { background: var(--shs-green-soft); }
+    .cost-kicker {
+      color: var(--secondary-text-color);
+      font-size: 10.5px;
+      font-weight: 720;
+      letter-spacing: .55px;
+      text-transform: uppercase;
+    }
+    .cost-value {
+      margin-top: 9px;
+      font-size: 34px;
+      font-weight: 760;
+      line-height: 1;
+      letter-spacing: -.025em;
+    }
+    .cost-balance.positive .cost-value { color: var(--shs-red); }
+    .cost-balance.negative .cost-value { color: var(--shs-green); }
+    .cost-caption {
+      margin-top: 9px;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .cost-ledger { display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+    .cost-row {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 13px;
+      min-height: 90px;
+      padding: 17px 20px;
+    }
+    .cost-row + .cost-row { border-top: 1px solid var(--shs-border); }
+    .cost-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+    }
+    .cost-icon.import { color: var(--shs-red); background: var(--shs-red-soft); }
+    .cost-icon.export { color: var(--shs-green); background: var(--shs-green-soft); }
+    .cost-icon.fixed { color: var(--shs-blue); background: var(--shs-blue-soft); }
+    .cost-icon ha-icon { --mdc-icon-size: 21px; }
+    .cost-row-name { font-size: 13px; font-weight: 710; }
+    .cost-row-detail { margin-top: 3px; color: var(--secondary-text-color); font-size: 11px; }
+    .cost-row-value { text-align: right; font-size: 18px; font-weight: 750; white-space: nowrap; }
+    .cost-row-value.export { color: var(--shs-green); }
+    .cost-foot {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--shs-border);
+      color: var(--secondary-text-color);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .cost-foot ha-icon { --mdc-icon-size: 15px; flex: 0 0 auto; margin-top: 1px; color: var(--shs-blue); }
+    .cost-waiting {
+      min-height: 108px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 20px;
+      color: var(--secondary-text-color);
+      font-size: 12.5px;
+    }
+    .cost-waiting ha-icon { color: var(--shs-blue); --mdc-icon-size: 20px; }
+
     .smart-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .smart-item { display: flex; align-items: center; gap: 11px; padding: 16px; border-right: 1px solid var(--shs-border); }
     .smart-item:last-child { border-right: 0; }
@@ -724,6 +845,16 @@ export class EnergyHub extends LitElement {
       .price-fact:nth-child(n + 3) { border-top: 1px solid var(--shs-border); margin-top: 10px; padding-top: 10px; }
       .price-chart-wrap { padding: 16px 10px 12px; }
       .cheapest-strip { padding: 14px 10px; }
+      .cost-surface { grid-template-columns: 1fr; }
+      .cost-balance {
+        min-height: 145px;
+        padding: 20px;
+        border-right: 0;
+        border-bottom: 1px solid var(--shs-border);
+      }
+      .cost-value { font-size: 31px; }
+      .cost-row { padding: 15px 17px; }
+      .cost-preference { font-size: 11px; }
       .chart-top { align-items: flex-start; }
       .chart-legend { display: none; }
       .power-chart-top { flex-direction: column; gap: 6px; }
@@ -746,6 +877,10 @@ export class EnergyHub extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
+    try {
+      this._includeFixedDailyCost =
+        window.localStorage.getItem(EnergyHub.FIXED_DAILY_COST_PREFERENCE) === '1';
+    } catch { /* Browser storage is optional. */ }
     this._timer = window.setInterval(() => this._load(), 60000);
   }
 
@@ -833,7 +968,7 @@ export class EnergyHub extends LitElement {
           { type: 'smarthomeshop/battery' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
         ),
-        this._callWS<{ savings: Record<string, number> }>(
+        this._callWS<{ savings: Record<string, any> }>(
           { type: 'smarthomeshop/savings' },
           EnergyHub.INITIAL_LOAD_TIMEOUT,
         ),
@@ -853,29 +988,37 @@ export class EnergyHub extends LitElement {
       if (devices.status === 'fulfilled') {
         const candidates = (devices.value.devices || [])
           .filter((device: any) => device.product_type === 'p1meterkit' || device.product_type === 'waterp1meterkit');
-        // Only offer P1 meters that are linked to the integration: the net
-        // grid sensor is created by our coordinator, so probing for it also
-        // hands us the entity id per device. An unlinked meter in the picker
-        // would silently show another meter's readings.
+        // Prefer the integration's computed net-power entity. A newly linked
+        // ESPHome kit may not have that helper yet, so also accept the raw
+        // import/export power pair and calculate net power locally.
         const probed = await Promise.all(candidates.map(async (device: any) => {
           try {
             const response = await this._callWS<{ entities: DeviceEntity[] }>(
               { type: 'smarthomeshop/device/entities', device_id: device.id },
               EnergyHub.INITIAL_LOAD_TIMEOUT,
             );
-            const match = (response.entities || []).find(entity =>
-              entity.entity_id.startsWith('sensor.') && entity.entity_id.includes('_net_grid_power'));
-            return match ? { device, netEntity: match.entity_id, entities: response.entities || [] } : null;
+            const deviceEntities = response.entities || [];
+            const sensorIds = deviceEntities
+              .map(entity => entity.entity_id)
+              .filter(entityId => entityId.startsWith('sensor.'));
+            const mapping: P1PowerMapping = {
+              net: sensorIds.find(entityId => entityId.includes('_net_grid_power')),
+              imported: sensorIds.find(entityId => entityId.endsWith('_power_consumed')),
+              exported: sensorIds.find(entityId => entityId.endsWith('_power_produced')),
+            };
+            return mapping.net || mapping.imported || mapping.exported
+              ? { device, mapping, entities: deviceEntities }
+              : null;
           } catch {
             return null;
           }
         }));
-        const netByDevice: Record<string, string> = {};
+        const powerByDevice: Record<string, P1PowerMapping> = {};
         const entitiesByDevice: Record<string, DeviceEntity[]> = {};
         this._p1Devices = probed
-          .filter((item): item is { device: any; netEntity: string; entities: DeviceEntity[] } => item !== null)
-          .map(({ device, netEntity, entities }) => {
-            netByDevice[device.id] = netEntity;
+          .filter((item): item is { device: any; mapping: P1PowerMapping; entities: DeviceEntity[] } => item !== null)
+          .map(({ device, mapping, entities }) => {
+            powerByDevice[device.id] = mapping;
             entitiesByDevice[device.id] = entities;
             return {
               id: device.id,
@@ -884,7 +1027,7 @@ export class EnergyHub extends LitElement {
               online: device.online !== false,
             };
           });
-        this._netByDevice = netByDevice;
+        this._powerByDevice = powerByDevice;
         this._entitiesByDevice = entitiesByDevice;
       }
       this._resolveNetEntity();
@@ -965,7 +1108,11 @@ export class EnergyHub extends LitElement {
   }
 
   private async _loadHistory(): Promise<void> {
-    const ids = [this._netEntity(), this._sources.solar_power, this._sources.battery_power]
+    const ids = [
+      ...this._gridEntityIds(),
+      this._sources.solar_power,
+      this._sources.battery_power,
+    ]
       .filter(Boolean) as string[];
     if (!ids.length) {
       this._history = {};
@@ -1052,6 +1199,46 @@ export class EnergyHub extends LitElement {
     return Date.parse(String(value));
   }
 
+  private _gridHistory(): HistoryPoint[] {
+    const mapping = this._gridMapping();
+    const net = mapping.net || this._netEntity();
+    const imported = mapping.imported ? this._history[mapping.imported] || [] : [];
+    const exported = mapping.exported ? this._history[mapping.exported] || [] : [];
+    const netHistory = net ? this._history[net] || [] : [];
+    // A combined helper can be brand-new after selecting a meter or restarting
+    // HA, while the raw P1 entities already have the full day in Recorder.
+    if (imported.length + exported.length < 2) return netHistory;
+
+    const timestamps = [...new Set([
+      ...imported.map(point => point.t),
+      ...exported.map(point => point.t),
+    ])].sort((a, b) => a - b);
+    let importIndex = 0;
+    let exportIndex = 0;
+    let importPoint: HistoryPoint | undefined;
+    let exportPoint: HistoryPoint | undefined;
+    const result: HistoryPoint[] = [];
+
+    for (const timestamp of timestamps) {
+      while (importIndex < imported.length && imported[importIndex].t <= timestamp) {
+        importPoint = imported[importIndex++];
+      }
+      while (exportIndex < exported.length && exported[exportIndex].t <= timestamp) {
+        exportPoint = exported[exportIndex++];
+      }
+      const importValue = importPoint?.v ?? 0;
+      const exportValue = exportPoint?.v ?? 0;
+      result.push({
+        t: timestamp,
+        end: Math.max(importPoint?.end ?? timestamp, exportPoint?.end ?? timestamp),
+        v: importValue - exportValue,
+        min: (importPoint?.min ?? importValue) - (exportPoint?.max ?? exportValue),
+        max: (importPoint?.max ?? importValue) - (exportPoint?.min ?? exportValue),
+      });
+    }
+    return this._downsample(result, 360);
+  }
+
   private async _ensureStatisticsChart(probeEntity?: string): Promise<boolean> {
     if (customElements.get('statistics-chart')) return true;
     if (!window.loadCardHelpers) return false;
@@ -1107,7 +1294,18 @@ export class EnergyHub extends LitElement {
 
   private _resolveNetEntity(): void {
     const device = this._effectiveP1();
-    this._netEntityId = device ? this._netByDevice[device.id] : undefined;
+    this._netEntityId = device ? this._powerByDevice[device.id]?.net : undefined;
+  }
+
+  private _gridMapping(): P1PowerMapping {
+    const device = this._effectiveP1();
+    return device ? this._powerByDevice[device.id] || {} : {};
+  }
+
+  private _gridEntityIds(): string[] {
+    const mapping = this._gridMapping();
+    if (mapping.net) return [mapping.net];
+    return [mapping.imported, mapping.exported].filter(Boolean) as string[];
   }
 
   private _netEntity(): string | undefined {
@@ -1118,6 +1316,33 @@ export class EnergyHub extends LitElement {
     if (this._p1Devices.length) return undefined;
     return Object.keys(this.hass.states || {})
       .find(entityId => entityId.startsWith('sensor.') && entityId.includes('_net_grid_power'));
+  }
+
+  private _hasGridPowerSource(): boolean {
+    return this._gridEntityIds().length > 0 || !!this._netEntity();
+  }
+
+  private _gridPower(): number | null {
+    const mapping = this._gridMapping();
+    const net = mapping.net || this._netEntity();
+    if (net) return this._num(net);
+
+    const imported = this._num(mapping.imported);
+    const exported = this._num(mapping.exported);
+    if ((mapping.imported && imported === null) || (mapping.exported && exported === null)) {
+      return null;
+    }
+    if (imported === null && exported === null) return null;
+    return (imported ?? 0) - (exported ?? 0);
+  }
+
+  private _gridDead(): boolean {
+    const ids = this._gridEntityIds();
+    if (!ids.length) {
+      const net = this._netEntity();
+      return net ? this._isDead(net) : false;
+    }
+    return ids.some(entityId => this._isDead(entityId));
   }
 
   private async _selectP1(deviceId: string): Promise<void> {
@@ -1140,6 +1365,10 @@ export class EnergyHub extends LitElement {
       this._resolveNetEntity();
       this._history = {};
       this._startHistoryLoad();
+      this._account = await this._callWS<any>(
+        { type: 'smarthomeshop/account' },
+        EnergyHub.INITIAL_LOAD_TIMEOUT,
+      );
     } catch (err: any) {
       console.warn('P1 selection save failed', err);
       // Put the dropdown back on the meter that is actually in use; a
@@ -1184,42 +1413,88 @@ export class EnergyHub extends LitElement {
     return `€ ${Number(value).toFixed(3)}`;
   }
 
-  private _priceRows(which: 'today' | 'tomorrow'): PriceRow[] {
+  private _normalisePriceRows(rows: unknown): PriceRow[] {
+    if (!Array.isArray(rows)) return [];
+    return rows
+      .filter((row: any) =>
+        row && typeof row.start === 'string' && Number.isFinite(Number(row.consumer)))
+      .map((row: any) => ({
+        start: row.start,
+        end: typeof row.end === 'string' ? row.end : undefined,
+        resolution: row.resolution === 'quarter-hour' ? 'quarter-hour' : 'hour',
+        market: Number.isFinite(Number(row.market)) ? Number(row.market) : undefined,
+        consumer: Number(row.consumer),
+        feed_in: Number.isFinite(Number(row.feed_in)) ? Number(row.feed_in) : undefined,
+        kind: row.kind === 'predicted' ? 'predicted' : 'confirmed',
+        confidence: Number.isFinite(Number(row.confidence))
+          ? Math.max(0, Math.min(1, Number(row.confidence)))
+          : undefined,
+      }));
+  }
+
+  private _confirmedPriceRows(which: 'today' | 'tomorrow'): PriceRow[] {
     const attributes = this._priceEntity ? this.hass.states[this._priceEntity]?.attributes : undefined;
     const rows = which === 'today' ? attributes?.prices_today : attributes?.prices_tomorrow;
-    return Array.isArray(rows)
-      ? rows.filter((row: any) => row && typeof row.start === 'string' && typeof row.consumer === 'number')
+    return this._normalisePriceRows(rows);
+  }
+
+  private _priceRows(which: 'today' | 'tomorrow'): PriceRow[] {
+    const confirmed = this._confirmedPriceRows(which);
+    if (confirmed.length) return confirmed;
+
+    const attributes = this._priceEntity ? this.hass.states[this._priceEntity]?.attributes : undefined;
+    const target = new Date();
+    if (which === 'tomorrow') target.setDate(target.getDate() + 1);
+    const forecast = Array.isArray(attributes?.forecast)
+      ? attributes.forecast.filter((row: any) => {
+        if (!row || typeof row.start !== 'string') return false;
+        const start = new Date(row.start);
+        return Number.isFinite(start.getTime())
+          && start.getFullYear() === target.getFullYear()
+          && start.getMonth() === target.getMonth()
+          && start.getDate() === target.getDate();
+      })
       : [];
+    return this._normalisePriceRows(forecast);
   }
 
   private _periodFromRow(row: PriceRow): PricePeriod {
     return {
       start: row.start,
-      end: new Date(new Date(row.start).getTime() + 3600000).toISOString(),
+      end: new Date(this._priceRowEnd(row)).toISOString(),
       price: row.consumer,
     };
   }
 
+  private _priceRowEnd(row: PriceRow): number {
+    const explicit = row.end ? new Date(row.end).getTime() : Number.NaN;
+    if (Number.isFinite(explicit)) return explicit;
+    return new Date(row.start).getTime()
+      + (row.resolution === 'quarter-hour' ? 900000 : 3600000);
+  }
+
   private _cheapestPriceBlock(rows: PriceRow[], hours: number): CheapestBlock | null {
     const duration = Math.max(1, Math.min(6, Math.round(hours)));
-    if (rows.length < duration) return null;
-
     const sorted = [...rows].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
     let cheapest: CheapestBlock | null = null;
 
-    for (let index = 0; index + duration <= sorted.length; index += 1) {
-      const block = sorted.slice(index, index + duration);
-      const starts = block.map(row => new Date(row.start).getTime());
-      const isValid = starts.every(Number.isFinite)
-        && starts.slice(1).every((start, offset) => Math.abs(start - starts[offset] - 3600000) < 1000);
-      if (!isValid) continue;
-
-      const average = block.reduce((total, row) => total + row.consumer, 0) / duration;
+    for (let index = 0; index < sorted.length; index += 1) {
+      const targetEnd = new Date(sorted[index].start).getTime() + duration * 3600000;
+      const block: PriceRow[] = [];
+      let cursor = new Date(sorted[index].start).getTime();
+      for (let offset = index; offset < sorted.length && cursor < targetEnd; offset += 1) {
+        if (Math.abs(new Date(sorted[offset].start).getTime() - cursor) >= 1000) break;
+        block.push(sorted[offset]);
+        cursor = this._priceRowEnd(sorted[offset]);
+      }
+      if (!block.length || Math.abs(cursor - targetEnd) >= 1000) continue;
+      const average = block.reduce((total, row) =>
+        total + row.consumer * ((this._priceRowEnd(row) - new Date(row.start).getTime()) / 3600000), 0) / duration;
       if (!cheapest || average < cheapest.average) {
         cheapest = {
           hours: duration,
           start: block[0].start,
-          end: new Date(starts[starts.length - 1] + 3600000).toISOString(),
+          end: new Date(cursor).toISOString(),
           average,
         };
       }
@@ -1234,7 +1509,7 @@ export class EnergyHub extends LitElement {
     const now = Date.now();
     const currentRow = today.find(row => {
       const start = new Date(row.start).getTime();
-      return Number.isFinite(start) && start <= now && start + 3600000 > now;
+      return Number.isFinite(start) && start <= now && this._priceRowEnd(row) > now;
     });
     const accountCurrent = Number(this._account?.current?.electricity);
     const current = currentRow?.consumer ?? accountCurrent;
@@ -1277,6 +1552,212 @@ export class EnergyHub extends LitElement {
       negativeHours: prices.filter(price => price < 0).length,
       spread: Math.max(...prices) - Math.min(...prices),
     };
+  }
+
+  private _dailyElectricityCost(): DailyElectricityCost | null {
+    const now = Date.now();
+    const startOfDay = this._todayStart();
+    const points = this._gridHistoryWithCurrent(now)
+      .filter(point => point.t <= now && (point.end ?? point.t) >= startOfDay)
+      .sort((a, b) => a.t - b.t);
+    if (points.length < 2) return null;
+
+    const contractType = String(this._account?.contract?.type || '').toLowerCase();
+    const dynamic = contractType === 'dynamic';
+    const confirmedRows = this._confirmedPriceRows('today');
+    const priceRows = dynamic
+      ? (confirmedRows.length ? confirmedRows : this._priceRows('today'))
+      : [];
+    const staticImportPrice = Number(this._account?.current?.electricity);
+    const staticExportPrice = Number(this._account?.current?.feed_in);
+
+    let importedKwh = 0;
+    let exportedKwh = 0;
+    let importCost = 0;
+    let exportValue = 0;
+    let pricedKwh = 0;
+    let measuredKwh = 0;
+
+    const pricesAt = (timestamp: number): { imported: number; exported: number } => {
+      if (!dynamic) {
+        return { imported: staticImportPrice, exported: staticExportPrice };
+      }
+      const row = priceRows.find(item => {
+        const start = Date.parse(item.start);
+        return Number.isFinite(start) && start <= timestamp && this._priceRowEnd(item) > timestamp;
+      });
+      return {
+        imported: Number(row?.consumer),
+        exported: Number(row?.feed_in ?? this._account?.current?.feed_in),
+      };
+    };
+
+    for (let index = 0; index < points.length - 1; index += 1) {
+      const point = points[index];
+      const next = points[index + 1];
+      const segmentStart = Math.max(startOfDay, point.t);
+      const segmentEnd = Math.min(now, point.end ?? next.t, next.t);
+      if (!Number.isFinite(point.v) || segmentEnd <= segmentStart) continue;
+
+      const durationHours = (segmentEnd - segmentStart) / 3600000;
+      const energyKwh = Math.abs(point.v) / 1000 * durationHours;
+      if (!Number.isFinite(energyKwh)) continue;
+      measuredKwh += energyKwh;
+
+      const prices = pricesAt(segmentStart + (segmentEnd - segmentStart) / 2);
+      if (point.v >= 0) {
+        importedKwh += energyKwh;
+        if (Number.isFinite(prices.imported)) {
+          importCost += energyKwh * prices.imported;
+          pricedKwh += energyKwh;
+        }
+      } else {
+        exportedKwh += energyKwh;
+        if (Number.isFinite(prices.exported)) {
+          exportValue += energyKwh * prices.exported;
+          pricedKwh += energyKwh;
+        }
+      }
+    }
+
+    if (importedKwh === 0 && exportedKwh === 0) return null;
+    return {
+      importedKwh,
+      exportedKwh,
+      importCost,
+      exportValue,
+      netCost: importCost - exportValue,
+      averageImportPrice: importedKwh > 0 && Number.isFinite(importCost)
+        ? importCost / importedKwh
+        : null,
+      averageExportPrice: exportedKwh > 0 && Number.isFinite(exportValue)
+        ? exportValue / exportedKwh
+        : null,
+      coverage: measuredKwh > 0 ? Math.max(0, Math.min(1, pricedKwh / measuredKwh)) : 1,
+      predictedPrices: dynamic
+        && confirmedRows.length === 0
+        && priceRows.some(row => row.kind === 'predicted'),
+    };
+  }
+
+  private _formatEuroAmount(value: number): string {
+    const prefix = value < 0 ? '-€' : '€';
+    return `${prefix} ${Math.abs(value).toFixed(2)}`;
+  }
+
+  private _formatEnergy(value: number): string {
+    return `${value.toFixed(value < 1 ? 3 : 2)} kWh`;
+  }
+
+  private _setIncludeFixedDailyCost(include: boolean): void {
+    this._includeFixedDailyCost = include;
+    try {
+      window.localStorage.setItem(
+        EnergyHub.FIXED_DAILY_COST_PREFERENCE,
+        include ? '1' : '0',
+      );
+    } catch { /* The live preference still works without browser storage. */ }
+  }
+
+  private _renderDailyElectricityCost(priceOk: boolean) {
+    if (!priceOk || !this._hasGridPowerSource()) return nothing;
+    const cost = this._dailyElectricityCost();
+    const contractName = this._account?.contract?.name || 'the active contract';
+    const configuredFixedDailyCost = Number(this._account?.fixed_costs?.daily);
+    const hasFixedDailyCost = Number.isFinite(configuredFixedDailyCost);
+    const fixedDailyCost = this._includeFixedDailyCost && hasFixedDailyCost
+      ? configuredFixedDailyCost
+      : 0;
+    const netCost = (cost?.netCost || 0) + fixedDailyCost;
+
+    return html`
+      <section class="section">
+        <div class="section-head">
+          <div class="section-title"><h2>Electricity costs</h2><span>Today so far</span></div>
+          ${hasFixedDailyCost ? html`
+            <label class="cost-preference">
+              <span>Include fixed daily cost</span>
+              <ha-switch
+                .checked=${this._includeFixedDailyCost}
+                aria-label="Include fixed daily contract cost"
+                @change=${(event: Event) => this._setIncludeFixedDailyCost(
+                  (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+                )}
+              ></ha-switch>
+            </label>
+          ` : nothing}
+        </div>
+        <div class="surface cost-surface">
+          ${cost ? html`
+            <div class="cost-balance ${netCost > .004 ? 'positive' : netCost < -.004 ? 'negative' : ''}">
+              <div class="cost-kicker">${netCost < 0 ? 'Net earned today' : 'Net electricity cost'}</div>
+              <div class="cost-value">${this._formatEuroAmount(Math.abs(netCost))}</div>
+              <div class="cost-caption">
+                ${netCost < 0
+                  ? 'Your return value is higher than today’s import cost.'
+                  : cost.exportValue > 0
+                    ? `${this._formatEuroAmount(cost.exportValue)} in return value has already been deducted.`
+                    : 'No measured return value has been deducted yet.'}
+              </div>
+            </div>
+            <div class="cost-ledger">
+              <div class="cost-row">
+                <div class="cost-icon import"><ha-icon icon="mdi:transmission-tower-import"></ha-icon></div>
+                <div>
+                  <div class="cost-row-name">Electricity imported</div>
+                  <div class="cost-row-detail">
+                    ${this._formatEnergy(cost.importedKwh)}${cost.averageImportPrice === null
+                      ? ''
+                      : ` · avg. ${this._formatPrice(cost.averageImportPrice)}/kWh`}
+                  </div>
+                </div>
+                <div class="cost-row-value">${this._formatEuroAmount(cost.importCost)}</div>
+              </div>
+              <div class="cost-row">
+                <div class="cost-icon export"><ha-icon icon="mdi:transmission-tower-export"></ha-icon></div>
+                <div>
+                  <div class="cost-row-name">Electricity returned</div>
+                  <div class="cost-row-detail">
+                    ${this._formatEnergy(cost.exportedKwh)}${cost.averageExportPrice === null
+                      ? ''
+                      : ` · avg. ${this._formatPrice(cost.averageExportPrice)}/kWh`}
+                  </div>
+                </div>
+                <div class="cost-row-value ${cost.exportValue >= 0 ? 'export' : ''}">
+                  ${this._formatEuroAmount(cost.exportValue)}
+                </div>
+              </div>
+              ${this._includeFixedDailyCost && hasFixedDailyCost ? html`
+                <div class="cost-row">
+                  <div class="cost-icon fixed"><ha-icon icon="mdi:receipt-text-outline"></ha-icon></div>
+                  <div>
+                    <div class="cost-row-name">Fixed daily contract cost</div>
+                    <div class="cost-row-detail">Full daily charge from your active contract</div>
+                  </div>
+                  <div class="cost-row-value">${this._formatEuroAmount(fixedDailyCost)}</div>
+                </div>
+              ` : nothing}
+            </div>
+            <div class="cost-foot">
+              <ha-icon icon="mdi:information-outline"></ha-icon>
+              <span>
+                Estimated from today’s recorded 5-minute grid power and prices from ${contractName}.
+                ${cost.predictedPrices ? 'Confirmed prices are temporarily unavailable, so predicted prices are used. ' : ''}
+                ${cost.coverage < .995 ? `${Math.round(cost.coverage * 100)}% of measured energy currently has matching price data. ` : ''}
+                ${this._includeFixedDailyCost && hasFixedDailyCost
+                  ? 'The fixed daily contract cost is included; gas is excluded.'
+                  : 'Fixed daily charges and gas are excluded.'}
+              </span>
+            </div>
+          ` : html`
+            <div class="cost-waiting">
+              <ha-icon icon="mdi:chart-clock"></ha-icon>
+              <span>Calculating today’s electricity costs from the selected P1 meter history…</span>
+            </div>
+          `}
+        </div>
+      </section>
+    `;
   }
 
   // One-line answer to "where is my home's power coming from right now",
@@ -1384,7 +1865,7 @@ export class EnergyHub extends LitElement {
               icon: grid !== null && grid < -5 ? 'mdi:transmission-tower-export' : 'mdi:transmission-tower-import',
               iconClass: grid === null || Math.abs(grid) <= 5 ? '' : grid > 5 ? 'grid-in' : 'grid-out',
               value: grid,
-              dead: this._isDead(this._netEntity()),
+              dead: this._gridDead(),
               status: grid === null ? 'No reading' : grid > 5 ? 'Importing from grid' : grid < -5 ? 'Exporting to grid' : 'Grid balanced',
               statusClass: grid !== null && grid < -5 ? 'good' : '',
               dir: grid === null || Math.abs(grid) <= 5 ? 'idle' : grid > 5 ? 'cost' : 'out',
@@ -1413,7 +1894,7 @@ export class EnergyHub extends LitElement {
             }) : nothing}
           </div>
         </div>
-        ${!this._netEntity() ? html`
+        ${!this._hasGridPowerSource() ? html`
           <div class="setup-note">
             <ha-icon icon="mdi:transmission-tower-off"></ha-icon>
             <div>No SmartHomeShop P1 meter is set up, so there is no live grid reading. Add a P1MeterKit or WaterP1MeterKit for grid power; solar and battery readings work as soon as you connect them in Settings.</div>
@@ -1449,7 +1930,7 @@ export class EnergyHub extends LitElement {
     const now = Date.now();
     const nowIndex = rows.findIndex(row => {
       const start = new Date(row.start).getTime();
-      return start <= now && start + 3600000 > now;
+      return start <= now && this._priceRowEnd(row) > now;
     });
     const color = (value: number) => {
       const position = maximum === minimum ? .5 : (value - minimum) / (maximum - minimum);
@@ -1527,12 +2008,85 @@ export class EnergyHub extends LitElement {
     // error (cached prices remain valid); the page-level banner explains the
     // connection state.
     if (!priceOk && !this._priceRows('today').length && !this._priceRows('tomorrow').length) return nothing;
+    if (priceOk && this._account?.capabilities?.price_optimisation === false) {
+      const contract = this._account?.contract || {};
+      const cur = this._account?.current || {};
+      const tariffs = this._account?.tariffs || {};
+      const fixed = this._account?.fixed_costs || {};
+      const dual = this._account?.capabilities?.requires_tariff_selection;
+      let values: Array<[string, unknown, string]> = dual
+        ? [
+          ['Import T1', tariffs.electricity_t1, '/kWh'],
+          ['Import T2', tariffs.electricity_t2, '/kWh'],
+          ['Feed-in T1', tariffs.feed_in_t1, '/kWh'],
+          ['Feed-in T2', tariffs.feed_in_t2, '/kWh'],
+        ]
+        : [['Import now', cur.electricity, '/kWh'], ['Feed-in now', cur.feed_in, '/kWh']];
+      if (!values.some(([, value]) => Number.isFinite(Number(value)))) {
+        const labels: Record<string, string> = {
+          electricity_t1: 'Import T1',
+          electricity_t2: 'Import T2',
+          electricity_single: 'Import',
+          feed_in_t1: 'Feed-in T1',
+          feed_in_t2: 'Feed-in T2',
+          feed_in_single: 'Feed-in',
+          feed_in: 'Feed-in',
+        };
+        values = Object.entries(tariffs)
+          .filter(([key, value]) =>
+            (key.startsWith('electricity_') || key.startsWith('feed_in'))
+            && Number.isFinite(Number(value)))
+          .map(([key, value]) => [labels[key] || key.split('_').join(' '), value, '/kWh']);
+      }
+      values.push(
+        ['Gas', cur.gas ?? tariffs.gas, '/m³'],
+        ['Water', cur.water ?? tariffs.water, '/m³'],
+        ['Fixed cost/day', fixed.daily, '/day'],
+        ['Fixed cost/year', fixed.yearly, '/year'],
+      );
+      return html`
+        <section class="section">
+          <div class="section-head"><div class="section-title"><h2>Energy prices</h2>
+            <span>${contract.name || 'Active contract'} · ${contract.type || 'fixed'}</span></div></div>
+          <div class="surface smart-list">
+            ${values.filter(([, value]) => Number.isFinite(Number(value))).map(([label, value, unit]) => html`
+              <div class="smart-item"><div class="smart-icon good"><ha-icon icon="mdi:currency-eur"></ha-icon></div>
+                <div><div class="smart-name">${label}</div><div class="smart-detail">${this._formatPrice(Number(value))}${unit}</div></div>
+              </div>`)}
+            <div class="smart-item"><div class="smart-icon"><ha-icon icon="mdi:information-outline"></ha-icon></div>
+              <div><div class="smart-name">${dual ? 'T1/T2 stays separate' : 'No intraday price curve'}</div>
+                <div class="smart-detail">${dual
+                  ? 'The active tariff is unknown, so SmartHomeShop never guesses.'
+                  : 'Cheapest-hour controls and Smart Savings are only available for dynamic contracts.'}</div></div>
+            </div>
+          </div>
+        </section>`;
+    }
 
     const today = this._priceRows('today');
     const tomorrow = this._priceRows('tomorrow');
     const rows = this._priceTab === 'tomorrow' && tomorrow.length ? tomorrow : today;
     const insights = this._priceInsights(today, tomorrow);
-    if (!rows.length || !insights) return nothing;
+    if (!rows.length || !insights) {
+      return html`
+        <section class="section">
+          <div class="section-head"><div class="section-title"><h2>Price outlook</h2>
+            <span>${this._account?.contract?.name || 'Dynamic contract'}</span></div></div>
+          <div class="surface smart-list">
+            <div class="smart-item"><div class="smart-icon"><ha-icon icon="mdi:clock-outline"></ha-icon></div>
+              <div><div class="smart-name">Price data is being fetched</div>
+                <div class="smart-detail">This dynamic contract is active. The daily prices will appear here as soon as confirmed prices or a forecast is available.</div></div>
+            </div>
+          </div>
+        </section>`;
+    }
+    const predicted = rows.every(row => row.kind === 'predicted');
+    const confidenceValues = rows
+      .map(row => row.confidence)
+      .filter((value): value is number => Number.isFinite(value));
+    const confidence = confidenceValues.length
+      ? confidenceValues.reduce((total, value) => total + value, 0) / confidenceValues.length
+      : null;
     const belowAverage = insights.difference <= 0;
     const selectedDay = this._priceTab === 'tomorrow' && tomorrow.length ? 'Tomorrow' : 'Today';
     const cheapestBlock = this._cheapestPriceBlock(rows, this._cheapestHours);
@@ -1543,7 +2097,9 @@ export class EnergyHub extends LitElement {
         <div class="section-head">
           <div class="section-title">
             <h2>Price outlook</h2>
-            <span>${contractName ? `${contractName} - ` : ''}All-in consumer price</span>
+            <span>${contractName ? `${contractName} - ` : ''}${predicted
+              ? 'Predicted all-in price · not confirmed yet'
+              : 'All-in consumer price'}</span>
           </div>
           ${tomorrow.length ? html`
             <div class="seg" aria-label="Price day">
@@ -1555,18 +2111,22 @@ export class EnergyHub extends LitElement {
         <div class="surface price-surface">
           <div class="price-summary">
             <div class="price-kicker">
-              <span>Price now</span>
+              <span>${predicted ? 'Estimated price now' : 'Price now'}</span>
             </div>
             <div class="price-value">${this._formatPrice(insights.current)} <span>/kWh</span></div>
-            <div class="price-state ${belowAverage ? 'good' : 'bad'}">
-              <ha-icon icon=${belowAverage ? 'mdi:trending-down' : 'mdi:trending-up'}></ha-icon>
-              ${insights.differencePercentage === null
+            <div class="price-state ${predicted ? 'forecast' : (belowAverage ? 'good' : 'bad')}">
+              <ha-icon icon=${predicted
+                ? 'mdi:chart-timeline-variant-shimmer'
+                : (belowAverage ? 'mdi:trending-down' : 'mdi:trending-up')}></ha-icon>
+              ${predicted
+                ? `Forecast${confidence === null ? '' : ` · ${Math.round(confidence * 100)}% confidence`} · not used for automation`
+                : insights.differencePercentage === null
                 ? (belowAverage ? 'Below daily average' : 'Above daily average')
                 : `${Math.abs(insights.differencePercentage).toFixed(0)}% ${belowAverage ? 'below' : 'above'} daily average`}
             </div>
             <div class="price-facts">
-              <div class="price-fact"><div class="price-fact-label">Daily average</div><div class="price-fact-value">${this._formatPrice(insights.average)}</div></div>
-              <div class="price-fact"><div class="price-fact-label">Feed-in now</div><div class="price-fact-value">${this._formatPrice(insights.feedIn)}</div></div>
+              <div class="price-fact"><div class="price-fact-label">${predicted ? 'Forecast average' : 'Daily average'}</div><div class="price-fact-value">${this._formatPrice(insights.average)}</div></div>
+              <div class="price-fact"><div class="price-fact-label">${predicted ? 'Estimated feed-in now' : 'Feed-in now'}</div><div class="price-fact-value">${this._formatPrice(insights.feedIn)}</div></div>
               <div class="price-fact"><div class="price-fact-label">Next lower</div><div class="price-fact-value">${insights.nextLower ? `${this._hm(insights.nextLower.start)}, save ${this._formatPrice(insights.nextLower.saving)}` : 'None available'}</div></div>
               <div class="price-fact"><div class="price-fact-label">Lowest</div><div class="price-fact-value">${this._formatPrice(insights.lowest.price)} at ${this._hm(insights.lowest.start)}</div></div>
               <div class="price-fact"><div class="price-fact-label">Highest</div><div class="price-fact-value">${this._formatPrice(insights.highest.price)} at ${this._hm(insights.highest.start)}</div></div>
@@ -1575,7 +2135,9 @@ export class EnergyHub extends LitElement {
           </div>
           <div class="price-chart-wrap">
             <div class="chart-top">
-              <div class="chart-title">${this._priceTab === 'tomorrow' ? 'Tomorrow by hour' : 'Today by hour'} (EUR/kWh)</div>
+              <div class="chart-title">${this._priceTab === 'tomorrow' ? 'Tomorrow' : 'Today'}${predicted
+                ? ' forecast'
+                : ''} by ${rows[0]?.resolution === 'quarter-hour' ? 'quarter hour' : 'hour'} (EUR/kWh)</div>
               <div class="chart-legend"><span><i style="background:#159957"></i>Lower</span><span><i style="background:#d34a4a"></i>Higher</span></div>
             </div>
             ${this._priceChart(rows)}
@@ -1587,7 +2149,7 @@ export class EnergyHub extends LitElement {
           </div>
           <div class="cheapest-strip">
             <div>
-              <div class="cheapest-kicker">Cheapest consecutive block - ${selectedDay}</div>
+              <div class="cheapest-kicker">${predicted ? 'Cheapest predicted block' : 'Cheapest consecutive block'} - ${selectedDay}</div>
               <div class="cheapest-result">
                 ${cheapestBlock ? html`
                   <strong>${this._hm(cheapestBlock.start)}-${this._hm(cheapestBlock.end)}</strong>
@@ -1615,8 +2177,7 @@ export class EnergyHub extends LitElement {
   private _powerSeries(): PowerSeries[] {
     const series: PowerSeries[] = [];
     const now = Date.now();
-    const net = this._netEntity();
-    const grid = this._historyWithCurrent(net, net ? this._history[net] || [] : [], now);
+    const grid = this._gridHistoryWithCurrent(now);
     if (grid.length > 1) {
       series.push(
         {
@@ -1705,6 +2266,16 @@ export class EnergyHub extends LitElement {
     ];
   }
 
+  private _gridHistoryWithCurrent(now: number): HistoryPoint[] {
+    const points = this._gridHistory();
+    const current = this._gridPower();
+    if (current === null) return points;
+    return [
+      ...points.filter(point => point.t < now),
+      { t: now, end: now, v: current, min: current, max: current },
+    ];
+  }
+
   private _togglePowerSeries(key: string): void {
     this._hiddenPowerSeries = this._hiddenPowerSeries.includes(key)
       ? this._hiddenPowerSeries.filter(item => item !== key)
@@ -1715,8 +2286,7 @@ export class EnergyHub extends LitElement {
   private _renderPowerSection(grid: number | null) {
     const series = this._powerSeries();
     if (!series.length) return nothing;
-    const net = this._netEntity();
-    const gridHistory = net ? this._history[net] || [] : [];
+    const gridHistory = this._gridHistory();
     const currentGrid = grid ?? 0;
     const peakImport = gridHistory.length
       ? Math.max(0, currentGrid, ...gridHistory.map(point => point.max ?? point.v))
@@ -2099,8 +2669,11 @@ export class EnergyHub extends LitElement {
   }
 
   private _renderSmartEnergy(priceOk: boolean, activeSchedules: number, batteryOn: boolean) {
-    const today = this._priceRows('today');
-    const tomorrow = this._priceRows('tomorrow');
+    // Forecast rows are useful for insight, but must never make automations
+    // appear ready before the supplier has published confirmed prices.
+    const today = this._confirmedPriceRows('today');
+    const tomorrow = this._confirmedPriceRows('tomorrow');
+    const forecastAvailable = !today.length && this._priceRows('today').length > 0;
     const selectedDay = this._priceTab === 'tomorrow' && tomorrow.length ? 'tomorrow' : 'today';
     const selectedRows = selectedDay === 'tomorrow' ? tomorrow : today;
     const cheapest = this._cheapestPriceBlock(selectedRows, this._cheapestHours);
@@ -2114,7 +2687,15 @@ export class EnergyHub extends LitElement {
         <div class="surface smart-list">
           <div class="smart-item">
             <div class="smart-icon ${priceOk ? 'good' : ''}"><ha-icon icon="mdi:currency-eur"></ha-icon></div>
-            <div><div class="smart-name">Dynamic price</div><div class="smart-detail">${priceOk ? (this._hm(cheapest?.start) ? `Cheapest ${this._cheapestHours}h ${selectedDay} from ${this._hm(cheapest?.start)}` : 'Waiting for price data') : 'Account not connected'}</div></div>
+            <div><div class="smart-name">Dynamic price</div><div class="smart-detail">${priceOk && this._account?.capabilities?.price_optimisation === false
+              ? `${this._account?.contract?.type || 'Fixed'} contract connected · price shifting unavailable`
+              : priceOk
+                ? (this._hm(cheapest?.start)
+                  ? `Cheapest ${this._cheapestHours}h ${selectedDay} from ${this._hm(cheapest?.start)}`
+                  : forecastAvailable
+                    ? 'Forecast visible · waiting for confirmed prices before automation'
+                    : 'Waiting for confirmed price data')
+                : 'Account not connected'}</div></div>
             ${!priceOk && this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Connect</button>` : nothing}
           </div>
           <div class="smart-item">
@@ -2140,8 +2721,7 @@ export class EnergyHub extends LitElement {
       return this._renderSettingsPage();
     }
 
-    const net = this._netEntity();
-    const grid = this._num(net);
+    const grid = this._gridPower();
     const solar = this._sources.solar_power
       ? Math.max(0, this._num(this._sources.solar_power, this._sources.solar_invert) ?? 0)
       : null;
@@ -2149,7 +2729,7 @@ export class EnergyHub extends LitElement {
       ? this._num(this._sources.battery_power, this._sources.battery_invert)
       : null;
     const soc = this._num(this._sources.battery_soc);
-    const contributorDead = this._isDead(net)
+    const contributorDead = this._gridDead()
       || (!!this._sources.solar_power && this._isDead(this._sources.solar_power))
       || (!!this._sources.battery_power && this._isDead(this._sources.battery_power));
     const house = grid !== null && !contributorDead
@@ -2200,6 +2780,7 @@ export class EnergyHub extends LitElement {
 
       ${this._renderLive(house, grid, solar, battery, soc, contributorDead)}
       ${this._renderPriceSection(priceOk)}
+      ${this._renderDailyElectricityCost(priceOk)}
       ${this._renderSavings(priceOk)}
       ${this._renderPowerSection(grid)}
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
@@ -2356,7 +2937,7 @@ export class EnergyHub extends LitElement {
     const today = sv.today_eur ?? 0;
     const month = sv.month_eur ?? 0;
     const total = sv.total_eur ?? 0;
-    if (!priceOk && !total) return nothing;
+    if ((!priceOk && !total) || sv.supported === false) return nothing;
     const eur = (v: number) => `${v < 0 ? '-' : ''}€ ${Math.abs(v).toFixed(2)}`;
     return html`
       <section class="section">
@@ -2490,6 +3071,7 @@ export class EnergyHub extends LitElement {
           </div>
           <shs-account-prices
             .hass=${this.hass}
+            .refreshToken=${this._sources.p1_device || ''}
             @account-changed=${this._handleAccountChanged}>
           </shs-account-prices>
           ${this._p1Devices.length ? html`
@@ -2695,8 +3277,14 @@ export class EnergyHub extends LitElement {
     `;
   }
 
-  private async _handleEnergySourcesChanged(): Promise<void> {
+  private async _handleEnergySourcesChanged(
+    event?: CustomEvent<{ deviceLinked?: boolean }>,
+  ): Promise<void> {
     try {
+      if (event?.detail?.deviceLinked) {
+        await this._loadData();
+        return;
+      }
       const response = await this._callWS<{ sources: Sources }>(
         { type: 'smarthomeshop/energy_sources' },
         EnergyHub.BACKGROUND_LOAD_TIMEOUT,

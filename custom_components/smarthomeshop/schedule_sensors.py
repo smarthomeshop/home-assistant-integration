@@ -59,7 +59,7 @@ class SmartHomeShopScheduleBinarySensor(
             self.async_write_ha_state()
 
     def _rows(self) -> list[dict[str, Any]]:
-        return (self.coordinator.today() or []) + (self.coordinator.tomorrow() or [])
+        return self.coordinator.planning_rows()
 
     def _store(self):
         return self.hass.data.get(DOMAIN, {}).get("store") if self.hass else None
@@ -133,7 +133,7 @@ class SmartHomeShopScheduleBinarySensor(
         # Stay available on any cached price data so a transient API hiccup does
         # not flip the sensor to unavailable and drop the load mid-deadline;
         # the coordinator keeps the last-known prices when a poll fails.
-        return bool(self._rows())
+        return self.coordinator.supports_price_optimisation() and bool(self._rows())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

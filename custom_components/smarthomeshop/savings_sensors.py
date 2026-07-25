@@ -33,6 +33,10 @@ class SmartHomeShopSavingsSensor(SensorEntity):
         return self._tracker.snapshot().get(f"{self._period}_eur", 0.0)
 
     @property
+    def available(self) -> bool:
+        return bool(self._tracker.snapshot().get("supported"))
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         if self._period != "today":
             return None

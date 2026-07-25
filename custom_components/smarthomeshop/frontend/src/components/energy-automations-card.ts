@@ -5,6 +5,7 @@ import {
   energyCardStyles,
   fireMoreInfo,
   formatTime,
+  gridPower,
   type BaseEnergyCardConfig,
 } from './energy-card-common';
 import { energyText } from '../utils/energy-translations';
@@ -525,7 +526,8 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
     }
 
     const px = (key: string) => this._state(this.priceEntities[key] || undefined);
-    const grid = this.context?.netEntity ? Number(this._state(this.context.netEntity)?.state) : NaN;
+    const resolvedGrid = this.hass ? gridPower(this.hass, this.context) : null;
+    const grid = resolvedGrid ?? NaN;
     const hours = Math.round(item.params.hours || (item.scenario === 'ev_charge_cheapest_block' ? 4 : 3));
     const threshold = Number(item.params.device_power || item.params.export_threshold || 100);
     const feedIn = Number(px('feed_in_price')?.state);

@@ -156,7 +156,16 @@ export class HaEnergySync extends LitElement {
   }
 
   protected updated(changed: Map<PropertyKey, unknown>): void {
-    if (changed.has('deviceId') || changed.has('deviceEntities')) this._load();
+    if (changed.has('deviceId') || changed.has('deviceEntities')) {
+      this._load();
+      if (
+        changed.has('deviceEntities')
+        && !this._target().missing.length
+        && this._message.startsWith('SmartHomeShop setup completed.')
+      ) {
+        this._message = 'SmartHomeShop setup complete. The new energy sensors are ready.';
+      }
+    }
   }
 
   public async refresh(): Promise<void> {
@@ -191,7 +200,7 @@ export class HaEnergySync extends LitElement {
     })?.entity_id;
   }
 
-  private _priceEntity(key: 'electricity_price' | 'electricity_feed_in_price' | 'gas_price'): string | undefined {
+  private _priceEntity(key: 'electricity_price' | 'electricity_feed_in_price' | 'gas_price' | 'water_price'): string | undefined {
     const exact = `sensor.smarthomeshop_energy_prices_${key}`;
     const usable = (entityId: string): boolean => {
       const state = this.hass.states[entityId]?.state;
@@ -212,6 +221,7 @@ export class HaEnergySync extends LitElement {
     const importPrice = this._priceEntity('electricity_price');
     const exportPrice = this._priceEntity('electricity_feed_in_price');
     const gasPrice = this._priceEntity('gas_price');
+    const waterPrice = this._priceEntity('water_price');
     const name = `SmartHomeShop - ${this.deviceName || 'P1 meter'}`;
     const sources: EnergySource[] = [];
 
@@ -254,7 +264,7 @@ export class HaEnergySync extends LitElement {
         type: 'water',
         stat_energy_from: water,
         stat_cost: null,
-        entity_energy_price: null,
+        entity_energy_price: waterPrice || null,
         number_energy_price: null,
         name,
       });
@@ -264,13 +274,41 @@ export class HaEnergySync extends LitElement {
       { label: 'Electricity imported', entity: imported },
       { label: 'Electricity returned', entity: exported, optional: true },
       { label: 'Live grid power', entity: importPower && exportPower ? `${importPower} + ${exportPower}` : undefined, optional: true },
-      { label: 'Dynamic import price', entity: importPrice, optional: true },
-      { label: 'Dynamic feed-in price', entity: exportPrice, optional: true },
+      { label: 'Contract import price', entity: importPrice, optional: true },
+      { label: 'Contract feed-in price', entity: exportPrice, optional: true },
       { label: 'Gas', entity: gas, optional: true },
       { label: 'Water', entity: water, optional: true },
     ];
     const missing = imported ? [] : ['Combined grid import energy sensor'];
     return { sources, items, missing };
+  }
+
+  private _hasSmartHomeShopSetup(): boolean {
+    return this.deviceEntities.some(entity => entity.platform === 'smarthomeshop');
+  }
+
+  private async _linkDevice(): Promise<void> {
+    if (this._busy || !this.hass.user?.is_admin) return;
+    this._busy = true;
+    this._error = '';
+    this._message = '';
+    try {
+      await this.hass.callWS({
+        type: 'smarthomeshop/device/link',
+        device_id: this.deviceId,
+      });
+      this._message = 'SmartHomeShop setup completed. Loading the new energy sensors…';
+      await new Promise(resolve => window.setTimeout(resolve, 900));
+      this.dispatchEvent(new CustomEvent('ha-energy-synced', {
+        detail: { deviceLinked: true },
+        bubbles: true,
+        composed: true,
+      }));
+    } catch (err: any) {
+      this._error = `Could not complete SmartHomeShop setup. ${err?.message || ''}`.trim();
+    } finally {
+      this._busy = false;
+    }
   }
 
   private _sourceKey(source: EnergySource): string {
@@ -394,6 +432,9 @@ export class HaEnergySync extends LitElement {
   }
 
   private _status(target = this._target()): { label: string; kind: string; icon: string } {
+    if (target.missing.length && !this._hasSmartHomeShopSetup()) {
+      return { label: 'SmartHomeShop setup required', kind: 'warn', icon: 'mdi:link-variant-plus' };
+    }
     if (target.missing.length) return { label: 'Restart required', kind: 'warn', icon: 'mdi:restart-alert' };
     if (this._isInSync(target)) return { label: 'In sync', kind: 'good', icon: 'mdi:check-circle' };
     if (!this._prefs.energy_sources.length) return { label: 'Not configured', kind: '', icon: 'mdi:circle-outline' };
@@ -410,6 +451,7 @@ export class HaEnergySync extends LitElement {
     const inSync = this._isInSync(target);
     const conflicts = this._conflicts(target);
     const admin = !!this.hass.user?.is_admin;
+    const setupRequired = !!target.missing.length && !this._hasSmartHomeShopSetup();
 
     if (this.compact) {
       return html`
@@ -435,6 +477,12 @@ export class HaEnergySync extends LitElement {
               </div>
               ${inSync ? html`
                 <a class="link-btn" href="/config/energy"><ha-icon icon="mdi:open-in-new"></ha-icon>Open HA Energy</a>
+              ` : setupRequired ? html`
+                <button class="primary" ?disabled=${!admin || this._busy}
+                  @click=${this._linkDevice}>
+                  <ha-icon icon="mdi:link-variant-plus"></ha-icon>
+                  ${this._busy ? 'Completing setup…' : 'Complete SmartHomeShop setup'}
+                </button>
               ` : html`
                 <button class="primary" ?disabled=${!admin || this._busy || !!target.missing.length}
                   @click=${() => this._syncToHa(false)}>
@@ -503,18 +551,29 @@ export class HaEnergySync extends LitElement {
             </div>
           ` : nothing}
           ${target.missing.length ? html`
-            <div class="notice"><ha-icon icon="mdi:restart-alert"></ha-icon>
-              Restart Home Assistant once to create the combined import and export sensors needed by the Energy Dashboard.
+            <div class="notice">
+              <ha-icon icon=${setupRequired ? 'mdi:link-variant-plus' : 'mdi:restart-alert'}></ha-icon>
+              ${setupRequired
+                ? 'This P1 meter is available through ESPHome, but its SmartHomeShop setup is missing. Complete setup to create the cumulative import and export sensors.'
+                : 'Restart Home Assistant once to load the newly added cumulative import and export sensors needed by the Energy Dashboard.'}
             </div>
           ` : nothing}
           ${this._message ? html`<div class="notice success"><ha-icon icon="mdi:check-circle"></ha-icon>${this._message}</div>` : nothing}
           ${this._error ? html`<div class="notice error"><ha-icon icon="mdi:alert-circle"></ha-icon>${this._error}</div>` : nothing}
           <div class="actions">
-            <button class="primary" ?disabled=${!admin || this._busy || !!target.missing.length || inSync}
-              @click=${() => this._syncToHa(this._reviewConflicts)}>
-              <ha-icon icon="mdi:arrow-right"></ha-icon>
-              ${this._busy ? 'Syncing...' : inSync ? 'Already in sync' : this._reviewConflicts ? 'Replace and sync to HA Energy' : 'Sync to HA Energy'}
-            </button>
+            ${setupRequired ? html`
+              <button class="primary" ?disabled=${!admin || this._busy}
+                @click=${this._linkDevice}>
+                <ha-icon icon="mdi:link-variant-plus"></ha-icon>
+                ${this._busy ? 'Completing setup…' : 'Complete SmartHomeShop setup'}
+              </button>
+            ` : html`
+              <button class="primary" ?disabled=${!admin || this._busy || !!target.missing.length || inSync}
+                @click=${() => this._syncToHa(this._reviewConflicts)}>
+                <ha-icon icon="mdi:arrow-right"></ha-icon>
+                ${this._busy ? 'Syncing...' : inSync ? 'Already in sync' : this._reviewConflicts ? 'Replace and sync to HA Energy' : 'Sync to HA Energy'}
+              </button>
+            `}
             <button ?disabled=${!admin || this._busy || !this._prefs.energy_sources.length}
               @click=${this._syncFromHa}>
               <ha-icon icon="mdi:arrow-left"></ha-icon>

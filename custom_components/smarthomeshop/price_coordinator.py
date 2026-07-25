@@ -1,4 +1,4 @@
-"""Dynamic energy price coordinator.
+"""Energy contract and price coordinator.
 
 Polls the SmartHomeShop.io account API (api.smarthomeshop.io) for spot
 energy prices using the user's personal API token, and exposes the current
@@ -15,21 +15,25 @@ from urllib.parse import urlparse
 import aiohttp
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from . import energy_api
 from .const import DOMAIN, LOGGER, resolve_api_base_url
+from .tariff_resolver import normalise_tariff_code
 
 PRICES_PATH = "/api/v1/energy/prices"
 CONTRACTS_PATH = "/api/v1/energy/contracts"
-UPDATE_INTERVAL = timedelta(minutes=30)
+UPDATE_INTERVAL = timedelta(minutes=60)
 REQUEST_TIMEOUT = 30
 ACCOUNT_CHECK_TIMEOUT = 8
 
 
 class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Fetch dynamic energy prices from the SmartHomeShop account API."""
+    """Fetch resolved energy prices from the SmartHomeShop account API."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         super().__init__(
@@ -46,19 +50,89 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # ISO timestamp of the last successful sync with the account API.
         self.last_synced: str | None = None
         self.last_error: str | None = None
-        # Push a fresh state to all price entities at the top of every hour:
-        # the current-hour row changes then, independent of the 30-min poll.
+        self._tariff_entity_id: str | None = None
+        self._tariff_unsubscribe = None
+        # Update locally when a price period rolls over, independently of the
+        # API poll. Hourly contracts only change on the first item in the list.
         from homeassistant.helpers.event import async_track_time_change
 
-        async_track_time_change(hass, self._handle_hour_tick, minute=0, second=5)
+        async_track_time_change(
+            hass, self._handle_period_tick, minute=[0, 15, 30, 45], second=5
+        )
+        self.async_refresh_tariff_source()
 
     @callback
-    def _handle_hour_tick(self, _now) -> None:
+    def _handle_period_tick(self, _now) -> None:
         self.async_update_listeners()
+
+    @callback
+    def _handle_tariff_change(self, _event) -> None:
+        """Publish a new current price as soon as the P1 tariff changes."""
+        self.async_update_listeners()
+
+    @callback
+    def async_refresh_tariff_source(self) -> None:
+        """Follow the tariff indicator of the P1 meter selected for Energy."""
+        entity_id = self._find_tariff_entity_id()
+        if entity_id == self._tariff_entity_id:
+            return
+        if self._tariff_unsubscribe is not None:
+            self._tariff_unsubscribe()
+            self._tariff_unsubscribe = None
+        self._tariff_entity_id = entity_id
+        if entity_id:
+            self._tariff_unsubscribe = async_track_state_change_event(
+                self.hass, [entity_id], self._handle_tariff_change
+            )
+        self.async_update_listeners()
+
+    def _find_tariff_entity_id(self) -> str | None:
+        """Find an electricity-tariff entity on the selected P1 device."""
+        store = self.hass.data.get(DOMAIN, {}).get("store")
+        sources = store.get_energy_sources() if store else {}
+        selected_device = sources.get("p1_device")
+        registry = er.async_get(self.hass)
+        candidates = [
+            entry.entity_id
+            for entry in registry.entities.values()
+            if entry.entity_id.startswith("sensor.")
+            and "electricity_tariff" in entry.entity_id
+            and entry.disabled_by is None
+            and (not selected_device or entry.device_id == selected_device)
+        ]
+        if selected_device:
+            return sorted(candidates)[0] if candidates else None
+
+        # With no explicit selection, auto-resolve only when exactly one P1
+        # tariff indicator exists. Multiple meters require a deliberate pick.
+        all_candidates = [
+            entry.entity_id
+            for entry in registry.entities.values()
+            if entry.entity_id.startswith("sensor.")
+            and "electricity_tariff" in entry.entity_id
+            and entry.disabled_by is None
+        ]
+        return all_candidates[0] if len(all_candidates) == 1 else None
+
+    def active_tariff_entity_id(self) -> str | None:
+        return self._tariff_entity_id
+
+    def active_tariff_raw(self) -> str | None:
+        state = (
+            self.hass.states.get(self._tariff_entity_id)
+            if self._tariff_entity_id
+            else None
+        )
+        return str(state.state) if state is not None else None
+
+    def active_tariff_code(self) -> str | None:
+        """Return the currently active contract tariff from the P1 meter."""
+        return normalise_tariff_code(self.active_tariff_raw())
 
     @property
     def update_interval_minutes(self) -> int:
-        return int(UPDATE_INTERVAL.total_seconds() // 60)
+        interval = self.update_interval or UPDATE_INTERVAL
+        return int(interval.total_seconds() // 60)
 
     def _account(self) -> dict[str, Any]:
         store = self.hass.data.get(DOMAIN, {}).get("store")
@@ -221,7 +295,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(self.last_error) from err
         except aiohttp.ClientError as err:
             self.status = "error"
-            self.last_error = "Could not connect to the dynamic energy price service."
+            self.last_error = "Could not connect to the energy price service."
             raise UpdateFailed(f"{self.last_error} {err}") from err
         except ValueError as err:  # invalid JSON body on a 200 response
             self.status = "error"
@@ -236,6 +310,11 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.status = "ok"
         self.last_error = None
         self.last_synced = dt_util.utcnow().isoformat()
+        self.update_interval = timedelta(
+            minutes=15
+            if energy_api.effective_resolution(data) == "quarter-hour"
+            else 60
+        )
         return data or {}
 
     @staticmethod
@@ -260,7 +339,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return float(value)
 
     def _elec(self) -> dict[str, Any]:
-        return (self.data or {}).get("electricity") or {}
+        return energy_api.electricity(self.data)
 
     def current_electricity(self) -> dict[str, Any] | None:
         # Select the row for the CURRENT hour locally instead of trusting the
@@ -275,13 +354,30 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 continue
             if start.tzinfo is None:
                 start = start.replace(tzinfo=dt_util.get_default_time_zone())
-            if start <= now < start + timedelta(hours=1):
+            end = (
+                dt_util.parse_datetime(str(row.get("end")))
+                if row.get("end")
+                else None
+            )
+            if end is None:
+                end = start + (
+                    timedelta(minutes=15)
+                    if row.get("resolution") == "quarter-hour"
+                    else timedelta(hours=1)
+                )
+            elif end.tzinfo is None:
+                end = end.replace(tzinfo=dt_util.get_default_time_zone())
+            if start <= now < end:
                 return row
-        return self._elec().get("current")
+        return energy_api.current_electricity(self.data)
 
     def electricity_price(self) -> float | None:
         cur = self.current_electricity()
-        return self._float_or_none(cur.get("consumer")) if cur else None
+        current = self._float_or_none(cur.get("consumer")) if cur else None
+        if current is not None or not self.requires_tariff_selection():
+            return current
+        tariff = self.active_tariff_code()
+        return self.tariff_price("import", tariff) if tariff else None
 
     def electricity_market_price(self) -> float | None:
         cur = self.current_electricity()
@@ -289,32 +385,100 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def electricity_feed_in(self) -> float | None:
         cur = self.current_electricity()
-        return self._float_or_none(cur.get("feed_in")) if cur else None
+        current = self._float_or_none(cur.get("feed_in")) if cur else None
+        if current is not None or not self.requires_tariff_selection():
+            return current
+        tariff = self.active_tariff_code()
+        return self.tariff_price("export", tariff) if tariff else None
 
     def electricity_level(self) -> str | None:
-        return self._elec().get("level")
+        level = self._elec().get("level")
+        if level:
+            return str(level)
+        tariff = self.active_tariff_code()
+        return f"tariff_{tariff[-1]}" if tariff else None
 
     def gas_price(self) -> float | None:
-        gas = (self.data or {}).get("gas") or {}
-        cur = gas.get("current") or {}
-        return self._float_or_none(cur.get("consumer"))
+        return energy_api.commodity_price(self.data, "gas")
+
+    def water_price(self) -> float | None:
+        return energy_api.commodity_price(self.data, "water")
 
     def today(self) -> list[dict[str, Any]]:
-        return self._elec().get("today") or []
+        return energy_api.electricity_periods(self.data, "today")
 
     def tomorrow(self) -> list[dict[str, Any]]:
-        return self._elec().get("tomorrow") or []
+        return energy_api.electricity_periods(self.data, "tomorrow")
+
+    def planning_rows(self) -> list[dict[str, Any]]:
+        """Return hourly prices for planners, averaging quarter-hour periods."""
+        source = self.today() + self.tomorrow()
+        if self.effective_resolution() != "quarter-hour":
+            return source
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in source:
+            start = dt_util.parse_datetime(str(row.get("start") or ""))
+            price = self._float_or_none(row.get("consumer"))
+            if start is None or price is None:
+                continue
+            if start.tzinfo is None:
+                start = start.replace(tzinfo=dt_util.get_default_time_zone())
+            key = start.replace(minute=0, second=0, microsecond=0).isoformat()
+            grouped.setdefault(key, []).append(row)
+        result: list[dict[str, Any]] = []
+        for start, periods in sorted(grouped.items()):
+            prices = [
+                value
+                for row in periods
+                if (value := self._float_or_none(row.get("consumer"))) is not None
+            ]
+            if not prices:
+                continue
+            result.append(
+                {
+                    "start": start,
+                    "end": (
+                        dt_util.parse_datetime(start) + timedelta(hours=1)
+                    ).isoformat(),
+                    "consumer": sum(prices) / len(prices),
+                    "resolution": "hour",
+                    "source_resolution": "quarter-hour",
+                }
+            )
+        return result
 
     def forecast(self) -> list[dict[str, Any]]:
         """Return the confirmed and predicted hourly price horizon."""
-        return self._elec().get("forecast") or []
+        return energy_api.electricity_forecast(self.data)
 
     def forecast_meta(self) -> dict[str, Any]:
         """Return metadata describing the available forecast horizon."""
         return self._elec().get("forecast_meta") or {}
 
     def contract(self) -> dict[str, Any] | None:
-        return (self.data or {}).get("contract")
+        return energy_api.contract(self.data) or None
+
+    def contract_name(self) -> str | None:
+        item = self.contract() or {}
+        return str(item["name"]) if item.get("name") else None
+
+    def contract_type(self) -> str | None:
+        return energy_api.contract_type(self.data)
+
+    def contract_provider(self) -> str | None:
+        return energy_api.contract_provider(self.data)
+
+    def supports_price_optimisation(self) -> bool:
+        return energy_api.price_optimisation_supported(self.data)
+
+    def effective_resolution(self) -> str | None:
+        return energy_api.effective_resolution(self.data)
+
+    def price_is_fallback(self) -> bool:
+        return energy_api.is_fallback(self.data)
+
+    def requires_tariff_selection(self) -> bool:
+        return energy_api.requires_tariff_selection(self.data)
 
     def contract_active(self) -> bool:
         """True when a contract is connected and its prices apply."""
@@ -322,8 +486,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def contract_tariffs(self) -> dict[str, Any]:
         """Per-unit prices from the connected contract (empty if none)."""
-        contract = self.contract()
-        return (contract or {}).get("tariffs") or {}
+        return energy_api.contract_tariffs(self.data)
 
     def contract_price(self, key: str) -> float | None:
         """A single contract tariff (electricity_t1/t2, feed_in, gas, water).
@@ -335,8 +498,17 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return None
         return self._float_or_none(self.contract_tariffs().get(key))
 
+    def tariff_price(self, direction: str, code: str) -> float | None:
+        return energy_api.tariff_price(self.data, direction, code)
+
+    def net_fixed_cost_daily(self) -> float | None:
+        return energy_api.fixed_cost(self.data, "daily")
+
+    def net_fixed_cost_yearly(self) -> float | None:
+        return energy_api.fixed_cost(self.data, "yearly")
+
     def _summary(self) -> dict[str, Any]:
-        return (self.data or {}).get("summary") or {}
+        return energy_api.electricity_summary(self.data)
 
     def average_today(self) -> float | None:
         return self._float_or_none(self._summary().get("average_today"))
@@ -380,9 +552,8 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def price_spread_today(self) -> float | None:
         return self._float_or_none(self._summary().get("price_spread_today"))
 
-    def negative_hours_today(self) -> int | None:
-        value = self._summary().get("negative_hours_today")
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    def negative_hours_today(self) -> float | None:
+        return self._float_or_none(self._summary().get("negative_hours_today"))
 
     def cheapest_block(self, hours: int) -> dict[str, Any] | None:
         return (self._summary().get("cheapest_blocks") or {}).get(str(hours))
@@ -421,7 +592,9 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if resp.status == 403:
                     if update_status:
                         self.status = "forbidden"
-                        self.last_error = "This account cannot access dynamic energy prices."
+                        self.last_error = (
+                            "This API key is missing the prices:read permission."
+                        )
                     return False, [], []
                 if resp.status != 200:
                     if update_status:

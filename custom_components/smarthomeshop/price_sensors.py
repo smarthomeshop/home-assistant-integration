@@ -1,4 +1,4 @@
-"""Dynamic energy price sensors (account-wide).
+"""Energy contract and price sensors (account-wide).
 
 Exposed as a single "SmartHomeShop Energy Prices" service device so the
 current spot price can be graphed, automated on, or wired into the Home
@@ -16,7 +16,6 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
-    SensorStateClass,
 )
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -35,10 +34,10 @@ class PriceSensorDescription(SensorEntityDescription):
 PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
     PriceSensorDescription(
         key="electricity_price",
-        name="Electricity price",
+        name="Electricity import price now",
         icon="mdi:flash",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.electricity_price(),
         attr_fn=lambda c: {
@@ -56,14 +55,25 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
             "prices_tomorrow": c.tomorrow(),
             "forecast": c.forecast(),
             "forecast_meta": c.forecast_meta(),
+            "contract_type": c.contract_type(),
+            "effective_resolution": c.effective_resolution(),
+            "is_fallback": c.price_is_fallback(),
+            "requires_tariff_selection": (
+                c.requires_tariff_selection() and c.active_tariff_code() is None
+            ),
+            "contract_requires_tariff_selection": c.requires_tariff_selection(),
+            "active_tariff": c.active_tariff_code(),
+            "tariff_entity": c.active_tariff_entity_id(),
+            "tariff_raw": c.active_tariff_raw(),
+            "supports_price_optimisation": c.supports_price_optimisation(),
         },
     ),
     PriceSensorDescription(
         key="electricity_market_price",
         name="Electricity market price",
         icon="mdi:transmission-tower",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.electricity_market_price(),
     ),
@@ -71,8 +81,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="electricity_feed_in_price",
         name="Electricity feed-in price",
         icon="mdi:solar-power",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.electricity_feed_in(),
     ),
@@ -80,10 +90,72 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="gas_price",
         name="Gas price",
         icon="mdi:fire",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/m³",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.gas_price(),
+    ),
+    PriceSensorDescription(
+        key="water_price",
+        name="Water price",
+        icon="mdi:water",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement="€/m³",
+        suggested_display_precision=4,
+        value_fn=lambda c: c.water_price(),
+    ),
+    PriceSensorDescription(
+        key="contract_name",
+        name="Contract name",
+        icon="mdi:file-document-outline",
+        value_fn=lambda c: c.contract_name(),
+    ),
+    PriceSensorDescription(
+        key="energy_provider",
+        name="Energy provider",
+        icon="mdi:domain",
+        value_fn=lambda c: c.contract_provider(),
+    ),
+    PriceSensorDescription(
+        key="contract_type",
+        name="Contract type",
+        icon="mdi:file-sign",
+        value_fn=lambda c: c.contract_type(),
+    ),
+    *(
+        PriceSensorDescription(
+            key=f"electricity_{direction}_{code}_price",
+            name=f"{code.upper()} {'import' if direction == 'import' else 'feed-in'} price",
+            icon="mdi:transmission-tower-import"
+            if direction == "import"
+            else "mdi:transmission-tower-export",
+            device_class=SensorDeviceClass.MONETARY,
+            native_unit_of_measurement="€/kWh",
+            suggested_display_precision=4,
+            value_fn=(
+                lambda c, flow=direction, tariff=code: c.tariff_price(flow, tariff)
+            ),
+        )
+        for direction in ("import", "export")
+        for code in ("t1", "t2")
+    ),
+    PriceSensorDescription(
+        key="net_fixed_cost_daily",
+        name="Net fixed cost per day",
+        icon="mdi:calendar-today",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement="€/day",
+        suggested_display_precision=4,
+        value_fn=lambda c: c.net_fixed_cost_daily(),
+    ),
+    PriceSensorDescription(
+        key="net_fixed_cost_yearly",
+        name="Net fixed cost per year",
+        icon="mdi:calendar",
+        device_class=SensorDeviceClass.MONETARY,
+        native_unit_of_measurement="€/year",
+        suggested_display_precision=2,
+        value_fn=lambda c: c.net_fixed_cost_yearly(),
     ),
     PriceSensorDescription(
         key="electricity_price_level",
@@ -95,8 +167,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="average_price_today",
         name="Average price today",
         icon="mdi:chart-bell-curve",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.average_today(),
     ),
@@ -104,8 +176,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="lowest_price_today",
         name="Lowest price today",
         icon="mdi:trending-down",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.lowest_today(),
         attr_fn=lambda c: _period_attrs(c.lowest_period()),
@@ -114,8 +186,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="highest_price_today",
         name="Highest price today",
         icon="mdi:trending-up",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.highest_today(),
         attr_fn=lambda c: _period_attrs(c.highest_period()),
@@ -124,8 +196,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="price_difference_from_average",
         name="Price difference from average",
         icon="mdi:compare-horizontal",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.difference_from_average(),
     ),
@@ -134,7 +206,6 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         name="Price difference percentage",
         icon="mdi:percent-outline",
         native_unit_of_measurement="%",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=1,
         value_fn=lambda c: c.difference_percentage_from_average(),
     ),
@@ -149,8 +220,8 @@ PRICE_SENSORS: tuple[PriceSensorDescription, ...] = (
         key="price_spread_today",
         name="Price spread today",
         icon="mdi:arrow-expand-vertical",
+        device_class=SensorDeviceClass.MONETARY,
         native_unit_of_measurement="€/kWh",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=4,
         value_fn=lambda c: c.price_spread_today(),
     ),
@@ -220,7 +291,7 @@ def _period_attrs(period: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity):
-    """A dynamic energy price sensor backed by the price coordinator."""
+    """An energy price sensor backed by the price coordinator."""
 
     _attr_has_entity_name = True
     # The hourly arrays are for the UI/automations only; keeping them out of
@@ -243,7 +314,7 @@ class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity
             identifiers={(DOMAIN, "energy_prices")},
             name="SmartHomeShop Energy Prices",
             manufacturer="SmartHomeShop.io",
-            model="Dynamic energy prices",
+            model="Cloud energy contract",
             entry_type=DeviceEntryType.SERVICE,
             sw_version=VERSION,
         )
