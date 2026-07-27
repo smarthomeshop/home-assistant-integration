@@ -89,6 +89,10 @@ interface EnergyScenario {
   aliasStem: string;
   params: EParam[];
   note?: string;
+  // The state a switch target rests in when this scenario is not acting, so a
+  // target dropped from the list can be handed back the way the automation's
+  // own default branch would leave it. Off unless stated otherwise.
+  restingOn?: boolean;
   build: (a: BuildArgs) => Record<string, unknown>;
 }
 
@@ -111,6 +115,13 @@ const setNumberTemplate = (target: string, value: string) => ({
   service: 'number.set_value', target: { entity_id: target }, data: { value },
 });
 const templateCond = (value_template: string) => ({ condition: 'template', value_template });
+// A state trigger with `for:` is only armed by a future off->on edge, so every
+// automation reload (each save from this panel reloads them all) and every
+// restart disarms it while the load keeps running. This template re-checks the
+// elapsed on-time instead; now() makes Home Assistant re-render it every
+// minute, so the max-runtime cap survives a reload.
+const runtimeExceeded = (target: string, hours: number) =>
+  `{{ is_state('${target}', 'on') and (as_timestamp(now()) - as_timestamp(states['${target}'].last_changed)) >= ${Math.round(hours * 3600)} }}`;
 const contractCond = (px: Record<string, string | null>) => ({
   condition: 'state', entity_id: px.contract_active, state: 'on',
 });
@@ -135,12 +146,20 @@ function steerOnFlag(o: {
     { platform: 'state', entity_id: o.flag, to: ['off', 'unavailable'], id: 'edge' },
     BOOT,
   ];
-  if (o.watchdogHours) trigger.push({ platform: 'state', entity_id: o.target, to: 'on', for: { hours: o.watchdogHours }, id: 'watchdog' });
+  if (o.watchdogHours) {
+    trigger.push({ platform: 'state', entity_id: o.target, to: 'on', for: { hours: o.watchdogHours }, id: 'watchdog' });
+    trigger.push({ platform: 'template', value_template: runtimeExceeded(o.target, o.watchdogHours), id: 'watchdog' });
+  }
+  const watchdogBranch = o.watchdogHours
+    // Checked as a state condition, not as a trigger id, so every trigger
+    // (including boot) also cuts a load that ran past its cap.
+    ? [{ conditions: [{ condition: 'state', entity_id: o.target, state: 'on', for: { hours: o.watchdogHours } }], sequence: [o.stopAct] }]
+    : [];
   return {
     alias: o.alias, description: DESCRIPTION, mode: 'restart',
     trigger, condition: [],
     action: [{ choose: [
-      { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [o.stopAct] },
+      ...watchdogBranch,
       { conditions: [{ condition: 'state', entity_id: o.flag, state: 'on' }, o.contract], sequence: [o.startAct] },
     ], default: [o.stopAct] }],
   };
@@ -305,6 +324,7 @@ const SCENARIOS: EnergyScenario[] = [
   },
   {
     key: 'pause_on_price_peak',
+    restingOn: true,
     title: 'Pause during price peaks',
     desc: 'Switch a load off when the price level hits its daily peak and back on when it drops. Trims the most expensive hours.',
     icon: 'mdi:transmission-tower-off', color: '#e11d48',
@@ -316,13 +336,18 @@ const SCENARIOS: EnergyScenario[] = [
       alias: `${deviceName} - Pause on price peak`, description: DESCRIPTION, mode: 'restart',
       trigger: [
         { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'pause' },
-        { platform: 'state', entity_id: px.price_level, to: ['very_low', 'low', 'medium', 'high'], id: 'resume' },
+        // 'unavailable' is a resume too: a lapsed contract or a revoked key
+        // must never leave the load paused for good.
+        { platform: 'state', entity_id: px.price_level, to: ['very_low', 'low', 'medium', 'high', 'unavailable', 'unknown'], id: 'resume' },
+        { platform: 'state', entity_id: px.contract_active, to: ['on', 'off', 'unavailable', 'unknown'], id: 'contract' },
+        BOOT,
       ],
       condition: [],
+      // Conditions instead of trigger ids, so a restart re-asserts the right
+      // state and anything that is not a confirmed peak resumes the load.
       action: [{ choose: [
-        { conditions: [{ condition: 'trigger', id: 'pause' }, contractCond(px)], sequence: [turn(target, false)] },
-        { conditions: [{ condition: 'trigger', id: 'resume' }], sequence: [turn(target, true)] },
-      ] }],
+        { conditions: [{ condition: 'state', entity_id: px.price_level, state: 'peak' }, contractCond(px)], sequence: [turn(target, false)] },
+      ], default: [turn(target, true)] }],
     }),
   },
   {
@@ -342,12 +367,19 @@ const SCENARIOS: EnergyScenario[] = [
       trigger: [
         { platform: 'state', entity_id: px[`cheapest_${p.hours}h_window_now`] ?? null, to: 'on', id: 'cheap' },
         { platform: 'state', entity_id: px.price_level, to: 'peak', id: 'peak' },
+        // Losing the price feed (lapsed contract, revoked key) must release the
+        // eco setpoint instead of leaving the house cold indefinitely.
+        { platform: 'state', entity_id: px.price_level, to: ['unavailable', 'unknown'], id: 'recover' },
+        { platform: 'state', entity_id: px[`cheapest_${p.hours}h_window_now`] ?? null, to: ['unavailable', 'unknown'], id: 'recover' },
+        BOOT,
       ],
       condition: [],
+      // Eco only holds while the peak is confirmed; every other trigger, a
+      // restart included, falls back to the comfort setpoint.
       action: [{ choose: [
+        { conditions: [{ condition: 'state', entity_id: px.price_level, state: 'peak' }, contractCond(px)], sequence: [setVal(target, p.eco)] },
         { conditions: [{ condition: 'trigger', id: 'cheap' }, contractCond(px)], sequence: [setVal(target, p.comfort)] },
-        { conditions: [{ condition: 'trigger', id: 'peak' }], sequence: [setVal(target, p.eco)] },
-      ] }],
+      ], default: [setVal(target, p.comfort)] }],
     }),
   },
   {
@@ -368,6 +400,7 @@ const SCENARIOS: EnergyScenario[] = [
       trigger: [
         ...surplusTriggers(net ?? '', sources, p.device_power, p.on_delay, p.off_delay),
         { platform: 'state', entity_id: target, to: 'on', for: { hours: p.max_runtime }, id: 'watchdog' },
+        { platform: 'template', value_template: runtimeExceeded(target, p.max_runtime), id: 'watchdog' },
         BOOT,
       ],
       condition: [],
@@ -705,6 +738,9 @@ export class EnergyAutomations extends LitElement {
   @state() private _editId = '';
   @state() private _editEntityId = '';
   @state() private _editEnabled = true;
+  // Targets the automation steered before this edit, so dropped ones can be
+  // released instead of being left in their last commanded state.
+  private _editTargets: string[] = [];
   private _autoEditOpened = false;
 
   static styles = css`
@@ -873,6 +909,7 @@ export class EnergyAutomations extends LitElement {
     this._editId = '';
     this._editEntityId = '';
     this._editEnabled = true;
+    this._editTargets = [];
   }
 
   private async _openEditModal(s: EnergyScenario, automation: AutomationRef): Promise<void> {
@@ -888,6 +925,7 @@ export class EnergyAutomations extends LitElement {
       );
       const targets = automationTargets(config, s.targetDomains);
       this._targets = targets.length ? targets : [''];
+      this._editTargets = targets;
       this._params = existingParams(s, config);
       if (!targets.length) {
         this._error = 'The existing automation has no supported target entities. Select one before saving.';
@@ -939,6 +977,37 @@ export class EnergyAutomations extends LitElement {
     return !this._targets.some((target, index) => index !== rowIndex && target === entityId);
   }
 
+  // The range a target actually accepts. number.set_value and
+  // climate/water_heater.set_temperature reject anything outside it, which
+  // would abort every branch of a scenario that looks perfectly set up.
+  private _targetRange(target: string): { low: number; high: number } | null {
+    const st = this.hass.states[target];
+    if (!st) return null;
+    const numberTarget = dom(target) === 'number';
+    const low = Number(st.attributes?.[numberTarget ? 'min' : 'min_temp']);
+    const high = Number(st.attributes?.[numberTarget ? 'max' : 'max_temp']);
+    if (!Number.isFinite(low) || !Number.isFinite(high) || low > high) return null;
+    return { low, high };
+  }
+
+  // Params that are written to the target as-is, unlike the curtailment limits
+  // that _sanitized clamps into range on purpose.
+  private static readonly WRITTEN_PARAMS = ['boost', 'normal', 'comfort', 'eco', 'current'];
+
+  private _rangeError(s: EnergyScenario, target: string): string {
+    const range = this._targetRange(target);
+    if (!range) return '';
+    const name = (this.hass.states[target]?.attributes?.friendly_name as string) || target;
+    for (const param of s.params) {
+      if (!EnergyAutomations.WRITTEN_PARAMS.includes(param.key)) continue;
+      if (param.domains && !param.domains.includes(dom(target) as Domain)) continue;
+      const value = this._params[param.key] ?? param.default;
+      if (!Number.isFinite(value) || (value >= range.low && value <= range.high)) continue;
+      return `${param.label} must be between ${range.low} and ${range.high} for ${name}.`;
+    }
+    return '';
+  }
+
   private _sanitized(s: EnergyScenario, target: string): { params: Record<string, number>; min: number } {
     const params: Record<string, number> = {};
     for (const param of s.params) {
@@ -976,6 +1045,10 @@ export class EnergyAutomations extends LitElement {
     const targets = [...new Set(this._targets.filter(Boolean))];
     if (!s || !targets.length || this._busy || this._modalLoading) return;
     if (!this.hass.user?.is_admin) { this._error = 'Administrator required.'; return; }
+    for (const target of targets) {
+      const rangeError = this._rangeError(s, target);
+      if (rangeError) { this._error = rangeError; return; }
+    }
     this._busy = true;
     this._error = '';
     let saved = false;
@@ -1008,12 +1081,51 @@ export class EnergyAutomations extends LitElement {
       await this.hass.callApi('POST', `config/automation/config/${id}`, config);
       this._created = { ...this._created, [s.key]: id };
       saved = true;
+      for (const dropped of this._editTargets.filter(target => !targets.includes(target))) {
+        await this._releaseTarget(s, dropped);
+      }
+      this._editTargets = targets;
     } catch (err: any) {
       console.error('energy-automations: save failed', err);
       this._error = `Could not save the automation. ${err?.message || ''}`;
     }
     this._busy = false;
     if (saved) this._closeModal();
+  }
+
+  // A target dropped from the list is no longer referenced by the rewritten
+  // automation, so nothing would ever undo the last value it was driven to.
+  // Hand it back the way this scenario's own stop branch would.
+  private async _releaseTarget(scenario: EnergyScenario, target: string): Promise<void> {
+    const domain = dom(target);
+    try {
+      const { params, min } = this._sanitized(scenario, target);
+      // The export-guard scenarios are the ones that hold production back, so
+      // releasing them means restoring full output - never leaving an inverter
+      // switched off or a limit turned down.
+      const curtailment = 'normal_limit' in params;
+      if (domain === 'switch' || domain === 'input_boolean') {
+        // Pausing scenarios rest ON: switching the load off here would be the
+        // opposite of what their own default branch does.
+        const restOn = scenario.restingOn ?? curtailment;
+        await this.hass.callService(domain, restOn ? 'turn_on' : 'turn_off', { entity_id: target });
+        return;
+      }
+      if (domain === 'number') {
+        const value = curtailment ? params.normal_limit : min;
+        await this.hass.callService('number', 'set_value', { entity_id: target, value });
+        return;
+      }
+      // The resting setpoint of the scenario: the normal value for a surplus
+      // boost, the comfort value for the pre-heat scenario (never its eco
+      // setpoint, which is the one the peak is supposed to release).
+      const normal = 'normal' in params ? params.normal : params.comfort;
+      if (Number.isFinite(normal)) {
+        await this.hass.callService(domain, 'set_temperature', { entity_id: target, temperature: normal });
+      }
+    } catch (err) {
+      console.warn('energy-automations: could not release', target, err);
+    }
   }
 
   private async _toggleAutomation(): Promise<void> {

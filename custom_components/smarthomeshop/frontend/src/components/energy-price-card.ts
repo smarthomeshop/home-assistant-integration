@@ -659,7 +659,7 @@ export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCard
                 )}</div>
                 <div class="cheapest-value">
                   ${cheapest
-                    ? html`${formatTime(cheapest.start)}–${formatTime(cheapest.end)}<span>${this._t('{price}/kWh average', { price: formatPrice(cheapest.average) })}</span>`
+                    ? html`${formatTime(cheapest.start)}-${formatTime(cheapest.end)}<span>${this._t('{price}/kWh average', { price: formatPrice(cheapest.average) })}</span>`
                     : this._t('Not available')}
                 </div>
               </div>

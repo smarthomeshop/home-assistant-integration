@@ -41,8 +41,7 @@
     },
     "error": {
       "no_water_sensor": "Geen watersensor gevonden op dit apparaat",
-      "device_not_found": "Apparaat niet gevonden",
-      "cannot_connect": "Kan geen verbinding maken met het apparaat"
+      "device_not_found": "Apparaat niet gevonden"
     },
     "abort": {
       "already_configured": "Dit apparaat is al ingesteld",
@@ -55,7 +54,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Lekdetectie",
+        "title": "Apparaatinstellingen",
         "data": {
           "continuous_flow_minutes": "Continu-stroom alarm na",
           "night_start": "Nachtbewaking start",
@@ -85,136 +84,130 @@
   },
   "entity": {
     "sensor": {
+      "water_cost_today": {
+        "name": "Waterkosten vandaag (CC)"
+      },
+      "usage_vs_average": {
+        "name": "Verbruik t.o.v. 7-daags gemiddelde (CC)"
+      },
+      "last_session": {
+        "name": "Laatste waterverbruik (CC)"
+      },
       "current_flow_rate": {
-        "name": "Actueel waterverbruik"
+        "name": "Actueel waterverbruik (CC)"
       },
       "today_usage": {
-        "name": "Verbruik vandaag"
+        "name": "Verbruik vandaag (CC)"
       },
       "week_usage": {
-        "name": "Verbruik deze week"
+        "name": "Verbruik deze week (CC)"
       },
       "month_usage": {
-        "name": "Verbruik deze maand"
+        "name": "Verbruik deze maand (CC)"
       },
       "year_usage": {
-        "name": "Verbruik dit jaar"
+        "name": "Verbruik dit jaar (CC)"
+      },
+      "leak_score": {
+        "name": "Lekscore (CC)"
+      },
+      "leak_confidence": {
+        "name": "Betrouwbaarheid lekdetectie (CC)"
+      },
+      "baseline_learning_days": {
+        "name": "Leerdagen basispatroon (CC)"
       },
       "continuous_flow_duration": {
-        "name": "Duur continu waterstroom"
+        "name": "Duur continu waterstroom (CC)"
       },
-      "flow1_current_flow_rate": {
-        "name": "Flow 1 actueel verbruik"
+      "grid_import_energy": {
+        "name": "Netafname energie (CC)"
       },
-      "flow1_today_usage": {
-        "name": "Flow 1 verbruik vandaag"
+      "grid_export_energy": {
+        "name": "Teruglevering energie (CC)"
       },
-      "flow1_week_usage": {
-        "name": "Flow 1 verbruik deze week"
+      "grid_import_power": {
+        "name": "Netafname vermogen (CC)"
       },
-      "flow1_month_usage": {
-        "name": "Flow 1 verbruik deze maand"
+      "grid_export_power": {
+        "name": "Teruglevering vermogen (CC)"
       },
-      "flow1_year_usage": {
-        "name": "Flow 1 verbruik dit jaar"
+      "net_power": {
+        "name": "Netto netvermogen (CC)"
       },
-      "flow1_leak_score": {
-        "name": "Flow 1 lekscore"
+      "available_grid_power": {
+        "name": "Beschikbaar netvermogen (CC)"
       },
-      "flow1_continuous_flow_duration": {
-        "name": "Flow 1 duur continu waterstroom"
+      "phase_max_load": {
+        "name": "Hoogste fasebelasting (CC)"
       },
-      "flow2_current_flow_rate": {
-        "name": "Flow 2 actueel verbruik"
+      "phase_imbalance": {
+        "name": "Fase-onbalans (CC)"
       },
-      "flow2_today_usage": {
-        "name": "Flow 2 verbruik vandaag"
+      "standby_power": {
+        "name": "Sluipverbruik (CC)"
       },
-      "flow2_week_usage": {
-        "name": "Flow 2 verbruik deze week"
+      "standby_cost_year": {
+        "name": "Sluipverbruik kosten per jaar (CC)"
       },
-      "flow2_month_usage": {
-        "name": "Flow 2 verbruik deze maand"
+      "month_peak": {
+        "name": "Maandpiek (CC)"
       },
-      "flow2_year_usage": {
-        "name": "Flow 2 verbruik dit jaar"
+      "energy_used_today": {
+        "name": "Energieverbruik vandaag (CC)"
       },
-      "flow2_leak_score": {
-        "name": "Flow 2 lekscore"
+      "energy_cost_today": {
+        "name": "Energiekosten vandaag (CC)"
       },
-      "flow2_continuous_flow_duration": {
-        "name": "Flow 2 duur continu waterstroom"
+      "energy_cost_month": {
+        "name": "Energiekosten deze maand (CC)"
       },
-      "combined_flow_rate": {
-        "name": "Totaal actueel verbruik"
+      "room_quality": {
+        "name": "Kamerkwaliteit (CC)"
       },
-      "combined_today_usage": {
-        "name": "Totaal verbruik vandaag"
+      "room_quality_label": {
+        "name": "Kamerkwaliteit label (CC)"
       },
-      "combined_week_usage": {
-        "name": "Totaal verbruik deze week"
-      },
-      "combined_month_usage": {
-        "name": "Totaal verbruik deze maand"
-      },
-      "combined_year_usage": {
-        "name": "Totaal verbruik dit jaar"
+      "room_quality_percentage": {
+        "name": "Kamerkwaliteit percentage (CC)"
       }
     },
     "binary_sensor": {
+      "smart_leak_detected": {
+        "name": "Slimme lekdetectie (CC)"
+      },
       "continuous_flow_leak": {
-        "name": "Continu-stroom lek"
+        "name": "Continu-stroom lek (CC)"
       },
       "night_usage_detected": {
-        "name": "Nachtverbruik"
+        "name": "Nachtverbruik (CC)"
       },
       "micro_leak_detected": {
-        "name": "Microlek"
+        "name": "Microlek (CC)"
       },
       "vacation_mode_leak": {
-        "name": "Vakantielek"
-      },
-      "any_leak_alert": {
-        "name": "Lekalarm"
+        "name": "Vakantielek (CC)"
       },
       "water_flowing": {
-        "name": "Water stroomt"
+        "name": "Water stroomt (CC)"
       },
-      "flow1_smart_leak_detected": {
-        "name": "Flow 1 slimme lekdetectie"
+      "any_leak_alert": {
+        "name": "Lekalarm (CC)"
       },
-      "flow1_continuous_flow_leak": {
-        "name": "Flow 1 continu-stroom lek"
-      },
-      "flow1_micro_leak_detected": {
-        "name": "Flow 1 microlek"
-      },
-      "flow1_water_flowing": {
-        "name": "Flow 1 water stroomt"
-      },
-      "flow1_baseline_ready": {
-        "name": "Flow 1 basispatroon geleerd"
-      },
-      "flow2_smart_leak_detected": {
-        "name": "Flow 2 slimme lekdetectie"
-      },
-      "flow2_continuous_flow_leak": {
-        "name": "Flow 2 continu-stroom lek"
-      },
-      "flow2_micro_leak_detected": {
-        "name": "Flow 2 microlek"
-      },
-      "flow2_water_flowing": {
-        "name": "Flow 2 water stroomt"
-      },
-      "flow2_baseline_ready": {
-        "name": "Flow 2 basispatroon geleerd"
-      },
-      "any_leak_detected": {
-        "name": "Lekdetectie (beide lijnen)"
-      },
-      "any_water_flowing": {
-        "name": "Water stroomt (beide lijnen)"
+      "baseline_ready": {
+        "name": "Basispatroon geleerd (CC)"
+      }
+    }
+  },
+  "services": {
+    "apply_battery_recommendation": {
+      "name": "Batterij-advies toepassen",
+      "description": "Past het huidige SmartHomeShop-batterijplan toe op de ingestelde bedieningsentiteit.",
+      "fields": {
+        "action": {
+          "name": "Actie overschrijven",
+          "description": "Laat leeg om het huidige advies van de planner te gebruiken."
+        }
       }
     }
   },

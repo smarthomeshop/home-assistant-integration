@@ -407,14 +407,14 @@ export const formatPower = (
   watts: number | null,
   absolute = false,
 ): { value: string; unit: string } => {
-  if (watts === null) return { value: '—', unit: '' };
+  if (watts === null) return { value: '-', unit: '' };
   const value = absolute ? Math.abs(watts) : watts;
   if (Math.abs(value) >= 1000) return { value: (value / 1000).toFixed(2), unit: 'kW' };
   return { value: String(Math.round(value)), unit: 'W' };
 };
 
 export const formatPrice = (value: number | null | undefined): string => {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '-';
   return `€ ${Number(value).toFixed(3)}`;
 };
 
@@ -423,7 +423,7 @@ export const formatEuro = (value: number): string =>
 
 export const formatTime = (value: string | number): string => {
   const date = typeof value === 'number' ? new Date(value) : new Date(value);
-  if (!Number.isFinite(date.getTime())) return '—';
+  if (!Number.isFinite(date.getTime())) return '-';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 

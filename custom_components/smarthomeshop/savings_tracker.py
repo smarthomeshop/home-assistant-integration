@@ -16,6 +16,7 @@ exposed as sensors plus a websocket snapshot for the panel.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
@@ -26,6 +27,10 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, LOGGER
 
 SAMPLE_HOURS = 0.25
+# How many missed poll intervals still count as a usable price payload. A few
+# give a slow or briefly failing service room to recover without pausing the
+# bookkeeping, while a service that is really down stops it within a few hours.
+MAX_STALE_INTERVALS = 3
 # Ignore battery noise below this power.
 MIN_BATTERY_W = 25.0
 
@@ -73,6 +78,27 @@ class SavingsTracker:
 
     # ---- sampling ----
 
+    def _prices_are_current(self) -> bool:
+        """True when the cached price payload is still fresh enough to value.
+
+        Both the price and the day average freeze at the last successful poll,
+        so a payload from hours ago would book euros that were never earned.
+        Freshness is measured as an age, not as a calendar day: the poll clock
+        is not aligned to midnight, so a day comparison would throw away every
+        sample between midnight and the first poll of the new day, which is
+        exactly when a battery charges in the cheapest hours.
+        """
+        synced = self._prices.last_synced
+        if not synced:
+            return False
+        stamp = dt_util.parse_datetime(str(synced))
+        if stamp is None:
+            return False
+        interval = max(1, int(getattr(self._prices, "update_interval_minutes", 30)))
+        return dt_util.utcnow() - dt_util.as_utc(stamp) <= timedelta(
+            minutes=interval * MAX_STALE_INTERVALS
+        )
+
     @callback
     def _handle_sample(self, _now) -> None:
         self.hass.async_create_task(self._async_sample())
@@ -83,6 +109,11 @@ class SavingsTracker:
         if store is None:
             return
         if not self._prices.supports_price_optimisation():
+            return
+        if not self._prices_are_current():
+            # Keep the totals honest while the price service is unreachable:
+            # the all-time total is never recomputed, so a fabricated euro
+            # stays in it forever.
             return
 
         price = self._prices.electricity_price()

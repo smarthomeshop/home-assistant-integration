@@ -1055,13 +1055,22 @@ export class EnergyHub extends LitElement {
     });
   }
 
+  // A stored key whose first fetch has not finished is not a broken
+  // connection: the backend reports 'connecting' right after a key is saved,
+  // and leaves the coordinator on its initial 'unconfigured' while the
+  // start-up refresh runs.
+  private _accountWarmingUp(account: any): boolean {
+    return !!account?.has_key
+      && (account?.status === 'connecting' || account?.status === 'unconfigured');
+  }
+
   private _watchAccountRefresh(account: any, reset = false): void {
     if (reset) {
       if (this._accountPollTimer) window.clearTimeout(this._accountPollTimer);
       this._accountPollTimer = undefined;
       this._accountPollAttempts = 0;
     }
-    if (!account?.refreshing) {
+    if (!account?.refreshing && !this._accountWarmingUp(account)) {
       if (this._accountPollTimer) window.clearTimeout(this._accountPollTimer);
       this._accountPollTimer = undefined;
       this._accountPollAttempts = 0;
@@ -1694,7 +1703,7 @@ export class EnergyHub extends LitElement {
               <div class="cost-value">${this._formatEuroAmount(Math.abs(netCost))}</div>
               <div class="cost-caption">
                 ${netCost < 0
-                  ? 'Your return value is higher than today’s import cost.'
+                  ? "Your return value is higher than today's import cost."
                   : cost.exportValue > 0
                     ? `${this._formatEuroAmount(cost.exportValue)} in return value has already been deducted.`
                     : 'No measured return value has been deducted yet.'}
@@ -1741,7 +1750,7 @@ export class EnergyHub extends LitElement {
             <div class="cost-foot">
               <ha-icon icon="mdi:information-outline"></ha-icon>
               <span>
-                Estimated from today’s recorded 5-minute grid power and prices from ${contractName}.
+                Estimated from today's recorded 5-minute grid power and prices from ${contractName}.
                 ${cost.predictedPrices ? 'Confirmed prices are temporarily unavailable, so predicted prices are used. ' : ''}
                 ${cost.coverage < .995 ? `${Math.round(cost.coverage * 100)}% of measured energy currently has matching price data. ` : ''}
                 ${this._includeFixedDailyCost && hasFixedDailyCost
@@ -1752,7 +1761,7 @@ export class EnergyHub extends LitElement {
           ` : html`
             <div class="cost-waiting">
               <ha-icon icon="mdi:chart-clock"></ha-icon>
-              <span>Calculating today’s electricity costs from the selected P1 meter history…</span>
+              <span>Calculating today's electricity costs from the selected P1 meter history...</span>
             </div>
           `}
         </div>
@@ -1839,12 +1848,16 @@ export class EnergyHub extends LitElement {
 
   private _renderLive(house: number | null, grid: number | null, solar: number | null, battery: number | null, soc: number | null, contributorDead: boolean) {
     const home = this._formatPower(house);
-    const sourceCount = 1 + (this._sources.solar_power ? 1 : 0) + (this._sources.battery_power ? 1 : 0);
+    // The grid only counts when a P1 meter is actually set up; the setup note
+    // below says so too, and the header must not contradict it.
+    const sourceCount = (this._hasGridPowerSource() ? 1 : 0)
+      + (this._sources.solar_power ? 1 : 0)
+      + (this._sources.battery_power ? 1 : 0);
     const pill = this._homeSourcePill(house, grid, solar, battery, contributorDead);
     return html`
       <section class="section">
         <div class="section-head">
-          <div class="section-title"><h2>Live energy</h2><span>${sourceCount} source${sourceCount === 1 ? '' : 's'} connected</span></div>
+          <div class="section-title"><h2>Live energy</h2><span>${sourceCount === 0 ? 'No sources connected' : `${sourceCount} source${sourceCount === 1 ? '' : 's'} connected`}</span></div>
         </div>
         <div class="surface live-surface">
           <div class="live-home">
@@ -2135,7 +2148,7 @@ export class EnergyHub extends LitElement {
           </div>
           <div class="price-chart-wrap">
             <div class="chart-top">
-              <div class="chart-title">${this._priceTab === 'tomorrow' ? 'Tomorrow' : 'Today'}${predicted
+              <div class="chart-title">${selectedDay}${predicted
                 ? ' forecast'
                 : ''} by ${rows[0]?.resolution === 'quarter-hour' ? 'quarter hour' : 'hour'} (EUR/kWh)</div>
               <div class="chart-legend"><span><i style="background:#159957"></i>Lower</span><span><i style="background:#d34a4a"></i>Higher</span></div>
@@ -2325,7 +2338,7 @@ export class EnergyHub extends LitElement {
                 .height=${'100%'}
                 .clickForMoreInfo=${false}
               ></statistics-chart>
-            ` : html`<div class="power-native-loading">Loading Home Assistant chart…</div>`}
+            ` : html`<div class="power-native-loading">Loading Home Assistant chart...</div>`}
           </div>
         </div>
       </section>
@@ -2771,6 +2784,10 @@ export class EnergyHub extends LitElement {
           <ha-icon icon="mdi:file-document-alert-outline"></ha-icon>
           <div>The selected location has no active energy contract, so there are no prices to show. Add one in your SmartHomeShop account or pick another location in Settings.</div>
           ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('account')}>Open settings</button>` : nothing}
+        </div>` : hasKey && this._accountWarmingUp(this._account) && !this._wizardVisible(hasKey) ? html`
+        <div class="empty">
+          <ha-icon icon="mdi:cloud-sync-outline"></ha-icon>
+          <div>Connecting to the price service. Your prices appear here as soon as the first sync finishes.</div>
         </div>` : hasKey && !priceOk && !this._wizardVisible(hasKey) ? html`
         <div class="empty">
           <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>

@@ -297,7 +297,7 @@ export class HaEnergySync extends LitElement {
         type: 'smarthomeshop/device/link',
         device_id: this.deviceId,
       });
-      this._message = 'SmartHomeShop setup completed. Loading the new energy sensors…';
+      this._message = 'SmartHomeShop setup completed. Loading the new energy sensors...';
       await new Promise(resolve => window.setTimeout(resolve, 900));
       this.dispatchEvent(new CustomEvent('ha-energy-synced', {
         detail: { deviceLinked: true },
@@ -481,7 +481,7 @@ export class HaEnergySync extends LitElement {
                 <button class="primary" ?disabled=${!admin || this._busy}
                   @click=${this._linkDevice}>
                   <ha-icon icon="mdi:link-variant-plus"></ha-icon>
-                  ${this._busy ? 'Completing setup…' : 'Complete SmartHomeShop setup'}
+                  ${this._busy ? 'Completing setup...' : 'Complete SmartHomeShop setup'}
                 </button>
               ` : html`
                 <button class="primary" ?disabled=${!admin || this._busy || !!target.missing.length}
@@ -565,7 +565,7 @@ export class HaEnergySync extends LitElement {
               <button class="primary" ?disabled=${!admin || this._busy}
                 @click=${this._linkDevice}>
                 <ha-icon icon="mdi:link-variant-plus"></ha-icon>
-                ${this._busy ? 'Completing setup…' : 'Complete SmartHomeShop setup'}
+                ${this._busy ? 'Completing setup...' : 'Complete SmartHomeShop setup'}
               </button>
             ` : html`
               <button class="primary" ?disabled=${!admin || this._busy || !!target.missing.length || inSync}

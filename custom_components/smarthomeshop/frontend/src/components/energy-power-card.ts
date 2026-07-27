@@ -352,7 +352,7 @@ export class SmartHomeShopEnergyPowerCard extends EnergyCardBase<EnergyPowerCard
                 .clickForMoreInfo=${false}
               ></statistics-chart>
             ` : html`
-              <div class="chart-loading" role="status" aria-live="polite"><div class="skeleton"></div><span>${this._t('Loading Home Assistant chart…')}</span></div>
+              <div class="chart-loading" role="status" aria-live="polite"><div class="skeleton"></div><span>${this._t('Loading Home Assistant chart...')}</span></div>
             `}
           </div>
         </div>

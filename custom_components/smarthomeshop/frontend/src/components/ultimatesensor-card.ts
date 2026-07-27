@@ -70,6 +70,27 @@ interface EnvironmentData {
   typical_particle_size: number | null;
 }
 
+// Entities that the board itself publishes, never the radar package. Used to
+// tell the device prefix apart from a radar name prefix; the diagnostics are
+// listed too so a radar only build still resolves.
+const DEVICE_PREFIX_PROBES: Array<[string, string]> = [
+  ['sensor', 'scd41_temperature'],
+  ['sensor', 'temperature'],
+  ['sensor', 'bme280_temperature'],
+  ['sensor', 'scd41_humidity'],
+  ['sensor', 'humidity'],
+  ['sensor', 'scd41_co2'],
+  ['sensor', 'co2'],
+  ['sensor', 'bh1750_illuminance'],
+  ['sensor', 'illuminance'],
+  ['sensor', 'voc_index'],
+  ['sensor', 'nox_index'],
+  ['sensor', 'uptime'],
+  ['sensor', 'wifi_signal'],
+  ['number', 'temperature_offset'],
+  ['number', 'humidity_offset'],
+];
+
 interface EntityIds {
   temperature?: string;
   humidity?: string;
@@ -105,6 +126,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     typical_particle_size: null,
   };
   @state() private _entityPrefix: string = '';
+  @state() private _radarPrefix: string = '';
   @state() private _deviceName: string = '';
   @state() private _entityIds: EntityIds = { targets: [] };
   @state() private _showSettings: boolean = false;
@@ -1010,7 +1032,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       if (targetEntity) {
         const match = targetEntity.match(/^sensor\.(.+)_target_1_x$/);
         if (match) {
-          this._entityPrefix = match[1];
+          const owned = new Set(entities);
+          this._radarPrefix = match[1];
+          this._entityPrefix = this._resolveDevicePrefix(match[1], (id) => owned.has(id));
           const device = this.hass.devices?.[this._config.device_id];
           this._deviceName = (device as any)?.name || 'UltimateSensor';
           return;
@@ -1020,6 +1044,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
     if (this._config.entity_prefix) {
       this._entityPrefix = this._config.entity_prefix;
+      this._radarPrefix = this._resolveRadarPrefix(this._config.entity_prefix);
       this._deviceName = this._config.title || 'UltimateSensor';
       return;
     }
@@ -1029,12 +1054,50 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       if (entityId.includes('target_1_x') && entityId.startsWith('sensor.')) {
         const match = entityId.match(/^sensor\.(.+)_target_1_x$/);
         if (match) {
-          this._entityPrefix = match[1];
+          this._radarPrefix = match[1];
+          this._entityPrefix = this._resolveDevicePrefix(
+            match[1],
+            (id) => !!this.hass?.states[id]
+          );
           this._deviceName = 'UltimateSensor';
           return;
         }
       }
     }
+  }
+
+  // The radar package can give its own entities a name prefix of their own
+  // ("Tracking " on UltimateSensor Mini v2 and on every LD2460 build), so the
+  // slug in front of _target_1_x is not always the device prefix. Peel those
+  // words off again, and only accept a shorter prefix once entities that only
+  // ever sit on the device itself are found under it, so the climate and room
+  // score lookups land on ids that really exist.
+  private _resolveDevicePrefix(radarPrefix: string, exists: (id: string) => boolean): string {
+    let candidate = radarPrefix;
+    // Two words is enough for every radar name prefix we ship.
+    for (let peeled = 0; peeled <= 2; peeled++) {
+      const found = DEVICE_PREFIX_PROBES.some(([domain, suffix]) =>
+        exists(`${domain}.${candidate}_${suffix}`)
+      );
+      if (found) return candidate;
+      const cut = candidate.lastIndexOf('_');
+      if (cut <= 0) break;
+      candidate = candidate.slice(0, cut);
+    }
+    return radarPrefix;
+  }
+
+  // The other way around: a hand written entity_prefix names the device, while
+  // the targets may live one name prefix deeper.
+  private _resolveRadarPrefix(devicePrefix: string): string {
+    if (!this.hass) return devicePrefix;
+    if (this.hass.states[`sensor.${devicePrefix}_target_1_x`]) return devicePrefix;
+    for (const entityId of Object.keys(this.hass.states)) {
+      if (!entityId.startsWith(`sensor.${devicePrefix}_`)) continue;
+      const match = entityId.match(/^sensor\.(.+)_target_1_x$/);
+      if (match) return match[1];
+    }
+    return devicePrefix;
   }
 
   private _getEntitiesForDevice(deviceId: string): string[] {
@@ -1111,9 +1174,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     return { offline: found, lastSeen };
   }
 
-  private _getSensorState(suffix: string): number | null {
-    if (!this.hass || !this._entityPrefix) return null;
-    const entityId = `sensor.${this._entityPrefix}_${suffix}`;
+  private _getSensorState(suffix: string, prefix: string = this._entityPrefix): number | null {
+    if (!this.hass || !prefix) return null;
+    const entityId = `sensor.${prefix}_${suffix}`;
     const state = this.hass.states[entityId]?.state;
     if (!state || state === 'unavailable' || state === 'unknown') return null;
     return parseFloat(state);
@@ -1131,35 +1194,52 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     return undefined;
   }
 
-  private _getNumberState(suffix: string): number {
-    if (!this.hass || !this._entityPrefix) return 0;
-    const entityId = `number.${this._entityPrefix}_${suffix}`;
-    const state = this.hass.states[entityId]?.state;
-    return state && state !== 'unavailable' ? parseFloat(state) : 0;
+  // Zone corners are named "X1/Y1/X2/Y2" by the shared LD2450 package and
+  // "Begin X/End X" by UltimateSensor Mini v1, and they sit under the radar
+  // name prefix whenever the firmware sets one.
+  private _getZoneBound(index: number, names: string[]): number {
+    if (!this.hass) return 0;
+    const prefixes = this._radarPrefix && this._radarPrefix !== this._entityPrefix
+      ? [this._radarPrefix, this._entityPrefix]
+      : [this._entityPrefix];
+    for (const prefix of prefixes) {
+      if (!prefix) continue;
+      for (const name of names) {
+        const state = this.hass.states[`number.${prefix}_zone_${index}_${name}`]?.state;
+        if (state && state !== 'unavailable' && state !== 'unknown') {
+          const value = parseFloat(state);
+          if (!isNaN(value)) return value;
+        }
+      }
+    }
+    return 0;
   }
 
   private _updateData(): void {
     if (!this.hass || !this._entityPrefix) return;
 
+    const radarPrefix = this._radarPrefix || this._entityPrefix;
+
     // Update targets
     const targets: Target[] = [];
     const targetEntityIds: string[] = [];
     for (let i = 1; i <= 5; i++) {
-      const xEntity = `sensor.${this._entityPrefix}_target_${i}_x`;
-      const yEntity = `sensor.${this._entityPrefix}_target_${i}_y`;
+      const xEntity = `sensor.${radarPrefix}_target_${i}_x`;
+      const yEntity = `sensor.${radarPrefix}_target_${i}_y`;
       if (!this.hass.states[xEntity] || !this.hass.states[yEntity]) continue;
 
-      const x = this._getSensorState(`target_${i}_x`) ?? 0;
-      const y = this._getSensorState(`target_${i}_y`) ?? 0;
+      const x = this._getSensorState(`target_${i}_x`, radarPrefix) ?? 0;
+      const y = this._getSensorState(`target_${i}_y`, radarPrefix) ?? 0;
       const activeEntity = [
-        `binary_sensor.${this._entityPrefix}_target_${i}_active`,
-        `binary_sensor.${this._entityPrefix}_target_${i}`,
+        `binary_sensor.${radarPrefix}_target_${i}_active`,
+        `binary_sensor.${radarPrefix}_target_${i}`,
       ].find((entityId) => this.hass?.states[entityId]);
       const active = activeEntity
         ? this.hass.states[activeEntity].state === 'on'
         : x !== 0 || y !== 0;
-      const distanceEntity = `sensor.${this._entityPrefix}_target_${i}_distance`;
-      const distance = this._getSensorState(`target_${i}_distance`) ?? Math.hypot(x, y);
+      const distanceEntity = `sensor.${radarPrefix}_target_${i}_distance`;
+      const distance =
+        this._getSensorState(`target_${i}_distance`, radarPrefix) ?? Math.hypot(x, y);
 
       targets.push({ x, y, active, distance });
       targetEntityIds.push(this.hass.states[distanceEntity] ? distanceEntity : xEntity);
@@ -1169,10 +1249,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     // Update zones
     const zones: Zone[] = [];
     for (let i = 1; i <= 4; i++) {
-      const beginX = this._getNumberState(`zone_${i}_begin_x`);
-      const beginY = this._getNumberState(`zone_${i}_begin_y`);
-      const endX = this._getNumberState(`zone_${i}_end_x`);
-      const endY = this._getNumberState(`zone_${i}_end_y`);
+      const beginX = this._getZoneBound(i, ['x1', 'begin_x']);
+      const beginY = this._getZoneBound(i, ['y1', 'begin_y']);
+      const endX = this._getZoneBound(i, ['x2', 'end_x']);
+      const endY = this._getZoneBound(i, ['y2', 'end_y']);
       if (beginX !== 0 || beginY !== 0 || endX !== 0 || endY !== 0) {
         zones.push({ beginX, beginY, endX, endY });
       }
@@ -1197,14 +1277,19 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
            this._getSensorState('voc'),
       nox: this._getSensorState('nox_index') ??
            this._getSensorState('sgp41_nox_index'),
-      // SPS30 Particulate Matter sensors
+      // SPS30 Particulate Matter sensors. The v1 firmware writes the names
+      // with a micro sign, which slugifies to "mm", while v2 writes "um".
       pm1_0: this._getSensorState('pm_1mm_weight_concentration') ??
+             this._getSensorState('pm_1um_weight_concentration') ??
              this._getSensorState('pm_1_0'),
       pm2_5: this._getSensorState('pm_2_5mm_weight_concentration') ??
+             this._getSensorState('pm_2_5um_weight_concentration') ??
              this._getSensorState('pm_2_5'),
       pm4_0: this._getSensorState('pm_4mm_weight_concentration') ??
+             this._getSensorState('pm_4um_weight_concentration') ??
              this._getSensorState('pm_4_0'),
       pm10: this._getSensorState('pm_10mm_weight_concentration') ??
+            this._getSensorState('pm_10um_weight_concentration') ??
             this._getSensorState('pm_10'),
       typical_particle_size: this._getSensorState('typical_particle_size'),
     };
@@ -1217,10 +1302,18 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       illuminance: this._findSensorEntityId(['bh1750_illuminance', 'illuminance']),
       voc: this._findSensorEntityId(['voc_index', 'sgp41_voc_index', 'sgp30_voc', 'voc']),
       nox: this._findSensorEntityId(['nox_index', 'sgp41_nox_index']),
-      pm1_0: this._findSensorEntityId(['pm_1mm_weight_concentration', 'pm_1_0']),
-      pm2_5: this._findSensorEntityId(['pm_2_5mm_weight_concentration', 'pm_2_5']),
-      pm4_0: this._findSensorEntityId(['pm_4mm_weight_concentration', 'pm_4_0']),
-      pm10: this._findSensorEntityId(['pm_10mm_weight_concentration', 'pm_10']),
+      pm1_0: this._findSensorEntityId([
+        'pm_1mm_weight_concentration', 'pm_1um_weight_concentration', 'pm_1_0',
+      ]),
+      pm2_5: this._findSensorEntityId([
+        'pm_2_5mm_weight_concentration', 'pm_2_5um_weight_concentration', 'pm_2_5',
+      ]),
+      pm4_0: this._findSensorEntityId([
+        'pm_4mm_weight_concentration', 'pm_4um_weight_concentration', 'pm_4_0',
+      ]),
+      pm10: this._findSensorEntityId([
+        'pm_10mm_weight_concentration', 'pm_10um_weight_concentration', 'pm_10',
+      ]),
       typical_particle_size: this._findSensorEntityId(['typical_particle_size']),
       targets: targetEntityIds,
     };
@@ -1832,6 +1925,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     if (!this.hass) return null;
 
     // Search for Room Quality entity by looking for entities with our specific attributes
+    const matches: Array<{ entityId: string; state: any }> = [];
     for (const [entityId, state] of Object.entries(this.hass.states)) {
       if (entityId.startsWith('sensor.') &&
           entityId.includes('room_quality') &&
@@ -1839,11 +1933,44 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
           !entityId.includes('percentage') &&
           state.attributes?.recommendations !== undefined &&
           state.attributes?.color !== undefined) {
-        debugLog('SmartHomeShop: Found Room Quality entity:', entityId, 'score:', state.state);
-        return { entityId, state };
+        matches.push({ entityId, state });
       }
     }
-    debugLog('SmartHomeShop: No Room Quality entity found, using local calculation');
+
+    // The integration puts its Room Quality sensor on the same device as the
+    // radar, so a house with more than one sensor must read its own device
+    // only. Picking the first match would show the living room score on the
+    // bedroom card.
+    const deviceId = this._config.device_id;
+    const registryEntities = (this.hass as any).entities;
+    if (deviceId && registryEntities) {
+      const own = matches.find(
+        (m) => registryEntities[m.entityId]?.device_id === deviceId
+      );
+      if (own) {
+        debugLog('SmartHomeShop: Found Room Quality entity:', own.entityId, 'score:', own.state.state);
+        return own;
+      }
+    }
+
+    const byPrefix = this._entityPrefix
+      ? matches.find((m) => m.entityId.startsWith(`sensor.${this._entityPrefix}_`))
+      : undefined;
+    if (byPrefix) {
+      debugLog('SmartHomeShop: Found Room Quality entity:', byPrefix.entityId, 'score:', byPrefix.state.state);
+      return byPrefix;
+    }
+
+    // Only when the card has no idea which device it belongs to can a lone
+    // entity still be the right one. With a known device that did not match,
+    // the entity provably belongs to another sensor, and showing its score
+    // here is exactly what this lookup has to prevent.
+    if (matches.length === 1 && !deviceId && !this._entityPrefix) {
+      debugLog('SmartHomeShop: Found Room Quality entity:', matches[0].entityId, 'score:', matches[0].state.state);
+      return matches[0];
+    }
+
+    debugLog('SmartHomeShop: No Room Quality entity for this device, using local calculation');
     return null;
   }
 

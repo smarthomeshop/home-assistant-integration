@@ -9,14 +9,8 @@ frontend/package.json
 frontend/package-lock.json
 frontend/.gitignore
 
-# Panel source & build config
-panel/src/
-!panel/src/
-panel/src/*
-!panel/src/components/
-panel/src/components/*
-!panel/src/components/sensor-coverage-calibration.ts
-!panel/src/components/ha-energy-sync.ts
+# Panel build config. Everything under panel/src is tracked: www/ ships the
+# compiled bundle, so the AGPL source behind it has to travel with the repo.
 panel/rollup.config.js
 panel/tsconfig.json
 panel/package.json

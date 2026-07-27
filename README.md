@@ -49,9 +49,6 @@ If the button does not work:
 
 ## Dynamic energy and battery planning
 
-> **Work in progress:** Test work Dwains regarding energy prices and automatic
-> control of home battery - WORK IN PROGRESS.
-
 The Energy page combines live contract prices with an hourly outlook. Stored
 market prices are treated as confirmed; missing future hours can be supplied
 as predictions with a confidence score and conservative lower/upper bounds.
@@ -90,7 +87,7 @@ overriding the current recommendation.
 
 ## License
 
-Copyright © 2025–2026 SmartHomeShop.io.
+Copyright (c) 2025-2026 SmartHomeShop.io.
 
 The integration source code is licensed under the
 [GNU Affero General Public License v3.0](LICENSE). Modified versions and

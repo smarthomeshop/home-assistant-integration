@@ -38,11 +38,17 @@ from ....const import (
     MICRO_LEAK_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
     CONF_PRICE_WATER,
+    DEFAULT_NIGHT_USAGE_THRESHOLD,
     DEFAULT_PRICE_WATER,
     EVENT_LEAK_CLEARED,
     EVENT_LEAK_DETECTED,
 )
-from .leak_detection import LeakDetectionConfig, LeakDetectionEngine, LeakScore
+from .leak_detection import (
+    LeakDetectionConfig,
+    LeakDetectionEngine,
+    LeakScore,
+    is_meter_jump,
+)
 
 # Config keys
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
@@ -51,6 +57,12 @@ CONF_NIGHT_END = "night_end"
 CONF_VACATION_MODE_ENTITY = "vacation_mode_entity"
 CONF_LEAK_SCORE_THRESHOLD = "leak_score_threshold"
 CONF_MIN_LEARNING_DAYS = "min_learning_days"
+
+# Night usage only looks like a leak when the water keeps coming back: one
+# toilet flush falls in a single slot of the night, a running toilet or a
+# dripping tap keeps showing up slot after slot.
+NIGHT_SLOT_SECONDS = 900
+NIGHT_LEAK_MIN_SLOTS = 4
 
 
 @dataclass
@@ -129,14 +141,24 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         self._month_start_reading: float | None = None
         self._year_start_reading: float | None = None
 
+        # Litres already counted in the running period before the meter
+        # itself was reset, so a firmware reboot does not zero the sensors.
+        self._period_carry: dict[str, float] = {
+            "day": 0.0,
+            "week": 0.0,
+            "month": 0.0,
+            "year": 0.0,
+        }
+
         # Internal tracking for flow/leak detection (legacy)
         self._flow_start_time: datetime | None = None
         self._last_flow_time: datetime | None = None
         self._night_start_reading: float | None = None
+        self._night_active_slots: set[int] = set()
 
         # Current period for resets
         self._current_day: int | None = None
-        # (ISO year, ISO week) — the year is included so week 1 of a new year
+        # (ISO year, ISO week) - the year is included so week 1 of a new year
         # never matches week 1 of a previous year.
         self._current_week: tuple[int, int] | None = None
         self._current_month: int | None = None
@@ -162,6 +184,8 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
         # Leak alarm state for events and repair issues
         self._leak_active = False
+        self._leak_score_snapshot: dict[str, Any] | None = None
+        self._leak_hold_until: datetime | None = None
 
     def _create_leak_config(self) -> LeakDetectionConfig:
         """Create leak detection configuration from options."""
@@ -171,7 +195,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             continuous_flow_minutes=self._continuous_flow_minutes,
             night_start=self._night_start,
             night_end=self._night_end,
-            night_usage_threshold=2.0,
+            night_usage_threshold=DEFAULT_NIGHT_USAGE_THRESHOLD,
             leak_score_threshold=self._leak_score_threshold,
             min_learning_days=self._min_learning_days,
             vacation_mode_entity=self._vacation_mode_entity,
@@ -259,6 +283,19 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         anchors = store.get_water_anchors(self.config_entry.entry_id)
         if not anchors:
             return
+        # Anchors are meter readings, so they only mean something on the meter
+        # they were taken from. Switching to the calibrated total (which starts
+        # at the reading of the physical meter) would otherwise turn the first
+        # subtraction into years of usage in one period.
+        stored_source = anchors.get("source")
+        if stored_source and stored_source != self._water_sensor:
+            LOGGER.info(
+                "Water meter source changed from %s to %s; usage periods start "
+                "again from the new reading",
+                stored_source,
+                self._water_sensor,
+            )
+            return
         self._day_start_reading = anchors.get("day_start")
         self._week_start_reading = anchors.get("week_start")
         self._month_start_reading = anchors.get("month_start")
@@ -269,6 +306,35 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         self._current_week = tuple(week) if isinstance(week, list) else week
         self._current_month = anchors.get("current_month")
         self._current_year = anchors.get("current_year")
+        carry = anchors.get("period_carry")
+        if isinstance(carry, dict):
+            for period in self._period_carry:
+                value = carry.get(period)
+                if isinstance(value, (int, float)):
+                    self._period_carry[period] = float(value)
+        self._restore_leak_state(anchors)
+
+    def _restore_leak_state(self, anchors: dict[str, Any]) -> None:
+        """Pick the leak alarm back up where the previous run left it.
+
+        Saving a setting in the panel reloads the entry and a restart rebuilds
+        the leak engine from scratch, both of which leave the engine without
+        any flow history. Without this the alarm would silently drop and the
+        repair issue would be left behind with nobody to clear it.
+        """
+        self._leak_active = bool(anchors.get("leak_active"))
+        snapshot = anchors.get("leak_score")
+        self._leak_score_snapshot = snapshot if isinstance(snapshot, dict) else None
+        if not self._leak_active:
+            return
+        # Give the engine a full continuous-flow window to judge the situation
+        # itself before the restored alarm is allowed to clear.
+        self._leak_hold_until = dt_util.now() + timedelta(
+            minutes=self._continuous_flow_minutes
+        )
+        self._async_create_leak_issue(
+            (self._leak_score_snapshot or {}).get("leak_type", "unknown")
+        )
 
     def _persist_period_anchors(self) -> None:
         """Persist the period anchors when they change (rollover or init)."""
@@ -276,6 +342,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         if store is None:
             return
         anchors = {
+            "source": self._water_sensor,
             "day_start": self._day_start_reading,
             "week_start": self._week_start_reading,
             "month_start": self._month_start_reading,
@@ -285,6 +352,9 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             "current_week": list(self._current_week) if self._current_week else None,
             "current_month": self._current_month,
             "current_year": self._current_year,
+            "period_carry": dict(self._period_carry),
+            "leak_active": self._leak_active,
+            "leak_score": self._leak_score_snapshot,
         }
         if anchors != getattr(self, "_saved_anchors", None):
             self._saved_anchors = anchors
@@ -309,10 +379,12 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         # Get current meter reading. An offline/unknown meter must never be
         # read as 0.0: that would anchor phantom usage, fire false leak alarms
         # and record a huge jump when the device reconnects. Hold the last
-        # known state instead.
+        # known state instead, which on a cold start is nothing at all: the
+        # sensors then stay unknown rather than reporting a meter that has
+        # never been seen as empty.
         raw_total = self._get_sensor_value_or_none(self._water_sensor)
         if raw_total is None:
-            return self.data if self.data is not None else data
+            return self.data
         data.meter_total = raw_total
 
         # Get current flow rate
@@ -332,6 +404,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             data.current_flow_rate, data.meter_total, now
         )
         data.baseline_status = self._leak_engine.baseline_status
+        self._apply_leak_hold(data, now)
 
         # Sync smart detection to legacy fields for card compatibility.
         # The engine tracks seconds; the sensor (and the legacy path below)
@@ -431,6 +504,57 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         """Return (timestamp, flow) samples of the last ~20 minutes."""
         return self._flow_history
 
+    def _apply_leak_hold(self, data: WaterUsageData, now: datetime) -> None:
+        """Report the leak of the previous run while the engine catches up.
+
+        A reload or restart rebuilds the leak engine with an empty flow
+        history, so its score starts at zero even though the water is still
+        running. The engine needs more than one continuous-flow window to
+        rebuild the pattern and history parts of its score, so the hold ends
+        on the situation rather than on a timer: it is released once the
+        engine confirms the leak itself, or once the water has actually
+        stopped. Only a long stop clears it, so a leak that pauses briefly
+        does not get an all clear.
+        """
+        if self._leak_hold_until is None:
+            return
+        if data.leak_score and data.leak_score.is_leak_likely:
+            # The engine caught up and owns the verdict again.
+            self._leak_hold_until = None
+            return
+        if data.current_flow_rate is not None and data.current_flow_rate > LEAK_MIN_FLOW_RATE:
+            # Still running: keep the alarm and push the deadline out, so the
+            # hold only expires after the flow has genuinely stopped.
+            self._leak_hold_until = now + timedelta(
+                minutes=self._continuous_flow_minutes
+            )
+        elif now >= self._leak_hold_until:
+            self._leak_hold_until = None
+            return
+        if self._leak_score_snapshot:
+            data.leak_score = LeakScore(
+                **{
+                    key: value
+                    for key, value in self._leak_score_snapshot.items()
+                    if key in LeakScore.__dataclass_fields__
+                }
+            )
+
+    def _async_create_leak_issue(self, leak_type: str) -> None:
+        """Raise the repair issue that tells the owner about the leak."""
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"leak_{self.config_entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="leak_detected",
+            translation_placeholders={
+                "device": self.config_entry.title,
+                "leak_type": leak_type,
+            },
+        )
+
     def _handle_leak_notifications(self, data: WaterUsageData) -> None:
         """Fire events and manage a repair issue when the leak alarm flips."""
         leak_now = bool(data.leak_score and data.leak_score.is_leak_likely)
@@ -440,9 +564,11 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
         device_name = self.config_entry.title
         leak_type = data.leak_score.leak_type if data.leak_score else "unknown"
-        issue_id = f"leak_{self.config_entry.entry_id}"
 
         if leak_now:
+            self._leak_score_snapshot = (
+                data.leak_score.to_dict() if data.leak_score else None
+            )
             self.hass.bus.async_fire(
                 EVENT_LEAK_DETECTED,
                 {
@@ -452,26 +578,21 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
                     "score": data.leak_score.total_score if data.leak_score else None,
                 },
             )
-            ir.async_create_issue(
-                self.hass,
-                DOMAIN,
-                issue_id,
-                is_fixable=False,
-                severity=ir.IssueSeverity.WARNING,
-                translation_key="leak_detected",
-                translation_placeholders={
-                    "device": device_name,
-                    "leak_type": leak_type,
-                },
-            )
+            self._async_create_leak_issue(leak_type)
             LOGGER.warning("Leak detected on %s (%s)", device_name, leak_type)
         else:
+            self._leak_score_snapshot = None
             self.hass.bus.async_fire(
                 EVENT_LEAK_CLEARED,
                 {"entry_id": self.config_entry.entry_id, "device": device_name},
             )
-            ir.async_delete_issue(self.hass, DOMAIN, issue_id)
+            ir.async_delete_issue(
+                self.hass, DOMAIN, f"leak_{self.config_entry.entry_id}"
+            )
             LOGGER.info("Leak cleared on %s", device_name)
+
+        # The alarm has to survive a reload, so store the new state right away.
+        self._persist_period_anchors()
 
     async def _async_update_extra_data(self, data: WaterUsageData) -> None:
         """Override in subclasses to add product-specific data."""
@@ -506,12 +627,17 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         volume_diff = current_reading - self._last_meter_reading
         if volume_diff < 0:
             return 0.0
+        if is_meter_jump(volume_diff * 1000, time_diff):
+            # A recalibrated meter is not a river; see _apply_meter_discontinuity.
+            return 0.0
 
         flow_rate = (volume_diff * 1000) / (time_diff / 60)
         return round(flow_rate, 2)
 
     def _update_period_tracking(self, data: WaterUsageData, now: datetime) -> None:
         """Update daily, weekly, monthly, and yearly consumption."""
+        self._apply_meter_discontinuity(data.meter_total, now)
+
         # Initialize readings if not set
         if self._day_start_reading is None:
             self._day_start_reading = data.meter_total
@@ -525,33 +651,115 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         # Daily reset
         if self._current_day != now.day:
             self._day_start_reading = data.meter_total
+            self._period_carry["day"] = 0.0
             self._current_day = now.day
             self._night_start_reading = None
+            self._night_active_slots = set()
 
         # Weekly reset (Monday is 0)
         iso_week = now.isocalendar()[:2]
         if self._current_week != iso_week:
             self._week_start_reading = data.meter_total
+            self._period_carry["week"] = 0.0
             self._current_week = iso_week
 
         # Monthly reset
         if self._current_month != now.month:
             self._month_start_reading = data.meter_total
+            self._period_carry["month"] = 0.0
             self._current_month = now.month
 
         # Yearly reset
         if self._current_year != now.year:
             self._year_start_reading = data.meter_total
+            self._period_carry["year"] = 0.0
             self._current_year = now.year
 
         # Calculate usage (in liters)
-        data.today_usage = max(0, (data.meter_total - self._day_start_reading) * 1000)
-        data.week_usage = max(0, (data.meter_total - self._week_start_reading) * 1000)
-        data.month_usage = max(0, (data.meter_total - self._month_start_reading) * 1000)
-        data.year_usage = max(0, (data.meter_total - self._year_start_reading) * 1000)
+        data.today_usage = self._period_usage("day", self._day_start_reading, data)
+        data.week_usage = self._period_usage("week", self._week_start_reading, data)
+        data.month_usage = self._period_usage("month", self._month_start_reading, data)
+        data.year_usage = self._period_usage("year", self._year_start_reading, data)
 
         # Persist the anchors so a restart does not reset the usage sensors.
         self._persist_period_anchors()
+
+    def _period_usage(
+        self, period: str, anchor: float, data: WaterUsageData
+    ) -> float:
+        """Litres used in a period, including what a reset meter left behind."""
+        return self._period_carry[period] + max(
+            0.0, (data.meter_total - anchor) * 1000
+        )
+
+    def _apply_meter_discontinuity(self, meter_total: float, now: datetime) -> None:
+        """Keep the period anchors aligned when the meter itself steps.
+
+        A firmware reboot restarts the raw pulse counter at zero and entering
+        the physical meter reading through the card makes the total jump.
+        Neither is water that flowed through the pipe, so a step down keeps
+        what was already counted and re-anchors, and a step up that no pipe
+        can deliver moves the anchors along with it.
+        """
+        anchors = {
+            "day": self._day_start_reading,
+            "week": self._week_start_reading,
+            "month": self._month_start_reading,
+            "year": self._year_start_reading,
+        }
+        known = [value for value in anchors.values() if value is not None]
+        if not known:
+            return
+
+        if any(meter_total < value for value in known):
+            reference = (
+                self._last_meter_reading
+                if self._last_meter_reading is not None
+                else max(known)
+            )
+            for period, anchor in anchors.items():
+                if anchor is None:
+                    continue
+                self._period_carry[period] += max(0.0, (reference - anchor) * 1000)
+            self._day_start_reading = meter_total
+            self._week_start_reading = meter_total
+            self._month_start_reading = meter_total
+            self._year_start_reading = meter_total
+            if self._night_start_reading is not None:
+                self._night_start_reading = meter_total
+            LOGGER.info(
+                "Water meter of %s stepped back to %s; usage counted so far is kept",
+                self.config_entry.title,
+                meter_total,
+            )
+            return
+
+        # A jump up can only be judged against a known previous reading and
+        # the time it took, so the very first reading after a restart is left
+        # alone: catching up after hours offline is real usage.
+        if self._last_meter_reading is None or self.data is None:
+            return
+        delta_liters = (meter_total - self._last_meter_reading) * 1000
+        elapsed = (now - (self.data.last_update or now)).total_seconds()
+        if not is_meter_jump(delta_liters, elapsed):
+            return
+
+        shift = meter_total - self._last_meter_reading
+        if self._day_start_reading is not None:
+            self._day_start_reading += shift
+        if self._week_start_reading is not None:
+            self._week_start_reading += shift
+        if self._month_start_reading is not None:
+            self._month_start_reading += shift
+        if self._year_start_reading is not None:
+            self._year_start_reading += shift
+        if self._night_start_reading is not None:
+            self._night_start_reading += shift
+        LOGGER.info(
+            "Water meter of %s was set to %s; period usage keeps running from there",
+            self.config_entry.title,
+            meter_total,
+        )
 
     def _detect_leaks(self, data: WaterUsageData, now: datetime) -> None:
         """Detect various types of leaks (legacy method)."""
@@ -595,7 +803,15 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             data.vacation_mode_leak = False
 
     def _detect_night_usage(self, data: WaterUsageData, now: datetime) -> None:
-        """Detect unexpected water usage during night hours."""
+        """Detect unexpected water usage during night hours.
+
+        Water at night is only unexpected when it keeps coming back. One
+        toilet flush lands in a single slot of the night window, while a
+        running toilet or a dripping tap turns up in slot after slot. Only
+        that pattern raises the flag, so the leak alarm this feeds is not
+        tripped by a normal night visit; the litres themselves stay
+        available as the raw signal.
+        """
         try:
             night_start_parts = self._night_start.split(":")
             night_end_parts = self._night_end.split(":")
@@ -621,20 +837,31 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             if is_night:
                 if self._night_start_reading is None:
                     self._night_start_reading = data.meter_total
+                    self._night_active_slots = set()
 
                 night_usage = (data.meter_total - self._night_start_reading) * 1000
-                if night_usage > 1:
-                    data.night_usage_detected = True
-                    data.night_usage_amount = round(night_usage, 2)
-                else:
-                    data.night_usage_detected = False
-                    data.night_usage_amount = 0.0
+                data.night_usage_amount = round(max(0.0, night_usage), 2)
+
+                water_moved = data.current_flow_rate >= LEAK_MIN_FLOW_RATE or (
+                    self._last_meter_reading is not None
+                    and data.meter_total > self._last_meter_reading
+                )
+                if water_moved:
+                    self._night_active_slots.add(
+                        int(now.timestamp() // NIGHT_SLOT_SECONDS)
+                    )
+
+                data.night_usage_detected = (
+                    night_usage > DEFAULT_NIGHT_USAGE_THRESHOLD
+                    and len(self._night_active_slots) >= NIGHT_LEAK_MIN_SLOTS
+                )
             else:
                 # Record night usage for learning when night ends
                 if self._night_start_reading is not None:
                     night_total = (data.meter_total - self._night_start_reading) * 1000
                     self._leak_engine.record_night_usage(night_total)
                 self._night_start_reading = None
+                self._night_active_slots = set()
                 data.night_usage_detected = False
                 data.night_usage_amount = 0.0
 

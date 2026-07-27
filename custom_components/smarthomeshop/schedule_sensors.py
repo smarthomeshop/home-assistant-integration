@@ -46,6 +46,7 @@ class SmartHomeShopScheduleBinarySensor(
         self._cycle_key = ""
         self._run_seconds = 0.0
         self._was_on = False
+        self._was_running = False
         self._last_eval = None
         self._last_persist = 0.0
         self._last_plan: SchedulePlan | None = None
@@ -64,6 +65,35 @@ class SmartHomeShopScheduleBinarySensor(
     def _store(self):
         return self.hass.data.get(DOMAIN, {}).get("store") if self.hass else None
 
+    def _target_state(self):
+        target = self._schedule.get("target_entity")
+        return self.hass.states.get(target) if target and self.hass else None
+
+    def _ran_seconds(self, now) -> float:
+        """Seconds the load actually ran since the previous evaluation.
+
+        Wanting the load to run is not the same as running it: a fuse guard can
+        block the start and the user can switch the load off by hand. Counting
+        those hours as done would let the deadline pass with the job unfinished,
+        so the target's own last change decides how much of the interval counts.
+        """
+        window = max(0.0, (now - self._last_eval).total_seconds())
+        state = self._target_state()
+        if state is None or state.state in ("unknown", "unavailable"):
+            # Without a usable target state the flag is all we have.
+            return window
+        if state.state == "on":
+            started = max(self._last_eval, state.last_changed)
+            return min(window, max(0.0, (now - started).total_seconds()))
+        if self._was_running and state.last_changed > self._last_eval:
+            # It ran into this interval and was switched off part way.
+            return max(0.0, (state.last_changed - self._last_eval).total_seconds())
+        return 0.0
+
+    def _target_on(self) -> bool:
+        state = self._target_state()
+        return state is not None and state.state == "on"
+
     def _plan(self) -> SchedulePlan:
         """Evaluate the plan, accounting for hours already run this cycle."""
         now = dt_util.now()
@@ -76,9 +106,9 @@ class SmartHomeShopScheduleBinarySensor(
             self._run_seconds = 0.0
             self._persist_runtime(now, force=True)
 
-        # Accumulate the interval since the previous evaluation while on.
+        # Accumulate the time the load ran since the previous evaluation.
         if self._last_eval is not None and self._was_on:
-            self._run_seconds += max(0.0, (now - self._last_eval).total_seconds())
+            self._run_seconds += self._ran_seconds(now)
             self._persist_runtime(now)
         self._last_eval = now
 
@@ -92,6 +122,7 @@ class SmartHomeShopScheduleBinarySensor(
             hours_done=self._run_seconds / 3600,
         )
         self._was_on = bool(plan.active and self._schedule.get("enabled", True))
+        self._was_running = self._target_on()
         self._last_plan = plan
         return plan
 

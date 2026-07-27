@@ -34,6 +34,14 @@ const turn = (target: string, on: boolean) => ({
   target: { entity_id: target },
 });
 
+// A state trigger with `for:` is only armed by a future off->on edge, so every
+// automation reload (each panel save reloads them all) and every restart
+// disarms it while the load keeps running. This template re-checks the elapsed
+// on-time instead; now() makes Home Assistant re-render it every minute, so the
+// safety cap survives a reload.
+const runtimeExceeded = (target: string, hours: number) =>
+  `{{ is_state('${target}', 'on') and (as_timestamp(now()) - as_timestamp(states['${target}'].last_changed)) >= ${Math.round(hours * 3600)} }}`;
+
 // Generated automation: runs the target while its schedule sensor is on.
 // - watchdog force-offs after a safety cap;
 // - boot re-asserts the correct state on restart;
@@ -48,9 +56,12 @@ function scheduleAutomation(alias: string, flag: string, target: string, watchdo
     { platform: 'state', entity_id: flag, to: 'off', id: 'edge_off' },
     { platform: 'homeassistant', event: 'start', id: 'boot' },
     { platform: 'state', entity_id: target, to: 'on', for: { hours: watchdogHours }, id: 'watchdog' },
+    { platform: 'template', value_template: runtimeExceeded(target, watchdogHours), id: 'watchdog' },
   ];
   const branches: Record<string, unknown>[] = [
-    { conditions: [{ condition: 'trigger', id: 'watchdog' }], sequence: [turn(target, false)] },
+    // Checked as a state condition, not as a trigger id, so every trigger
+    // (including boot) is an opportunity to cut a load that ran past its cap.
+    { conditions: [{ condition: 'state', entity_id: target, state: 'on', for: { hours: watchdogHours } }], sequence: [turn(target, false)] },
     { conditions: [{ condition: 'state', entity_id: flag, state: 'off' }], sequence: [turn(target, false)] },
   ];
   if (guard) {
@@ -81,6 +92,7 @@ export class EnergySchedules extends LitElement {
   @property({ attribute: false }) public deviceEntities: DeviceEntity[] = [];
 
   @state() private _pricesOk = false;
+  @state() private _accountStatus = 'unconfigured';
   @state() private _loaded = false;
   @state() private _schedules: Schedule[] = [];
   @state() private _modal = false;
@@ -153,10 +165,28 @@ export class EnergySchedules extends LitElement {
     if (!this.hass) return;
     try {
       const acc = await this.hass.callWS<{ status?: string }>({ type: 'smarthomeshop/account' });
-      this._pricesOk = acc.status === 'ok';
-      if (this._pricesOk) await this._loadSchedules();
+      this._accountStatus = acc.status || 'unconfigured';
+      this._pricesOk = this._accountStatus === 'ok';
+    } catch (err) { console.error('energy-schedules: account load failed', err); }
+    try {
+      // Saved schedules keep their sensor and their automation while prices are
+      // down, so they must stay visible and manageable in every price state.
+      await this._loadSchedules();
     } catch (err) { console.error('energy-schedules: load failed', err); }
     this._loaded = true;
+  }
+
+  private _priceGateMessage(): string {
+    if (this._accountStatus === 'no_contract') {
+      return 'The selected location has no active energy contract, so no new cheap block can be planned. These schedules stay saved and start again as soon as a contract is active.';
+    }
+    if (['unauthorized', 'forbidden'].includes(this._accountStatus)) {
+      return 'The saved SmartHomeShop.io API key is invalid or was revoked, so no new cheap block can be planned. These schedules stay saved and start again as soon as the key works.';
+    }
+    if (this._accountStatus === 'unconfigured') {
+      return 'No SmartHomeShop.io API key is connected, so no new cheap block can be planned. These schedules stay saved and start again as soon as prices are available.';
+    }
+    return 'Dynamic prices are unavailable right now, so no new cheap block can be planned. These schedules stay saved and start again as soon as prices return.';
   }
 
   private async _loadSchedules(): Promise<void> {
@@ -209,6 +239,11 @@ export class EnergySchedules extends LitElement {
     if (!Number.isFinite(hours) || hours < 1 || hours > 24) { this._error = 'Hours needed must be 1-24.'; return; }
     this._busy = true;
     this._error = '';
+    // The rewritten automation only covers the new target, so a target that is
+    // dropped here would keep whatever state it was last switched to.
+    const previousTarget = this._editId
+      ? this._schedules.find(s => s.id === this._editId)?.target_entity
+      : undefined;
     try {
       const avail = this._availableEntity();
       const guardOn = this._guard && !!avail;
@@ -243,6 +278,11 @@ export class EnergySchedules extends LitElement {
       const guardObj = (guardOn && avail) ? { available: avail, loadPower: Math.max(1, Math.round(this._loadPower)) } : null;
       await this.hass.callApi('POST', `config/automation/config/${autoId(sched.id)}`,
         scheduleAutomation(`${this.deviceName || 'Schedule'} - ${sched.name}`, flag, this._target, hours + 2, guardObj));
+      if (previousTarget && previousTarget !== this._target) {
+        try {
+          await this.hass.callService(dom(previousTarget), 'turn_off', { entity_id: previousTarget });
+        } catch (err) { console.warn('energy-schedules: could not release', previousTarget, err); }
+      }
       await this._loadSchedules();
       this._modal = false;
     } catch (err: any) {
@@ -262,9 +302,9 @@ export class EnergySchedules extends LitElement {
         await this.hass.callApi('DELETE', `config/automation/config/${autoId(s.id)}`);
       } catch { /* already gone / never created */ }
       await this._loadSchedules();
-    } catch (err) {
+    } catch (err: any) {
       console.error('energy-schedules: delete failed', err);
-      this._error = 'Could not delete the schedule. Administrator rights are required.';
+      this._error = `Could not delete the schedule. ${err?.message || ''}`;
     }
   }
 
@@ -401,17 +441,21 @@ export class EnergySchedules extends LitElement {
   }
 
   protected render() {
-    if (!this._loaded || !this._pricesOk) return nothing;
+    if (!this._loaded) return nothing;
+    // Without prices there is nothing to offer a user who has no schedules,
+    // but existing ones must never disappear from the page.
+    if (!this._pricesOk && this._schedules.length === 0) return nothing;
     const isAdmin = !!this.hass.user?.is_admin;
     return html`
       <div class="head">
         <span class="head-title">Deadline schedules</span>
-        ${isAdmin ? html`<button class="add-btn" @click=${() => this._openModal()}><ha-icon icon="mdi:plus"></ha-icon> Add schedule</button>` : nothing}
+        ${isAdmin && this._pricesOk ? html`<button class="add-btn" @click=${() => this._openModal()}><ha-icon icon="mdi:plus"></ha-icon> Add schedule</button>` : nothing}
       </div>
       <div class="sub">
         Have a load finished by a set time in the cheapest hours - e.g. "car ready by 07:00, needs 4 hours".
         The deadline is met whenever the price feed is available (unless the optional fuse guard is waiting for free capacity).
       </div>
+      ${!this._pricesOk ? html`<div class="warn">${this._priceGateMessage()}</div>` : nothing}
       ${this._error && !this._modal ? html`<div class="warn">${this._error}</div>` : nothing}
       ${this._schedules.length === 0
         ? html`<div class="empty">No schedules yet. Add one to charge or run a device by a deadline in the cheapest hours.</div>`

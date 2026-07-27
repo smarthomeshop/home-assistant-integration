@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import SOURCE_IMPORT
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback, valid_entity_id
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -47,6 +48,9 @@ CONF_NIGHT_END = "night_end"
 CONF_VACATION_MODE_ENTITY = "vacation_mode_entity"
 
 _WATER_PRODUCTS = ("waterp1meterkit", "watermeterkit", "waterflowkit")
+# WaterFlowKit has no cost path at all (no water sensors, no cost entities and
+# no reader of the water price), so only these products get the price field.
+_WATER_COST_PRODUCTS = ("waterp1meterkit", "watermeterkit")
 # Entity-id pattern fallback ordered longest-first, so a specific pattern
 # ("ultimatesensor_mini") wins from a product whose pattern is its substring
 # ("ultimatesensor"). Mirrors the ordering rule of PRODUCT_MODEL_PREFIXES.
@@ -462,6 +466,11 @@ def _entry_for_device(hass: HomeAssistant, device_id: str):
     return None
 
 
+# Accepted clock values for a "time" field: HH:MM as the panel input sends it,
+# and the HH:MM:SS the options-flow TimeSelector may have stored, so an
+# untouched field survives a save from the panel.
+_TIME_VALUE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$")
+
 # Local price option -> tariff key from a connected contract. A field is
 # "managed" (hidden in the panel, driven by the contract) only when the
 # contract actually supplies that value, matching the coordinator logic.
@@ -531,10 +540,13 @@ def _config_fields(
              "help": "Days of normal usage the leak detection learns from before pattern alarms arm.",
              "type": "number", "unit": "days", "min": 1, "max": 30, "step": 1,
              "value": options.get("min_learning_days", 7)},
+        ]
+    if product_type in _WATER_COST_PRODUCTS:
+        fields.append(
             price_field({"key": CONF_PRICE_WATER, "label": "Water price",
              "type": "number", "unit": "€/m³", "min": 0, "max": 15, "step": 0.01,
-             "value": pick(CONF_PRICE_WATER, DEFAULT_PRICE_WATER)}),
-        ]
+             "value": pick(CONF_PRICE_WATER, DEFAULT_PRICE_WATER)})
+        )
     if product_type in _ENERGY_PRODUCTS:
         fields += [
             price_field({"key": CONF_PRICE_T1, "label": "Electricity price (T1)", "type": "number",
@@ -564,27 +576,36 @@ def _config_fields(
 @websocket_api.async_response
 async def ws_get_device_config(hass: HomeAssistant, connection, msg: dict) -> None:
     """Return the editable product options for a device."""
-    entry = _entry_for_device(hass, msg["device_id"])
-    if entry is None:
-        connection.send_result(msg["id"], {"configured": False, "fields": []})
-        return
-    product_type = entry.data.get(CONF_PRODUCT_TYPE)
-    from .energy_prices import async_ha_energy_prices
-
-    ha_prices = await async_ha_energy_prices(hass)
     prices = hass.data.get(DOMAIN, {}).get("prices")
     contract = prices.contract() if prices and prices.contract_active() else None
-    tariffs = prices.contract_tariffs() if contract else {}
-    connection.send_result(msg["id"], {
-        "configured": True,
-        "product_type": product_type,
-        "fields": _config_fields(product_type, dict(entry.options), ha_prices, tariffs),
+    # The contract facts belong to the account, not to the device, so they go
+    # out for an unlinked device too: the Automations tab reads them to tell
+    # "no dynamic contract" apart from "this device is not linked yet".
+    account = {
         "contract_active": contract is not None,
         "contract_name": (contract or {}).get("name"),
         "price_optimisation": bool(
             prices and prices.supports_price_optimisation()
         ),
         "contract_type": prices.contract_type() if prices else None,
+    }
+
+    entry = _entry_for_device(hass, msg["device_id"])
+    if entry is None:
+        connection.send_result(
+            msg["id"], {"configured": False, "fields": [], **account}
+        )
+        return
+    product_type = entry.data.get(CONF_PRODUCT_TYPE)
+    from .energy_prices import async_ha_energy_prices
+
+    ha_prices = await async_ha_energy_prices(hass)
+    tariffs = prices.contract_tariffs() if contract else {}
+    connection.send_result(msg["id"], {
+        "configured": True,
+        "product_type": product_type,
+        "fields": _config_fields(product_type, dict(entry.options), ha_prices, tariffs),
+        **account,
     })
 
 
@@ -637,8 +658,30 @@ async def ws_set_device_config(hass: HomeAssistant, connection, msg: dict) -> No
             if hi is not None:
                 num = min(hi, num)
             new_options[key] = num
-        else:
+        elif field["type"] == "time":
+            # A cleared or half-typed time input arrives as "", which the
+            # coordinators cannot parse and would break night detection for
+            # good, so only a real clock value replaces the stored one.
+            if not isinstance(value, str) or not _TIME_VALUE.match(value):
+                continue
             new_options[key] = value
+        elif field["type"] == "entity":
+            # An empty value clears the picker; anything else has to be a
+            # real entity id in the domain this field asks for.
+            if not isinstance(value, str):
+                continue
+            entity_id = value.strip()
+            domain = field.get("domain")
+            if entity_id and (
+                not valid_entity_id(entity_id)
+                or (domain and entity_id.split(".", 1)[0] != domain)
+            ):
+                continue
+            new_options[key] = entity_id
+        else:
+            # Every declared field type is validated above; a new type must
+            # add its own check here before its value can reach the options.
+            continue
 
     hass.config_entries.async_update_entry(entry, options=new_options)
     connection.send_result(msg["id"], {"ok": True})
@@ -865,17 +908,34 @@ async def _async_run_account_refresh(
             domain_data.pop(_ACCOUNT_REFRESH_TASK, None)
 
 
+def _account_selection(account: dict) -> tuple[str, str, str, str]:
+    """The account fields that decide which prices get fetched."""
+    return (
+        (account.get("api_key") or "").strip(),
+        resolve_api_base_url(account.get("base_url")),
+        str(account.get("contract_id") or ""),
+        str(account.get("location_id") or ""),
+    )
+
+
 def _schedule_account_price_refresh(
-    hass: HomeAssistant, prices: Any
+    hass: HomeAssistant, prices: Any, restart: bool = False
 ) -> asyncio.Task | None:
-    """Start one non-blocking account refresh, reusing an active task."""
+    """Start one non-blocking account refresh, reusing an active task.
+
+    A fetch that is already running answers the selection it started with, so
+    after a contract or location change it is dropped instead of reused: its
+    200 would otherwise land as the prices of the location the user just left.
+    """
     if prices is None:
         return None
 
     domain_data = hass.data.setdefault(DOMAIN, {})
     active_task = domain_data.get(_ACCOUNT_REFRESH_TASK)
     if active_task is not None and not active_task.done():
-        return active_task
+        if not restart:
+            return active_task
+        active_task.cancel()
 
     task = hass.async_create_task(_async_run_account_refresh(hass, prices))
     domain_data[_ACCOUNT_REFRESH_TASK] = task
@@ -1229,6 +1289,7 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
         return
 
     account = store.get_account()
+    previous_selection = _account_selection(account)
     if "api_key" in msg:
         # An explicit None disconnects; an empty string is ignored so a
         # partial form submit can never wipe a working key by accident.
@@ -1242,6 +1303,7 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
     if "location_id" in msg:
         account["location_id"] = (str(msg.get("location_id")).strip() or None) if msg.get("location_id") not in (None, "") else None
     await store.async_set_account(account)
+    selection_changed = _account_selection(account) != previous_selection
 
     has_key = bool(account.get("api_key"))
     if prices is not None:
@@ -1251,7 +1313,9 @@ async def ws_set_account(hass: HomeAssistant, connection, msg: dict) -> None:
             # when the price service is slow or temporarily unavailable.
             prices.status = "connecting"
             prices.last_error = None
-            _schedule_account_price_refresh(hass, prices)
+            _schedule_account_price_refresh(
+                hass, prices, restart=selection_changed
+            )
         else:
             refresh_task = hass.data.get(DOMAIN, {}).pop(
                 _ACCOUNT_REFRESH_TASK, None

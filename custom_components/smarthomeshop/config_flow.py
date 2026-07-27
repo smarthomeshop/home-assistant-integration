@@ -569,7 +569,13 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
             # An omitted vacation entity means "none": store it as empty so a
             # previously chosen entity is actually cleared.
             user_input.setdefault(CONF_VACATION_MODE_ENTITY, "")
-            return self.async_create_entry(title="", data=user_input)
+            # Home Assistant replaces the options with what this step returns,
+            # so merge: settings that only the panel can write (leak alarm
+            # sensitivity, learning period) are not in this form and must
+            # survive a Submit here.
+            return self.async_create_entry(
+                title="", data={**self.config_entry.options, **user_input}
+            )
 
         product_type = self.config_entry.data.get(CONF_PRODUCT_TYPE)
         current = self.config_entry.options
@@ -655,8 +661,8 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
         if schema:
             return self.async_show_form(step_id="init", data_schema=vol.Schema(schema))
 
-        # Default: no options
-        return self.async_create_entry(title="", data={})
+        # Nothing to configure here: keep whatever is stored.
+        return self.async_create_entry(title="", data=dict(self.config_entry.options))
 
 
 

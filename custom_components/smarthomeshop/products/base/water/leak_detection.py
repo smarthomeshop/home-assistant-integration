@@ -10,7 +10,7 @@ Features:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 import statistics
 
@@ -22,6 +22,32 @@ from ....const import DOMAIN, LOGGER
 
 STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}_leak_baseline"
+
+# How much history each bucket keeps. Enough samples for a stable baseline
+# while the store file stays a fixed size instead of growing with every day
+# the device runs.
+MAX_HOURLY_SAMPLES = 30
+MAX_DAILY_SAMPLES = 12
+
+# A meter that moves more than this between two readings did not see that
+# much water: it was recalibrated or replaced. The bound grows with the time
+# between the readings, so a device that was offline for hours can report
+# that whole gap without being mistaken for a jump.
+MAX_PLAUSIBLE_FLOW_LPM = 100.0
+MIN_METER_JUMP_LITERS = 200.0
+
+# A day only counts as learned when the meter was watched from midnight and
+# the day change is noticed right away.
+MAX_DAY_LEARN_GAP_SECONDS = 900
+
+
+def is_meter_jump(delta_liters: float, elapsed_seconds: float) -> bool:
+    """Return True when a positive meter step is too large to be real usage."""
+    if delta_liters <= MIN_METER_JUMP_LITERS:
+        return False
+    return delta_liters > max(
+        MIN_METER_JUMP_LITERS, elapsed_seconds / 60 * MAX_PLAUSIBLE_FLOW_LPM
+    )
 
 
 @dataclass
@@ -74,8 +100,14 @@ class BaselineData:
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
-            "hourly_usage": self.hourly_usage,
-            "daily_usage": self.daily_usage,
+            "hourly_usage": {
+                hour: values[-MAX_HOURLY_SAMPLES:]
+                for hour, values in self.hourly_usage.items()
+            },
+            "daily_usage": {
+                day: values[-MAX_DAILY_SAMPLES:]
+                for day, values in self.daily_usage.items()
+            },
             "flow_durations": self.flow_durations[-100:],
             "night_usage_history": self.night_usage_history[-30:],
             "avg_daily_usage": self.avg_daily_usage,
@@ -143,8 +175,11 @@ class LeakDetectionEngine:
         self._current_flow_duration: int = 0
         self._night_start_reading: float | None = None
         self._today_start_reading: float | None = None
-        self._current_day: int | None = None
+        self._today_start_day: str = ""
+        self._today_from_midnight: bool = False
         self._hourly_readings: dict[int, float] = {}
+        self._last_meter_total: float | None = None
+        self._last_meter_time: datetime | None = None
 
     async def async_load(self) -> None:
         """Load baseline data from storage."""
@@ -153,13 +188,34 @@ class LeakDetectionEngine:
         data = await self._store.async_load()
         if data:
             self._baseline = BaselineData.from_dict(data)
+            self._restore_day_tracking(data.get("day_tracking") or {})
             LOGGER.debug("Loaded baseline for %s: %d learning days", self.device_id, self._baseline.learning_days)
         self._loaded = True
 
     async def async_save(self) -> None:
         """Save baseline data to storage."""
         self._baseline.last_update = dt_util.now().isoformat()
-        await self._store.async_save(self._baseline.to_dict())
+        await self._store.async_save(
+            {**self._baseline.to_dict(), "day_tracking": self._day_tracking()}
+        )
+
+    def _day_tracking(self) -> dict[str, Any]:
+        """Return the running day anchor, stored next to the baseline."""
+        return {
+            "today_start_reading": self._today_start_reading,
+            "today_start_day": self._today_start_day,
+            "today_from_midnight": self._today_from_midnight,
+        }
+
+    def _restore_day_tracking(self, tracking: dict[str, Any]) -> None:
+        """Restore the running day anchor.
+
+        Without it a restart halfway through the day would take a fresh
+        anchor and learn the remaining hours as if they were a whole day.
+        """
+        self._today_start_reading = tracking.get("today_start_reading")
+        self._today_start_day = tracking.get("today_start_day", "")
+        self._today_from_midnight = bool(tracking.get("today_from_midnight"))
 
     def update_config(self, config: LeakDetectionConfig) -> None:
         """Update configuration."""
@@ -212,41 +268,113 @@ class LeakDetectionEngine:
 
     def _update_period_tracking(self, meter_total: float, now: datetime) -> None:
         """Update period tracking and learn patterns."""
+        self._apply_meter_discontinuity(meter_total, now)
+
         hour = now.hour
-        day_of_week = now.weekday()
+        today = now.date().isoformat()
         if hour not in self._hourly_readings:
             self._hourly_readings[hour] = meter_total
-        if self._current_day != now.day:
-            if self._today_start_reading is not None and self._current_day is not None:
-                yesterday_usage = (meter_total - self._today_start_reading) * 1000
-                if yesterday_usage > 0:
-                    yesterday_dow = (day_of_week - 1) % 7
-                    if yesterday_dow not in self._baseline.daily_usage:
-                        self._baseline.daily_usage[yesterday_dow] = []
-                    self._baseline.daily_usage[yesterday_dow].append(yesterday_usage)
-                    for h, reading in self._hourly_readings.items():
-                        next_h = (h + 1) % 24
-                        if next_h in self._hourly_readings:
-                            hourly_usage = (self._hourly_readings[next_h] - reading) * 1000
-                            if hourly_usage >= 0:
-                                if h not in self._baseline.hourly_usage:
-                                    self._baseline.hourly_usage[h] = []
-                                self._baseline.hourly_usage[h].append(hourly_usage)
-                    all_daily = []
-                    for values in self._baseline.daily_usage.values():
-                        all_daily.extend(values)
-                    if all_daily:
-                        self._baseline.avg_daily_usage = statistics.mean(all_daily)
-                        if len(all_daily) >= 3:
-                            self._baseline.std_daily_usage = statistics.stdev(all_daily)
-                    self._baseline.learning_days += 1
-                    if self._baseline.learning_days >= self.config.min_learning_days:
-                        self._baseline.is_baseline_ready = True
+        if self._today_start_day != today:
+            self._learn_finished_day(meter_total, now)
             self._today_start_reading = meter_total
-            self._current_day = now.day
-            self._hourly_readings = {hour: meter_total}
+            self._today_start_day = today
+            # Only a day that was watched from its first minutes can later be
+            # learned as a full day.
+            self._today_from_midnight = hour == 0 and self._last_meter_time is not None
+            self._hourly_readings = {}
             self._night_start_reading = None
         self._hourly_readings[hour] = meter_total
+        self._last_meter_total = meter_total
+        self._last_meter_time = now
+
+    def _learn_finished_day(self, meter_total: float, now: datetime) -> None:
+        """Fold the day that just ended into the baseline."""
+        if self._today_start_reading is None or not self._today_from_midnight:
+            return
+        if self._last_meter_time is None or (
+            now - self._last_meter_time
+        ).total_seconds() > MAX_DAY_LEARN_GAP_SECONDS:
+            # Home Assistant was down across the day change, so what the meter
+            # shows now spans two days and would inflate the baseline.
+            return
+        try:
+            finished_day = date.fromisoformat(self._today_start_day)
+        except ValueError:
+            return
+
+        day_usage = (meter_total - self._today_start_reading) * 1000
+        if day_usage <= 0:
+            return
+
+        daily = self._baseline.daily_usage.setdefault(finished_day.weekday(), [])
+        daily.append(day_usage)
+        del daily[:-MAX_DAILY_SAMPLES]
+
+        for h, reading in self._hourly_readings.items():
+            next_h = (h + 1) % 24
+            if next_h in self._hourly_readings:
+                hourly_usage = (self._hourly_readings[next_h] - reading) * 1000
+                if hourly_usage >= 0:
+                    hourly = self._baseline.hourly_usage.setdefault(h, [])
+                    hourly.append(hourly_usage)
+                    del hourly[:-MAX_HOURLY_SAMPLES]
+
+        # "Usage vs 7-day average" has to mean the last week, so average the
+        # most recent day per weekday instead of every day ever learned.
+        recent_daily = [
+            values[-1] for values in self._baseline.daily_usage.values() if values
+        ]
+        if recent_daily:
+            self._baseline.avg_daily_usage = statistics.mean(recent_daily)
+            if len(recent_daily) >= 3:
+                self._baseline.std_daily_usage = statistics.stdev(recent_daily)
+
+        self._baseline.learning_days += 1
+        if self._baseline.learning_days >= self.config.min_learning_days:
+            self._baseline.is_baseline_ready = True
+
+    def _apply_meter_discontinuity(self, meter_total: float, now: datetime) -> None:
+        """Keep the meter anchors usable when the meter itself steps.
+
+        A firmware reboot restarts the pulse counter at zero and entering the
+        physical meter reading makes the total jump. Neither is water that
+        flowed through the pipe, so the anchors move along with the meter
+        instead of the step being learned or scored as usage.
+        """
+        previous = self._last_meter_total
+        if previous is None:
+            if (
+                self._today_start_reading is not None
+                and meter_total < self._today_start_reading
+            ):
+                self._reset_meter_anchors(meter_total)
+            return
+
+        delta_liters = (meter_total - previous) * 1000
+        if delta_liters < 0:
+            self._reset_meter_anchors(meter_total)
+        elif is_meter_jump(
+            delta_liters, (now - (self._last_meter_time or now)).total_seconds()
+        ):
+            self._shift_meter_anchors(meter_total - previous)
+
+    def _reset_meter_anchors(self, meter_total: float) -> None:
+        """Start over after the meter stepped back to a lower total."""
+        self._today_start_reading = meter_total
+        self._today_from_midnight = False
+        self._hourly_readings = {}
+        if self._night_start_reading is not None:
+            self._night_start_reading = meter_total
+
+    def _shift_meter_anchors(self, delta: float) -> None:
+        """Move every anchor along with a recalibrated meter."""
+        if self._today_start_reading is not None:
+            self._today_start_reading += delta
+        if self._night_start_reading is not None:
+            self._night_start_reading += delta
+        self._hourly_readings = {
+            hour: reading + delta for hour, reading in self._hourly_readings.items()
+        }
 
     def _calc_continuous_flow_score(self, now: datetime) -> float:
         """Calculate continuous flow score (0-100)."""

@@ -278,7 +278,7 @@ window.customCards.push({
 window.customCards.push({
   type: 'smarthomeshop-energy-power-card',
   name: 'SmartHomeShop Power Trend Card',
-  description: 'Today’s grid import, grid export, solar and battery power history',
+  description: "Today's grid import, grid export, solar and battery power history",
   preview: true,
   documentationURL: 'https://smarthomeshop.io',
 });
@@ -286,7 +286,7 @@ window.customCards.push({
 window.customCards.push({
   type: 'smarthomeshop-energy-cost-card',
   name: 'SmartHomeShop Energy Costs Card',
-  description: 'Today’s imported electricity cost, return value and net balance',
+  description: "Today's imported electricity cost, return value and net balance",
   preview: true,
   documentationURL: 'https://smarthomeshop.io',
 });

@@ -12,6 +12,7 @@ from homeassistant.config import ConfigType
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 
 from .const import (
     DOMAIN,
@@ -210,6 +211,14 @@ async def async_setup_entry(
         hass.async_create_task(async_setup_utility_meters(hass, entry))
 
     elif product_type == PRODUCT_WATERMETERKIT:
+        from .products.waterp1meterkit.entity_resolver import (
+            migrate_water_total_source,
+        )
+
+        # WaterMeterKit firmware grew the same reboot-safe "Water Meter Total"
+        # as the WaterP1; entries made on older firmware still point at the
+        # pulse counter that starts over at zero after every reboot.
+        migrate_water_total_source(hass, entry)
         coordinator = WaterMeterKitCoordinator(hass, entry)
 
         # Create utility meter helpers for water tracking
@@ -263,7 +272,7 @@ async def async_setup_entry(
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Apply option changes (prices, leak settings, fuse, …) without a restart.
+    # Apply option changes (prices, leak settings, fuse, ...) without a restart.
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
     if product_type in (PRODUCT_P1METERKIT, PRODUCT_WATERP1METERKIT):
@@ -287,3 +296,12 @@ async def async_unload_entry(
 ) -> bool:
     """Unload a config entry."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(
+    hass: HomeAssistant, entry: SmartHomeShopConfigEntry
+) -> None:
+    """Clean up what outlives the config entry."""
+    # A leak repair issue has no owner once the device is gone, so it would
+    # keep warning about a device that is no longer there.
+    ir.async_delete_issue(hass, DOMAIN, f"leak_{entry.entry_id}")

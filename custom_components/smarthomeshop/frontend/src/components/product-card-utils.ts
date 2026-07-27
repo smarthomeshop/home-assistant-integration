@@ -279,7 +279,7 @@ export const connectionStateForDevice = (
 export const formatMetric = (
   value: number | null,
   digits = 0,
-  fallback = '—',
+  fallback = '-',
 ): string => {
   if (value === null) return fallback;
   return new Intl.NumberFormat(undefined, {
@@ -289,7 +289,7 @@ export const formatMetric = (
 };
 
 export const formatPowerMetric = (watts: number | null): { value: string; unit: string } => {
-  if (watts === null) return { value: '—', unit: 'W' };
+  if (watts === null) return { value: '-', unit: 'W' };
   const absolute = Math.abs(watts);
   if (absolute >= 1000) {
     return { value: formatMetric(absolute / 1000, absolute >= 10000 ? 1 : 2), unit: 'kW' };

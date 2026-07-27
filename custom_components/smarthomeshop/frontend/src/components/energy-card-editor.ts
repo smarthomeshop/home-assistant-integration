@@ -180,12 +180,12 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
     }
     if (this.cardType === 'costs') {
       return html`
-        ${this.toggle('show_details', 'Import and return details', 'Show today’s kWh and value for both grid directions')}
+        ${this.toggle('show_details', 'Import and return details', "Show today's kWh and value for both grid directions")}
         ${this.toggle('show_prices', 'Average prices', 'Show the measured average import and return price per kWh')}
         ${this.toggle(
           'include_fixed_daily_cost',
           'Include fixed daily cost',
-          'Add the full daily contract charge to today’s net electricity cost',
+          "Add the full daily contract charge to today's net electricity cost",
           false,
         )}
         ${this.toggle('show_explanation', 'Calculation explanation', 'Explain the price source, coverage and contract charges')}
@@ -193,7 +193,7 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
     }
     if (this.cardType === 'savings') {
       return html`
-        ${this.toggle('show_breakdown', 'Today’s breakdown', 'Separate battery and schedule contributions')}
+        ${this.toggle('show_breakdown', "Today's breakdown", 'Separate battery and schedule contributions')}
         ${this.toggle('show_explanation', 'Measurement explanation', 'Explain how Smart Savings is calculated')}
       `;
     }
@@ -203,8 +203,8 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
           <label class="label" for="view">Card density</label>
           <select id="view" .value=${this.config.view || 'expanded'}
             @change=${(event: Event) => this.setValue('view', (event.target as HTMLSelectElement).value)}>
-            <option value="expanded">Expanded — status and details</option>
-            <option value="compact">Compact — status only</option>
+            <option value="expanded">Expanded - status and details</option>
+            <option value="compact">Compact - status only</option>
           </select>
         </div>
         ${this.toggle('show_schedules', 'Deadline schedules', 'Show ready-by schedules below reactive automations')}

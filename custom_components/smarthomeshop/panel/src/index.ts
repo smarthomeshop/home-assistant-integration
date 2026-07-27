@@ -167,6 +167,29 @@ export class SmartHomeShopPanel extends LitElement {
     }
   `;
 
+  // A reload, a closed tab or a typed URL never passes through _navigateTo,
+  // so the browser has to do the asking there.
+  private _handleBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (!this._zonesDirty()) return;
+    event.preventDefault();
+    event.returnValue = '';
+  };
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('beforeunload', this._handleBeforeUnload);
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener('beforeunload', this._handleBeforeUnload);
+  }
+
+  private _zonesDirty(): boolean {
+    const zones = this.renderRoot?.querySelector('shs-zones-page') as (HTMLElement & { isDirty?: boolean }) | null;
+    return !!zones?.isDirty;
+  }
+
   protected firstUpdated(_changedProperties: PropertyValues): void {
     console.log(`SmartHomeShop Panel v${VERSION} initialized`);
     if (new URLSearchParams(window.location.search).get('energy-settings') === 'automations') {
@@ -184,11 +207,9 @@ export class SmartHomeShopPanel extends LitElement {
     // Leaving the Room Designer with unsaved work must not silently discard it.
     const leavingZones = (this._currentPage === 'zones' || this._currentPage === 'room-builder')
       && page !== 'zones' && page !== 'room-builder';
-    if (leavingZones) {
-      const zones = this.renderRoot.querySelector('shs-zones-page') as (HTMLElement & { isDirty?: boolean }) | null;
-      if (zones?.isDirty && !window.confirm('You have unsaved changes in the Room Designer. Discard them?')) {
-        return;
-      }
+    if (leavingZones && this._zonesDirty()
+      && !window.confirm('You have unsaved changes in the Room Designer. Discard them?')) {
+      return;
     }
     this._currentPage = page;
   }

@@ -5,7 +5,7 @@ earliest start, and a "ready by" deadline), decide whether the load should run
 in the current hour. The rule is the one every dynamic-tariff supplier ships:
 pick the cheapest hours that still finish before the deadline, but if there is
 no longer any slack, run regardless of price so the deadline is met
-(deadline beats price) — provided we actually have prices covering the
+(deadline beats price), provided we actually have prices covering the
 deadline; if tomorrow's prices are not published yet we wait rather than force
 the load on at today's peak.
 

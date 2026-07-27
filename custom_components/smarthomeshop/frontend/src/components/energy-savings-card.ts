@@ -180,7 +180,7 @@ export class SmartHomeShopEnergySavingsCard extends EnergyCardBase<EnergySavings
     );
 
     if (this.loading && !this.context) {
-      return html`<ha-card><div class="loading" role="status" aria-live="polite"><div class="skeleton"></div><div>${t('Loading smart savings…')}</div></div></ha-card>`;
+      return html`<ha-card><div class="loading" role="status" aria-live="polite"><div class="skeleton"></div><div>${t('Loading smart savings...')}</div></div></ha-card>`;
     }
     if (this.loadError && !this.context) {
       return html`<ha-card><div class="empty" role="alert"><ha-icon icon="mdi:alert-circle-outline"></ha-icon><strong>${t('Smart savings unavailable')}</strong><span>${this.loadError}</span></div></ha-card>`;
@@ -240,9 +240,9 @@ export class SmartHomeShopEnergySavingsCard extends EnergyCardBase<EnergySavings
               <div class="today-value ${this._tone(today)}">${formatEuro(today)}</div>
               <div class="today-caption">
                 ${today > 0
-                  ? t('Saved compared with today’s average electricity price.')
+                  ? t("Saved compared with today's average electricity price.")
                   : today < 0
-                    ? t('Smart actions cost more than today’s average so far.')
+                    ? t("Smart actions cost more than today's average so far.")
                     : t('Smart actions have not created measured value yet today.')}
               </div>
             </div>

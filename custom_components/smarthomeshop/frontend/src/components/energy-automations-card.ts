@@ -519,7 +519,7 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
   } {
     const automation = this._state(item.entityId);
     if (!automation || automation.state === 'off') {
-      return { tone: 'attention', label: this._t('Disabled — no automatic actions') };
+      return { tone: 'attention', label: this._t('Disabled - no automatic actions') };
     }
     if (Number(automation.attributes?.current || 0) > 0) {
       return { tone: 'active', label: this._t('Running an action now') };
@@ -532,7 +532,7 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
     const threshold = Number(item.params.device_power || item.params.export_threshold || 100);
     const feedIn = Number(px('feed_in_price')?.state);
     let active = false;
-    let label = this._t('Ready — waiting for its trigger');
+    let label = this._t('Ready - waiting for its trigger');
 
     if (item.scenario === 'run_cheapest_block' || item.scenario === 'ev_charge_cheapest_block') {
       active = px(`cheapest_${hours}h_window_now`)?.state === 'on';
@@ -542,7 +542,7 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
       label = this._t(active ? 'Electricity is cheap now' : 'Waiting for a below-average price');
     } else if (item.scenario === 'pause_on_price_peak') {
       active = px('price_level')?.state === 'peak';
-      label = this._t(active ? 'Price peak — selected loads should be paused' : 'No price peak right now');
+      label = this._t(active ? 'Price peak - selected loads should be paused' : 'No price peak right now');
     } else if (item.scenario === 'precharge_climate_before_peak') {
       const cheap = px(`cheapest_${hours}h_window_now`)?.state === 'on';
       const peak = px('price_level')?.state === 'peak';
@@ -562,7 +562,7 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
       label = this._t(active ? 'Curtailing export during negative feed-in' : 'No unwanted paid export');
     } else if (item.scenario === 'dump_load_on_negative_feed_in') {
       active = Number.isFinite(feedIn) && feedIn < 0;
-      label = this._t(active ? 'Negative feed-in — self-consumption active' : 'Feed-in price is not negative');
+      label = this._t(active ? 'Negative feed-in - self-consumption active' : 'Feed-in price is not negative');
     }
     return { tone: active ? 'active' : 'waiting', label };
   }
@@ -680,7 +680,7 @@ export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAut
     const required = Math.max(1, Number(state?.attributes?.hours_needed || item.hours || 1));
     const progress = Math.max(0, Math.min(100, done / required * 100));
     const detail = !enabled
-      ? this._t('Disabled — deadline planning is paused')
+      ? this._t('Disabled - deadline planning is paused')
       : active
         ? this._t(item.forced ? 'Running now to meet the deadline' : 'Running in a selected low-price hour')
         : item.next_start

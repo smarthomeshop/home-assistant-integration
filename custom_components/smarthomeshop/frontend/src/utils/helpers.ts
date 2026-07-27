@@ -51,7 +51,7 @@ export function relativeTime(iso: string): string {
  */
 export function formatNumber(value: number | null | undefined, decimals = 1): string {
   if (value === null || value === undefined || isNaN(value)) {
-    return '—';
+    return '-';
   }
   return value.toFixed(decimals);
 }

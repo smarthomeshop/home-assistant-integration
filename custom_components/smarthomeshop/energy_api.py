@@ -147,27 +147,56 @@ def _tariffs(flow: dict[str, Any]) -> dict[str, float]:
     return result
 
 
+def _is_dynamic_mode(mode: Any) -> bool:
+    """Whether a commodity flow is priced dynamically rather than per tariff."""
+    return str(mode or "").strip().lower() in ("dynamic", "dynamic_auto")
+
+
 def contract_tariffs(data: dict[str, Any] | None) -> dict[str, float]:
     item = contract(data)
-    legacy = mapping(item.get("tariffs"))
+    # The flat tariffs dict is what the server resolved for this request: on a
+    # dynamic contract it holds the live price and the feed-in price, where the
+    # commodity configuration only keeps the unused fixed-tariff columns.
+    resolved = {
+        key: value
+        for key, raw in mapping(item.get("tariffs")).items()
+        if (value := number(raw)) is not None
+    }
     if not is_v2(data):
-        return {
-            key: value
-            for key, raw in legacy.items()
-            if (value := number(raw)) is not None
-        }
+        return resolved
     commodities = mapping(item.get("commodities"))
     elec = mapping(commodities.get("electricity"))
-    imported = _tariffs(mapping(elec.get("import")))
-    exported = _tariffs(mapping(elec.get("export")))
-    result = {f"electricity_{code}": value for code, value in imported.items()}
-    result.update({f"feed_in_{code}": value for code, value in exported.items()})
-    if len(exported) == 1:
-        result["feed_in"] = next(iter(exported.values()))
+    result: dict[str, float] = {}
+    for direction, prefix in (("import", "electricity"), ("export", "feed_in")):
+        flow = mapping(elec.get(direction))
+        # Per-tariff columns are only a real price on a fixed contract; a
+        # dynamic one leaves them at 0 because they are never filled in. A
+        # payload that does not state a mode predates the field, so it is
+        # read as fixed and keeps working exactly as before.
+        if _is_dynamic_mode(flow.get("mode")):
+            continue
+        # A register the owner never filled in reports 0. That is an absent
+        # price, not a free one, so it stays out: the panel keeps the field
+        # editable and the cost sensors keep using the owner's own value.
+        tariffs = {
+            code: value for code, value in _tariffs(flow).items() if value > 0
+        }
+        result.update(
+            {f"{prefix}_{code}": value for code, value in tariffs.items()}
+        )
+        # One fixed export price for both registers is simply "the" feed-in
+        # price, which is the key the cost sensors read.
+        if direction == "export" and len(set(tariffs.values())) == 1:
+            result["feed_in"] = next(iter(tariffs.values()))
     for name in ("gas", "water"):
-        value = number(mapping(commodities.get(name)).get("price"))
-        if value is not None:
+        commodity = mapping(commodities.get(name))
+        value = number(commodity.get("price"))
+        # An unconfigured commodity reports 0, which must not pass as a
+        # contract price and hide the user's own price field. Only an explicit
+        # denial counts: a payload that predates the flag keeps its price.
+        if commodity.get("configured", True) and value is not None:
             result[name] = value
+    result.update(resolved)
     return result
 
 

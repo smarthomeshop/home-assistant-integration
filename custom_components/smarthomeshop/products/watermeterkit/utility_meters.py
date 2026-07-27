@@ -8,10 +8,62 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ...const import CONF_WATER_SENSOR, LOGGER
+from ...const import CONF_DEVICE_ID, CONF_WATER_SENSOR, LOGGER
 
 # Utility meter cycles to create
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
+
+
+def _short_device_id(entry: ConfigEntry, water_sensor: str, product_prefix: str) -> str:
+    """Return the short id used to name this device's utility meters.
+
+    The default device name is <product>-<mac6>, but ESPHome lets the owner
+    name the device at adoption, so a device called "watermeterkit-garage"
+    must still get its meters.
+    """
+    for pattern in (rf"{product_prefix}_([a-f0-9]+)_", rf"{product_prefix}_(\w+?)_"):
+        match = re.search(pattern, water_sensor.lower())
+        if match:
+            return match.group(1)
+
+    LOGGER.info(
+        "Could not read a device id from %s, naming the utility meters after "
+        "the config entry instead",
+        water_sensor or "an unset water sensor",
+    )
+    return entry.entry_id[:8]
+
+
+def _pulse_total_source(
+    hass: HomeAssistant, entry: ConfigEntry, water_sensor: str
+) -> str:
+    """Return the firmware total the utility meters have to count.
+
+    The configured water sensor is the calibrated "Water Meter Total", which
+    jumps the moment the owner enters the reading of the physical meter.
+    Utility meters need the plain pulse total instead, which only ever
+    counts up (and whose reboots they handle themselves).
+    """
+    registry = er.async_get(hass)
+    device_id = entry.data.get(CONF_DEVICE_ID)
+    if not device_id and water_sensor:
+        configured = registry.async_get(water_sensor)
+        device_id = configured.device_id if configured else None
+    if not device_id:
+        return water_sensor
+
+    for entity in er.async_entries_for_device(registry, device_id):
+        if entity.domain != "sensor" or entity.disabled_by is not None:
+            continue
+        identity = " ".join(
+            value or ""
+            for value in (entity.entity_id, entity.unique_id, entity.original_name)
+        ).lower()
+        identity = re.sub(r"[^a-z0-9]+", "_", identity)
+        if "total_consumption" in identity and "water_meter_total" not in identity:
+            return entity.entity_id
+
+    return water_sensor
 
 
 async def async_setup_utility_meters(
@@ -25,18 +77,16 @@ async def async_setup_utility_meters(
     These are created as official Home Assistant Utility Meter helpers,
     which are persistent and work correctly with the Energy Dashboard.
     """
-    # Extract short device ID from water sensor entity name
     water_sensor = entry.data.get(CONF_WATER_SENSOR, "")
-    match = re.search(rf"{product_prefix}_([a-f0-9]+)_", water_sensor.lower())
-
-    if not match:
-        LOGGER.warning("Could not extract device ID for utility meters from %s", water_sensor)
-        return
-
-    short_id = match.group(1)
+    short_id = _short_device_id(entry, water_sensor, product_prefix)
 
     # Water source entity (from ESPHome water meter)
-    water_entity = f"sensor.{product_prefix}_{short_id}_water_total_consumption"
+    water_entity = _pulse_total_source(hass, entry, water_sensor)
+    if not water_entity:
+        LOGGER.warning(
+            "No water sensor for %s yet, skipping the utility meters", entry.title
+        )
+        return
 
     meters_created = 0
 
@@ -66,14 +116,30 @@ async def _create_single_utility_meter(
 ) -> bool:
     """Create a single utility meter helper if it doesn't exist."""
     # Check if config entry already exists with this name
+    ent_reg = er.async_get(hass)
     for entry in hass.config_entries.async_entries("utility_meter"):
         entry_name = entry.options.get("name", entry.title)
-        if entry_name == name:
+        if entry_name != name:
+            continue
+        stored_source = entry.options.get("source")
+        if stored_source and stored_source != source and not ent_reg.async_get(
+            stored_source
+        ):
+            # An earlier version pointed these meters at an entity the
+            # firmware never created, so they never counted a litre.
+            hass.config_entries.async_update_entry(
+                entry, options={**entry.options, "source": source}
+            )
+            hass.config_entries.async_schedule_reload(entry.entry_id)
+            LOGGER.info(
+                "Utility meter '%s' now counts %s instead of the missing %s",
+                name, source, stored_source,
+            )
+        else:
             LOGGER.debug("Utility meter config entry for '%s' already exists", name)
-            return True
+        return True
 
     # Also check by entity registry as fallback
-    ent_reg = er.async_get(hass)
     name_slug = name.lower().replace(" ", "_").replace("-", "_")
     for entity in ent_reg.entities.values():
         if entity.platform == "utility_meter" and name_slug in entity.entity_id:
@@ -125,4 +191,3 @@ async def _create_single_utility_meter(
     except Exception as err:
         LOGGER.warning("Could not create utility meter %s: %s", name, err)
         return False
-

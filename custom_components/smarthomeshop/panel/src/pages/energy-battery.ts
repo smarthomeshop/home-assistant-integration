@@ -298,6 +298,24 @@ export class EnergyBattery extends LitElement {
     }
   }
 
+  // The planner automation is the only caller of the apply service, so the
+  // battery must be parked idle before that automation is deleted or pointed
+  // at another entity: a grid-charge switch left on (or a select left on the
+  // charge option, or a signed power number left at +charge) would otherwise
+  // keep charging from the grid with nothing left to stop it. The service
+  // reads the STORED config, so this must run before the new config is saved.
+  private async _stopBatteryControl(): Promise<void> {
+    const current = this._cfg;
+    if (!current.enabled || !current.automatic_control || !current.control_entity) return;
+    try {
+      await this.hass.callService('smarthomeshop', 'apply_battery_recommendation', { action: 'hold' });
+    } catch (err) {
+      // The battery may already be idle or unavailable; that must not block
+      // removing the planner.
+      console.error('energy-battery: could not park the battery', err);
+    }
+  }
+
   // Battery automations created from the old device-page card would fight the
   // planner over the same control entity; surface them so they can be removed.
   private _legacyDeviceAutomations(): Array<{ entityId: string; name: string; configId: string }> {
@@ -350,6 +368,12 @@ export class EnergyBattery extends LitElement {
     try {
       if (form.control_kind === 'number') form.off_min = this._numberMin(form.control_entity);
       else form.off_min = 0;
+      const previous = this._cfg;
+      if (previous.control_entity !== form.control_entity
+        || previous.control_kind !== form.control_kind
+        || !form.automatic_control) {
+        await this._stopBatteryControl();
+      }
       if (form.automatic_control) {
         await this.hass.callApi('POST', `config/automation/config/${BATT_ID}`, plannerAutomation(`${this.deviceName || 'Battery'} - Smart battery plan`));
         for (const id of LEGACY_IDS) {
@@ -373,6 +397,7 @@ export class EnergyBattery extends LitElement {
   private async _remove(): Promise<void> {
     if (!this.hass.user?.is_admin || !window.confirm('Remove the battery planner and its automation?')) return;
     try {
+      await this._stopBatteryControl();
       await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: {} });
       await this._deleteAutomation();
       this._cfg = {};

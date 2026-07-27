@@ -25,6 +25,10 @@ from .products.base.water import (
     WaterCoordinator,
 )
 
+# The account-host election lives in the sensor platform so both platforms
+# agree on which entry carries the account-wide entities.
+from .sensor import adopt_account_entities, claim_account_host
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -59,11 +63,7 @@ async def async_setup_entry(
     # Account-wide price binary sensors are always hosted by one entry. They
     # remain unavailable until an API key is connected, avoiding a reload when
     # account settings change.
-    entry_ids = [
-        e.entry_id for e in hass.config_entries.async_entries(DOMAIN)
-        if not e.disabled_by
-    ]
-    is_account_host = bool(entry_ids and config_entry.entry_id == min(entry_ids))
+    is_account_host = claim_account_host(hass, config_entry)
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and is_account_host:
         from .price_binary_sensors import (
@@ -91,6 +91,9 @@ async def async_setup_entry(
             SmartHomeShopBatteryActionBinarySensor(battery_plan, action)
             for action in ("charge", "discharge")
         )
+
+    if is_account_host:
+        adopt_account_entities(hass, config_entry, "binary_sensor", entities)
 
     async_add_entities(entities)
 
@@ -142,11 +145,15 @@ def _setup_schedule_sensors(
                     registry.async_remove(entity_id)
 
     # Add the schedules that already exist, then keep in sync on every change.
+    existing: list[SmartHomeShopScheduleBinarySensor] = []
     for schedule in store.get_schedules():
         if schedule["id"] not in known:
             entity = SmartHomeShopScheduleBinarySensor(prices, schedule)
             known[schedule["id"]] = entity
-            async_add_entities([entity])
+            existing.append(entity)
+    if existing:
+        adopt_account_entities(hass, config_entry, "binary_sensor", existing)
+        async_add_entities(existing)
 
     config_entry.async_on_unload(
         async_dispatcher_connect(hass, SIGNAL_SCHEDULES_CHANGED, _sync)

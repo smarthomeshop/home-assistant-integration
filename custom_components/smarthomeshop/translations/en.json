@@ -41,8 +41,7 @@
     },
     "error": {
       "no_water_sensor": "No water sensor found on this device",
-      "device_not_found": "Device not found",
-      "cannot_connect": "Cannot connect to the device"
+      "device_not_found": "Device not found"
     },
     "abort": {
       "already_configured": "This device is already configured",
@@ -55,7 +54,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Leak detection",
+        "title": "Device settings",
         "data": {
           "continuous_flow_minutes": "Continuous flow alarm after",
           "night_start": "Night monitoring starts",
@@ -85,136 +84,130 @@
   },
   "entity": {
     "sensor": {
+      "water_cost_today": {
+        "name": "Water cost today (CC)"
+      },
+      "usage_vs_average": {
+        "name": "Usage vs 7-day average (CC)"
+      },
+      "last_session": {
+        "name": "Last water session (CC)"
+      },
       "current_flow_rate": {
-        "name": "Current water usage"
+        "name": "Current water usage (CC)"
       },
       "today_usage": {
-        "name": "Usage today"
+        "name": "Usage today (CC)"
       },
       "week_usage": {
-        "name": "Usage this week"
+        "name": "Usage this week (CC)"
       },
       "month_usage": {
-        "name": "Usage this month"
+        "name": "Usage this month (CC)"
       },
       "year_usage": {
-        "name": "Usage this year"
+        "name": "Usage this year (CC)"
+      },
+      "leak_score": {
+        "name": "Leak score (CC)"
+      },
+      "leak_confidence": {
+        "name": "Leak detection confidence (CC)"
+      },
+      "baseline_learning_days": {
+        "name": "Baseline learning days (CC)"
       },
       "continuous_flow_duration": {
-        "name": "Continuous flow duration"
+        "name": "Continuous flow duration (CC)"
       },
-      "flow1_current_flow_rate": {
-        "name": "Flow 1 current usage"
+      "grid_import_energy": {
+        "name": "Grid import energy (CC)"
       },
-      "flow1_today_usage": {
-        "name": "Flow 1 usage today"
+      "grid_export_energy": {
+        "name": "Grid export energy (CC)"
       },
-      "flow1_week_usage": {
-        "name": "Flow 1 usage this week"
+      "grid_import_power": {
+        "name": "Grid import power (CC)"
       },
-      "flow1_month_usage": {
-        "name": "Flow 1 usage this month"
+      "grid_export_power": {
+        "name": "Grid export power (CC)"
       },
-      "flow1_year_usage": {
-        "name": "Flow 1 usage this year"
+      "net_power": {
+        "name": "Net grid power (CC)"
       },
-      "flow1_leak_score": {
-        "name": "Flow 1 leak score"
+      "available_grid_power": {
+        "name": "Available grid power (CC)"
       },
-      "flow1_continuous_flow_duration": {
-        "name": "Flow 1 continuous flow duration"
+      "phase_max_load": {
+        "name": "Highest phase load (CC)"
       },
-      "flow2_current_flow_rate": {
-        "name": "Flow 2 current usage"
+      "phase_imbalance": {
+        "name": "Phase imbalance (CC)"
       },
-      "flow2_today_usage": {
-        "name": "Flow 2 usage today"
+      "standby_power": {
+        "name": "Standby power (CC)"
       },
-      "flow2_week_usage": {
-        "name": "Flow 2 usage this week"
+      "standby_cost_year": {
+        "name": "Standby cost per year (CC)"
       },
-      "flow2_month_usage": {
-        "name": "Flow 2 usage this month"
+      "month_peak": {
+        "name": "Month peak (CC)"
       },
-      "flow2_year_usage": {
-        "name": "Flow 2 usage this year"
+      "energy_used_today": {
+        "name": "Energy used today (CC)"
       },
-      "flow2_leak_score": {
-        "name": "Flow 2 leak score"
+      "energy_cost_today": {
+        "name": "Energy cost today (CC)"
       },
-      "flow2_continuous_flow_duration": {
-        "name": "Flow 2 continuous flow duration"
+      "energy_cost_month": {
+        "name": "Energy cost this month (CC)"
       },
-      "combined_flow_rate": {
-        "name": "Total current usage"
+      "room_quality": {
+        "name": "Room Quality (CC)"
       },
-      "combined_today_usage": {
-        "name": "Total usage today"
+      "room_quality_label": {
+        "name": "Room Quality Label (CC)"
       },
-      "combined_week_usage": {
-        "name": "Total usage this week"
-      },
-      "combined_month_usage": {
-        "name": "Total usage this month"
-      },
-      "combined_year_usage": {
-        "name": "Total usage this year"
+      "room_quality_percentage": {
+        "name": "Room Quality Percentage (CC)"
       }
     },
     "binary_sensor": {
+      "smart_leak_detected": {
+        "name": "Smart leak detection (CC)"
+      },
       "continuous_flow_leak": {
-        "name": "Continuous flow leak"
+        "name": "Continuous flow leak (CC)"
       },
       "night_usage_detected": {
-        "name": "Night usage"
+        "name": "Night usage (CC)"
       },
       "micro_leak_detected": {
-        "name": "Micro leak"
+        "name": "Micro leak (CC)"
       },
       "vacation_mode_leak": {
-        "name": "Vacation leak"
-      },
-      "any_leak_alert": {
-        "name": "Leak alert"
+        "name": "Vacation leak (CC)"
       },
       "water_flowing": {
-        "name": "Water flowing"
+        "name": "Water flowing (CC)"
       },
-      "flow1_smart_leak_detected": {
-        "name": "Flow 1 smart leak detection"
+      "any_leak_alert": {
+        "name": "Leak alarm (CC)"
       },
-      "flow1_continuous_flow_leak": {
-        "name": "Flow 1 continuous flow leak"
-      },
-      "flow1_micro_leak_detected": {
-        "name": "Flow 1 micro leak"
-      },
-      "flow1_water_flowing": {
-        "name": "Flow 1 water flowing"
-      },
-      "flow1_baseline_ready": {
-        "name": "Flow 1 baseline learned"
-      },
-      "flow2_smart_leak_detected": {
-        "name": "Flow 2 smart leak detection"
-      },
-      "flow2_continuous_flow_leak": {
-        "name": "Flow 2 continuous flow leak"
-      },
-      "flow2_micro_leak_detected": {
-        "name": "Flow 2 micro leak"
-      },
-      "flow2_water_flowing": {
-        "name": "Flow 2 water flowing"
-      },
-      "flow2_baseline_ready": {
-        "name": "Flow 2 baseline learned"
-      },
-      "any_leak_detected": {
-        "name": "Leak detection (both flows)"
-      },
-      "any_water_flowing": {
-        "name": "Water flowing (both flows)"
+      "baseline_ready": {
+        "name": "Baseline learned (CC)"
+      }
+    }
+  },
+  "services": {
+    "apply_battery_recommendation": {
+      "name": "Apply battery recommendation",
+      "description": "Applies the current SmartHomeShop battery plan to the configured control entity.",
+      "fields": {
+        "action": {
+          "name": "Action override",
+          "description": "Leave empty to use the current planner recommendation."
+        }
       }
     }
   },

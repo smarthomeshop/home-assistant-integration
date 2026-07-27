@@ -73,7 +73,7 @@ options default to visible, so existing dashboards keep their current layout.
 | **P1MeterKit Card** | Header, connection status, live power flow, tariff totals, phase load, energy insights, gas and device environment |
 | **CeilSense Card** | Header, connection status, live presence radar, zones, distance and signal energy, environment values and room-quality insights |
 | **Live Energy Card** | Header, home consumption, grid, solar and battery rows |
-| **Price Outlook Card** | Header, initial day, price insights, cheapest block and 1–6 hour duration |
+| **Price Outlook Card** | Header, initial day, price insights, cheapest block and 1-6 hour duration |
 | **Power Trend Card** | Header, current/peak summary and independently toggleable grid import, grid export, solar and battery statistics |
 | **Smart Savings Card** | Header, battery/schedule breakdown and measurement explanation |
 | **Smart Automations Card** | Header, compact/expanded density, deadline schedules, quick controls and last-triggered information |

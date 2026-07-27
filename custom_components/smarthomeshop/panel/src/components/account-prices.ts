@@ -113,6 +113,18 @@ export class AccountPrices extends LitElement {
     return status === 'ok' || status === 'no_contract';
   }
 
+  private _isAdmin(): boolean {
+    return !!this.hass.user?.is_admin;
+  }
+
+  // Home Assistant rejects a websocket call with a plain {code, message}
+  // object instead of an Error, so the backend reason is only reachable
+  // through err.message. Without this the real cause is thrown away.
+  private _errorText(action: string, err: any): string {
+    const detail = typeof err?.message === 'string' ? err.message.trim() : '';
+    return detail ? `${action} ${detail}` : `${action} Please try again.`;
+  }
+
   private async _load(): Promise<void> {
     try {
       this._account = await this._callWS({ type: 'smarthomeshop/account' }, 8000);
@@ -133,6 +145,7 @@ export class AccountPrices extends LitElement {
 
   private async _selectContract(id: string): Promise<void> {
     if (this._savingKey) return;
+    if (!this._isAdmin()) { this._error = 'Administrator required.'; return; }
     this._savingKey = true;
     this._error = null;
     try {
@@ -140,9 +153,9 @@ export class AccountPrices extends LitElement {
       if (this._picksLoadable(this._account?.status)) void this._loadContracts();
       this._notifyAccountChanged();
       this._startRefreshFollow();
-    } catch (err) {
+    } catch (err: any) {
       console.error('select contract failed', err);
-      this._error = err instanceof Error ? err.message : 'Could not select the contract.';
+      this._error = this._errorText('Could not select the contract.', err);
       // A user-changed native select does not follow re-rendered attributes,
       // so reset it to the actual saved state after a failed save.
       this._resetSelect('.js-contract-select', this._account?.contract_id);
@@ -165,6 +178,7 @@ export class AccountPrices extends LitElement {
 
   private async _selectLocation(id: string): Promise<void> {
     if (this._savingKey) return;
+    if (!this._isAdmin()) { this._error = 'Administrator required.'; return; }
     this._savingKey = true;
     this._error = null;
     try {
@@ -175,9 +189,9 @@ export class AccountPrices extends LitElement {
       if (this._picksLoadable(this._account?.status)) void this._loadContracts();
       this._notifyAccountChanged();
       this._startRefreshFollow();
-    } catch (err) {
+    } catch (err: any) {
       console.error('select location failed', err);
-      this._error = err instanceof Error ? err.message : 'Could not select the location.';
+      this._error = this._errorText('Could not select the location.', err);
       // Nothing was saved: restore the select to the real state. With a pin
       // still active the shown option is the synthetic "__pinned" one, not
       // the location id (which is still empty).
@@ -192,6 +206,7 @@ export class AccountPrices extends LitElement {
 
   private async _save(): Promise<void> {
     if (this._savingKey) return;
+    if (!this._isAdmin()) { this._error = 'Administrator required.'; return; }
     this._savingKey = true;
     this._error = null;
     try {
@@ -209,9 +224,9 @@ export class AccountPrices extends LitElement {
       if (this._picksLoadable(this._account?.status)) void this._loadContracts();
       this._notifyAccountChanged();
       this._startRefreshFollow();
-    } catch (err) {
+    } catch (err: any) {
       console.error('account save failed', err);
-      this._error = err instanceof Error ? err.message : 'Could not save - please try again.';
+      this._error = this._errorText('Could not save.', err);
     } finally {
       this._savingKey = false;
     }
@@ -226,9 +241,9 @@ export class AccountPrices extends LitElement {
       this._account = await this._waitForRefresh(account);
       if (this._picksLoadable(this._account?.status)) this._loadContracts();
       this._notifyAccountChanged();
-    } catch (err) {
+    } catch (err: any) {
       console.error('sync failed', err);
-      this._error = err instanceof Error ? err.message : 'Could not refresh prices.';
+      this._error = this._errorText('Could not refresh prices.', err);
     } finally {
       this._syncing = false;
     }
@@ -318,15 +333,17 @@ export class AccountPrices extends LitElement {
   }
 
   private async _disconnect(): Promise<void> {
+    if (this._savingKey) return;
+    if (!this._isAdmin()) { this._error = 'Administrator required.'; return; }
     this._savingKey = true;
     this._error = null;
     try {
       // Explicit null = disconnect (an empty string is ignored by the backend).
       this._account = await this._callWS({ type: 'smarthomeshop/account/set', api_key: null });
       this._notifyAccountChanged();
-    } catch (err) {
+    } catch (err: any) {
       console.error('disconnect failed', err);
-      this._error = err instanceof Error ? err.message : 'Could not disconnect - please try again.';
+      this._error = this._errorText('Could not disconnect.', err);
     } finally {
       this._savingKey = false;
     }
@@ -347,6 +364,9 @@ export class AccountPrices extends LitElement {
     };
     const cls = status === 'ok' ? 'ok' : status === 'unconfigured' ? '' : 'alert';
     const badgeText: Record<string, string> = { ok: 'Connected', no_contract: 'No contract' };
+    // Every write here goes through smarthomeshop/account/set, which the
+    // backend refuses for non-admins, so do not offer the controls at all.
+    const isAdmin = this._isAdmin();
 
     return html`
       <div class="card">
@@ -376,7 +396,7 @@ export class AccountPrices extends LitElement {
           ${this._picksLoadable(status) && this._locations.length > 0 ? html`
             <div class="contract-row">
               <label>Location</label>
-              <select class="js-location-select" ?disabled=${this._savingKey}
+              <select class="js-location-select" ?disabled=${this._savingKey || !isAdmin}
                 @change=${(e: Event) => this._selectLocation((e.target as HTMLSelectElement).value)}>
                 ${a?.contract_id ? html`
                   <option value="__pinned" selected disabled>
@@ -397,6 +417,7 @@ export class AccountPrices extends LitElement {
                 : !a?.location_id
                   ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account. Pick a location to always follow that location's active contract, so prices update by themselves when you switch contracts there.`
                   : html`Prices follow the active contract for this location and update by themselves when you change it in your SmartHomeShop account.`}
+              ${!isAdmin ? html` Ask a Home Assistant administrator to change this.` : nothing}
             </div>
             ${status === 'no_contract' ? html`
               <div class="warn">
@@ -406,7 +427,7 @@ export class AccountPrices extends LitElement {
           ` : this._picksLoadable(status) && this._contracts.length > 0 ? html`
             <div class="contract-row">
               <label>Contract</label>
-              <select class="js-contract-select" ?disabled=${this._savingKey}
+              <select class="js-contract-select" ?disabled=${this._savingKey || !isAdmin}
                 @change=${(e: Event) => this._selectContract((e.target as HTMLSelectElement).value)}>
                 <option value="" ?selected=${!a?.contract_id}>Active contract (automatic)</option>
                 ${this._contracts.map((c) => html`
@@ -419,6 +440,7 @@ export class AccountPrices extends LitElement {
               ${!a?.contract_id
                 ? html`<b>Active contract (automatic)</b> follows whichever contract is active in your SmartHomeShop account, so prices update by themselves when you switch contracts there. Pick a specific contract above to pin it instead.`
                 : html`SmartHomeShop Energy is pinned to a specific contract. Choose <b>Active contract (automatic)</b> to always follow the active contract in your account instead.`}
+              ${!isAdmin ? html` Ask a Home Assistant administrator to change this.` : nothing}
             </div>
             ${status === 'no_contract' ? html`
               <div class="warn">
@@ -498,8 +520,18 @@ export class AccountPrices extends LitElement {
               <button class="btn primary" ?disabled=${this._syncing} @click=${this._syncNow}>
                 <ha-icon icon="mdi:sync"></ha-icon> ${this._syncing ? 'Syncing...' : 'Sync now'}
               </button>
-              <button class="btn ghost" @click=${() => { this._showKeyForm = true; }}>Replace key</button>
-              <button class="btn ghost danger" ?disabled=${this._savingKey} @click=${this._disconnect}>Disconnect</button>
+              ${isAdmin ? html`
+                <button class="btn ghost" @click=${() => { this._showKeyForm = true; }}>Replace key</button>
+                <button class="btn ghost danger" ?disabled=${this._savingKey} @click=${this._disconnect}>Disconnect</button>
+              ` : nothing}
+            </div>
+            ${!isAdmin ? html`
+              <div class="hint">Ask a Home Assistant administrator to replace or disconnect the API key.</div>
+            ` : nothing}
+          ` : !isAdmin ? html`
+            <div class="hint">
+              Ask a Home Assistant administrator to connect a SmartHomeShop.io account,
+              so contract prices become available here.
             </div>
           ` : html`
             <div class="form">

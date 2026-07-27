@@ -905,6 +905,7 @@ export class DashboardPage extends LitElement {
                 ['Night usage', leak.night_usage_score],
                 ['Micro leak', leak.micro_leak_score],
                 ['Pattern anomaly', leak.pattern_anomaly_score],
+                ['Historical deviation', leak.historical_deviation_score],
               ].map(([label, score]) => html`
                 <div class="score-row">
                   <span class="score-label">${label}</span>
@@ -919,8 +920,9 @@ export class DashboardPage extends LitElement {
               </div>
               <div class="leak-footnote">
                 Each signal scores 0-100: how strongly the current water usage matches that
-                leak pattern. Occasional spikes are normal - the alarm only triggers when
-                the total score stays above <b>60</b>.
+                leak pattern, and the total is their weighted average. Occasional spikes are
+                normal - the alarm only triggers when the total score stays above the
+                <b>Leak alarm sensitivity</b> set in the Settings tab.
               </div>
             ` : html`<div class="spark-empty">No leak data yet</div>`}
           </div>
@@ -1112,8 +1114,8 @@ export class DashboardPage extends LitElement {
                   <span class="score-value">${Math.round(lineLeak.total_score)}/100</span>
                 </div>
                 <div class="leak-footnote">
-                  How strongly this line's usage matches a leak pattern right now -
-                  the alarm only triggers above <b>60</b>.
+                  How strongly this line's usage matches a leak pattern right now - the alarm
+                  only triggers above the <b>Leak alarm sensitivity</b> set in the Settings tab.
                 </div>
               ` : html`<div class="spark-empty">No leak data yet</div>`}
             </div>
@@ -1521,7 +1523,9 @@ export class DashboardPage extends LitElement {
       // Named entities first: a meter exposes several ids containing "power"
       // (fuse headroom, standby, per phase) and "energy" (a Luxembourg-only
       // DSMR field), which must not win from the actual consumption.
-      const power = this._getSensorValue(entities, ['power_consumed', 'net_grid_power_cc', 'power']);
+      // The DSMR power sensors report kilowatts, so read them through the
+      // unit-aware helper instead of printing the raw state as watts.
+      const power = this._getPowerWatts(entities, ['power_consumed', 'net_grid_power_cc', 'power']);
       const energy = this._getSensorValue(entities, ['energy_consumed_tariff_1', 'energy_consumed', 'energy'])
         || this._getSensorValue(entities, ['water_total_consumption', 'total_consumption', 'total']);
       const voltage = this._getSensorValue(entities, ['voltage_phase_1', 'voltage']);
@@ -1530,8 +1534,8 @@ export class DashboardPage extends LitElement {
         <div class="sensor-grid">
           <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:flash"></ha-icon>
-            <span class="sensor-value">${this._formatValue(power, ' W', 0)}</span>
-            <div class="sensor-label">Power</div>
+            <span class="sensor-value">${this._formatPowerMetric(power)}</span>
+            <div class="sensor-label">${power !== null && power < 0 ? 'Export now' : 'Power'}</div>
           </div>
           <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:lightning-bolt"></ha-icon>

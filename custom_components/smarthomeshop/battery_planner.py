@@ -8,10 +8,13 @@ panel and future hardware adapters.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from statistics import median
 from typing import Any
+
+# Fallback period length when a forecast row has no successor to lean on.
+_DEFAULT_PERIOD = timedelta(hours=1)
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,10 @@ class _Hour:
     feed_in_low: float
     kind: str
     confidence: float
+    # Position in the raw forecast list. The solar and load series are built
+    # from that list, while these periods are filtered and sorted, so they
+    # must not be looked up by their position here.
+    series_index: int = 0
 
     @property
     def duration(self) -> float:
@@ -92,12 +99,36 @@ def _timestamp(value: Any) -> datetime | None:
     return parsed
 
 
+def _period_end(starts: list[datetime], index: int) -> datetime:
+    """Where the period at this index ends.
+
+    The price API sends one start per period and no end, so a period runs until
+    the next one begins. The last row repeats the cadence of the row before it,
+    falling back to an hour when there is nothing to compare with.
+    """
+    start = starts[index]
+    if index + 1 < len(starts) and starts[index + 1] > start:
+        return starts[index + 1]
+    if index > 0 and start > starts[index - 1]:
+        return start + (start - starts[index - 1])
+    return start + _DEFAULT_PERIOD
+
+
 def _hours(rows: list[dict[str, Any]], now: datetime, horizon: int) -> list[_Hour]:
-    result: list[_Hour] = []
-    for row in rows:
+    ordered: list[tuple[datetime, dict[str, Any], int]] = []
+    for raw_index, row in enumerate(rows):
         start = _timestamp(row.get("start"))
+        if start is not None:
+            ordered.append((start, row, raw_index))
+    ordered.sort(key=lambda item: item[0])
+    starts = [item[0] for item in ordered]
+
+    result: list[_Hour] = []
+    for index, (start, row, raw_index) in enumerate(ordered):
         end = _timestamp(row.get("end"))
-        if start is None or end is None or end <= now:
+        if end is None or end <= start:
+            end = _period_end(starts, index)
+        if end <= now:
             continue
         consumer = _number(row.get("consumer"), float("nan"))
         if not isfinite(consumer):
@@ -115,6 +146,7 @@ def _hours(rows: list[dict[str, Any]], now: datetime, horizon: int) -> list[_Hou
                 feed_in_low=_number(row.get("feed_in_low"), feed_in),
                 kind=str(row.get("kind") or "confirmed"),
                 confidence=max(0.0, min(1.0, _number(row.get("confidence"), 1.0))),
+                series_index=raw_index,
             )
         )
     result.sort(key=lambda item: item.start)
@@ -227,8 +259,8 @@ def build_battery_plan(
     for index, period in enumerate(periods):
         next_costs = [inf] * state_count
         next_parents: list[tuple[int, float] | None] = [None] * state_count
-        solar_kw = _series_value(solar_forecast, index, 0.0)
-        load_kw = _series_value(load_forecast, index, base_load)
+        solar_kw = _series_value(solar_forecast, period.series_index, 0.0)
+        load_kw = _series_value(load_forecast, period.series_index, base_load)
         for state, accumulated in enumerate(costs):
             if not isfinite(accumulated):
                 continue
@@ -291,8 +323,8 @@ def build_battery_plan(
     timeline: list[dict[str, Any]] = []
     for index, (planned_state, action_kw) in enumerate(path):
         period = periods[index]
-        solar_kw = _series_value(solar_forecast, index, 0.0)
-        load_kw = _series_value(load_forecast, index, base_load)
+        solar_kw = _series_value(solar_forecast, period.series_index, 0.0)
+        load_kw = _series_value(load_forecast, period.series_index, base_load)
         baseline_grid = load_kw - solar_kw
         baseline_cost += (
             max(0.0, baseline_grid) * period.consumer

@@ -22,6 +22,10 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN, VERSION
 from .price_coordinator import PriceCoordinator
 
+# Statuses that only mean the poll itself did not get through. The contract is
+# not gone, so the last known answer still stands.
+TRANSIENT_STATUSES = {"error", "connecting"}
+
 
 def _prices_device_info() -> DeviceInfo:
     return DeviceInfo(
@@ -79,9 +83,24 @@ class SmartHomeShopContractActiveBinarySensor(
         self._attr_unique_id = f"{DOMAIN}_price_contract_active"
         self._attr_device_info = _prices_device_info()
 
+    def _connected(self) -> bool:
+        if self.coordinator.contract() is None:
+            return False
+        return (
+            self.coordinator.status == "ok"
+            or self.coordinator.status in TRANSIENT_STATUSES
+        )
+
     @property
     def is_on(self) -> bool:
-        return self.coordinator.contract_active()
+        return self._connected()
+
+    @property
+    def available(self) -> bool:
+        # Automations condition on this gate, so a failed poll must not turn it
+        # 'unavailable': that sends them down their stop branch exactly when a
+        # cheap window opens. Keep answering from the cached contract instead.
+        return self.coordinator.last_update_success or self._connected()
 
 
 class SmartHomeShopTomorrowPricesBinarySensor(

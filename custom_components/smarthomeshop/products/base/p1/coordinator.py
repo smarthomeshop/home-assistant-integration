@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
+from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util, slugify
 
 from ....const import (
     CONF_MAIN_FUSE_AMPS,
@@ -112,6 +113,9 @@ class EnergyTracker:
         self._phase_count = 0
         self._last_available_w: float | None = None
 
+        # Resolved utility meter entity ids, keyed by meter suffix
+        self._meter_entities: dict[str, str] = {}
+
         # Best-effort defaults from the HA Energy Dashboard (loaded once)
         self._ha_prices: dict[str, float] = {}
         self._ha_prices_loaded = False
@@ -176,8 +180,32 @@ class EnergyTracker:
             return value * 1000
         return value
 
+    def _meter_entity_id(self, suffix: str) -> str:
+        """Resolve the entity id of one utility meter helper.
+
+        Home Assistant links the helper to the device of its source sensor, so
+        the helper entity id gets the device slug prepended and cannot be
+        rebuilt from the meter prefix. Look it up through its own config entry
+        instead: the slugified helper name is exactly "<prefix>_<suffix>".
+        """
+        registry = er.async_get(self.hass)
+        cached = self._meter_entities.get(suffix)
+        if cached is not None and registry.async_get(cached) is not None:
+            return cached
+
+        wanted = f"{self._meter_prefix}_{suffix}"
+        for entry in self.hass.config_entries.async_entries("utility_meter"):
+            name = entry.options.get("name") or entry.title
+            if slugify(str(name)) != wanted:
+                continue
+            for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+                self._meter_entities[suffix] = entity.entity_id
+                return entity.entity_id
+        # A helper whose source has no device keeps the plain slug.
+        return f"sensor.{wanted}"
+
     def _meter_value(self, suffix: str) -> float | None:
-        state = self._raw_state(f"sensor.{self._meter_prefix}_{suffix}")
+        state = self._raw_state(self._meter_entity_id(suffix))
         if state is None:
             return None
         try:
@@ -252,6 +280,10 @@ class EnergyTracker:
                 data.energy_returned_t1 = combined_returned
                 data.energy_returned_t2 = 0.0
         data.gas_total = self._value("gas_consumed")
+        if data.gas_total is None:
+            # Belgian meters publish gas on OBIS 24.2.3, which the firmware
+            # exposes as its own register instead of the Dutch 24.2.1 one.
+            data.gas_total = self._value("gas_consumed_belgium")
 
         # Phase currents and load against the main fuse
         fuse = self._price(CONF_MAIN_FUSE_AMPS, DEFAULT_MAIN_FUSE_AMPS)
@@ -277,7 +309,7 @@ class EnergyTracker:
                 self._last_available_w = data.available_grid_w
             else:
                 # A phase current dropped out: never inflate the headroom on a
-                # partial reading — hold the last trustworthy value instead.
+                # partial reading; hold the last trustworthy value instead.
                 data.available_grid_w = self._last_available_w
 
         # ---- Month peak (quarter-hour average power) ----

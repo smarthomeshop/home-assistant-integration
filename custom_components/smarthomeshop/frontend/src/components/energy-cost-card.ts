@@ -233,7 +233,7 @@ export class SmartHomeShopEnergyCostCard extends EnergyCardBase<EnergyCostCardCo
         <ha-card>
           <div class="loading" role="status" aria-live="polite">
             <div class="skeleton"></div>
-            <div>${t('Calculating today’s electricity costs…')}</div>
+            <div>${t("Calculating today's electricity costs...")}</div>
           </div>
         </ha-card>
       `;
@@ -255,7 +255,7 @@ export class SmartHomeShopEnergyCostCard extends EnergyCardBase<EnergyCostCardCo
           <div class="empty" role="status">
             <ha-icon icon="mdi:file-document-alert-outline"></ha-icon>
             <strong>${t('No active energy contract')}</strong>
-            <span>${t('Connect an active SmartHomeShop contract to value today’s imported and returned electricity.')}</span>
+            <span>${t("Connect an active SmartHomeShop contract to value today's imported and returned electricity.")}</span>
           </div>
         </ha-card>
       `;
@@ -281,7 +281,7 @@ export class SmartHomeShopEnergyCostCard extends EnergyCardBase<EnergyCostCardCo
           <div class="empty" role="status">
             <ha-icon icon="mdi:chart-clock"></ha-icon>
             <strong>${t('Not enough history yet')}</strong>
-            <span>${t('The card will calculate today’s costs as soon as Recorder has grid power history.')}</span>
+            <span>${t("The card will calculate today's costs as soon as Recorder has grid power history.")}</span>
           </div>
         </ha-card>
       `;

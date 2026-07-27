@@ -5,8 +5,15 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import RestoreSensor, SensorEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import (
+    SIGNAL_CONFIG_ENTRY_CHANGED,
+    ConfigEntry,
+    ConfigEntryChange,
+    ConfigEntryState,
+)
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -38,6 +45,102 @@ from .products.ultimatesensor import (
     UltimateSensorCoordinator,
 )
 from .products.ultimatesensor.coordinator import RoomQualityData
+
+# Key under hass.data[DOMAIN] holding the entry that carries the account-wide
+# entities (prices, savings, battery plan, deadline schedules).
+ACCOUNT_HOST = "account_host"
+
+
+@callback
+def _entry_is_usable(hass: HomeAssistant, entry_id: str | None) -> bool:
+    """Does this entry still exist and is it still enabled?"""
+    if not entry_id:
+        return False
+    return any(
+        entry.entry_id == entry_id and not entry.disabled_by
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    )
+
+
+@callback
+def claim_account_host(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Return True when this entry carries the account-wide entities.
+
+    Prices, savings, the battery plan and the deadline schedules belong to the
+    account and not to one device, so exactly one entry hosts them. The role
+    sticks to the entry that holds it - a reload must not move it - and is only
+    handed over once that entry is removed or disabled.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    host = domain_data.get(ACCOUNT_HOST)
+    if host != config_entry.entry_id and _entry_is_usable(hass, host):
+        return False
+    domain_data[ACCOUNT_HOST] = config_entry.entry_id
+    return True
+
+
+@callback
+def track_account_host(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    """Take the account-wide entities over when their host disappears.
+
+    Removing or disabling an entry drops every entity it carried and Home
+    Assistant does not reload the sibling entries, so without this the prices,
+    battery plan and schedules would stay gone until the next restart.
+    """
+
+    @callback
+    def _entry_changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
+        if entry.domain != DOMAIN:
+            return
+        domain_data = hass.data.setdefault(DOMAIN, {})
+        host = domain_data.get(ACCOUNT_HOST)
+        if host == config_entry.entry_id or _entry_is_usable(hass, host):
+            return
+        loaded = sorted(
+            e.entry_id
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if not e.disabled_by and e.state is ConfigEntryState.LOADED
+        )
+        if not loaded or loaded[0] != config_entry.entry_id:
+            return
+        # Claim before reloading, so the burst of entry updates that follows
+        # cannot schedule the same reload again.
+        domain_data[ACCOUNT_HOST] = config_entry.entry_id
+        hass.config_entries.async_schedule_reload(config_entry.entry_id)
+
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_CONFIG_ENTRY_CHANGED, _entry_changed)
+    )
+
+
+@callback
+def adopt_account_entities(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    entity_domain: str,
+    entities: list[Any],
+) -> None:
+    """Re-enable entities a disabled previous host left behind.
+
+    Disabling an entry disables everything it carried, including the
+    account-wide entities, which would otherwise stay disabled under their new
+    host. Entities the user disabled by hand keep their setting.
+    """
+    registry = er.async_get(hass)
+    for entity in entities:
+        unique_id = entity.unique_id
+        if not unique_id:
+            continue
+        entity_id = registry.async_get_entity_id(entity_domain, DOMAIN, unique_id)
+        if entity_id is None:
+            continue
+        entry = registry.async_get(entity_id)
+        if (
+            entry is not None
+            and entry.disabled_by is er.RegistryEntryDisabler.CONFIG_ENTRY
+            and entry.config_entry_id != config_entry.entry_id
+        ):
+            registry.async_update_entity(entity_id, disabled_by=None)
 
 
 async def async_setup_entry(
@@ -84,13 +187,10 @@ async def async_setup_entry(
     # by automatically created Utility Meter helpers. See:
     # products/waterp1meterkit/utility_meters.py
 
-    # Account-wide dynamic price sensors: hosted by a single entry (the one
-    # with the lowest entry_id) so they exist once, not per device.
-    entry_ids = [
-        e.entry_id for e in hass.config_entries.async_entries(DOMAIN)
-        if not e.disabled_by
-    ]
-    is_account_host = bool(entry_ids and config_entry.entry_id == min(entry_ids))
+    # Account-wide dynamic price sensors: hosted by a single entry so they
+    # exist once, not per device.
+    is_account_host = claim_account_host(hass, config_entry)
+    track_account_host(hass, config_entry)
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and is_account_host:
         from .price_sensors import PRICE_SENSORS, SmartHomeShopPriceSensor
@@ -114,6 +214,9 @@ async def async_setup_entry(
             SmartHomeShopBatterySensor(battery_plan, description)
             for description in BATTERY_SENSORS
         )
+
+    if is_account_host:
+        adopt_account_entities(hass, config_entry, "sensor", entities)
 
     async_add_entities(entities)
 

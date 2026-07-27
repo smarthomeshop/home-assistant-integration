@@ -13,8 +13,8 @@
     "panel_custom",
     "websocket_api"
   ],
-  "documentation": "https://smarthomeshop.io/docs",
+  "documentation": "https://docs.smarthomeshop.io/en/home-assistant-integration",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/smarthomeshop/home-assistant-integration/issues",
-  "version": "1.6.0"
+  "version": "1.7.0"
 }

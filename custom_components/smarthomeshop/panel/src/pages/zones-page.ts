@@ -144,6 +144,7 @@ export class ZonesPage extends LitElement {
   @property({ type: Array }) rooms: Room[] = [];
 
   // Room state
+  @state() private _roomsError: string | null = null;
   @state() private _selectedRoomId: string | null = null;
   @state() private _roomPoints: Point[] = [];
   @state() private _furniture: LocalFurnitureItem[] = [];
@@ -1045,10 +1046,19 @@ export class ZonesPage extends LitElement {
     try {
       const result = await this.hass.callWS<{ rooms: Room[] }>({ type: 'smarthomeshop/rooms' });
       this.rooms = result.rooms || [];
+      this._roomsError = null;
       if (this.rooms.length > 0 && !this._selectedRoomId) {
         this._selectRoom(this.rooms[0].id);
       }
-    } catch (err) { console.error('Failed to load rooms:', err); }
+    } catch (err: any) {
+      console.error('Failed to load rooms:', err);
+      // The saved rooms are untouched on disk, so a failed load must not look
+      // like an empty designer: that invites building a duplicate room.
+      // Home Assistant rejects with a plain {code, message} object, not an
+      // Error, so the reason only comes out of err.message.
+      const detail = typeof err?.message === 'string' ? err.message.trim() : '';
+      this._roomsError = detail ? `Could not load your rooms: ${detail}` : 'Could not load your rooms.';
+    }
   }
 
   private _selectRoom(roomId: string) {
@@ -4134,17 +4144,24 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         <div>
           <div class="section-title">SELECT ROOM</div>
           <div class="room-list">
-            ${this.rooms.length === 0 ? html`
-              <p class="info-text">No rooms yet. Create your first room with "Add Room" below.</p>
-            ` : this.rooms.map(room => html`
-              <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}" @click="${() => this._selectRoom(room.id)}">
-                <div class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></div>
-                <span class="room-name">${room.name}</span>
-              </div>
-            `)}
-            <button class="add-room-btn" @click="${() => { this._newRoomName = ''; this._newRoomWidth = 0; this._newRoomLength = 0; this._showNewRoomDialog = true; }}">
-              <ha-icon icon="mdi:plus"></ha-icon>Add Room
-            </button>
+            ${this._roomsError ? html`
+              <p class="info-text">${this._roomsError} Your saved rooms are still there.</p>
+              <button class="add-room-btn" @click="${() => this._loadRooms()}">
+                <ha-icon icon="mdi:refresh"></ha-icon>Try again
+              </button>
+            ` : html`
+              ${this.rooms.length === 0 ? html`
+                <p class="info-text">No rooms yet. Create your first room with "Add Room" below.</p>
+              ` : this.rooms.map(room => html`
+                <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}" @click="${() => this._selectRoom(room.id)}">
+                  <div class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></div>
+                  <span class="room-name">${room.name}</span>
+                </div>
+              `)}
+              <button class="add-room-btn" @click="${() => { this._newRoomName = ''; this._newRoomWidth = 0; this._newRoomLength = 0; this._showNewRoomDialog = true; }}">
+                <ha-icon icon="mdi:plus"></ha-icon>Add Room
+              </button>
+            `}
           </div>
         </div>
 
