@@ -80,6 +80,30 @@ data: {}
 Use `action: charge`, `hold` or `discharge` in `data` only when deliberately
 overriding the current recommendation.
 
+## Universal radar support in Room Designer
+
+Room Designer reads the mounting and coordinate contract published by current
+SmartHomeShop ESPHome firmware. It discovers the metadata through Home
+Assistant's device and entity registries, so renamed devices and entity-ID
+prefixes remain supported.
+
+- LD2450, LD2460 and LD6002B coordinates are normalized to millimetres before
+  room geometry is calculated.
+- Wall-mounted `forward_xy` and ceiling-mounted `floor_xy` projections are
+  handled explicitly.
+- LD2412 and PIR entities remain supplementary occupancy sources and are never
+  treated as positioning targets.
+- A `top_or_side` radar reports a visible mismatch when its hardware mode does
+  not suit the mounting profile. Changing that mode always requires explicit
+  user confirmation.
+- Existing saved rooms keep their range, field of view, height and projection
+  until the user chooses to adopt new firmware defaults.
+- Older firmware continues to work through a clearly identified legacy
+  profile; diagnostics list the metadata needed for a firmware upgrade.
+
+The shared firmware contract lives in the
+[radar-mounting repository](https://github.com/smarthomeshop/radar-mounting).
+
 ## Support
 
 - [Documentation](https://docs.smarthomeshop.io)

@@ -8,7 +8,8 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_PRODUCT_TYPE, VERSION
+from .const import CONF_DEVICE_ID, CONF_PRODUCT_TYPE, VERSION
+from .radar_profiles import radar_profile_for_device
 
 TO_REDACT = {"deviceId", "device_id", "api_key"}
 
@@ -50,5 +51,11 @@ async def async_get_config_entry_diagnostics(
         tracker = getattr(coordinator, "energy_tracker", None)
         if tracker is not None:
             data["energy"] = _serialise(tracker.data)
+
+    device_id = entry.data.get(CONF_DEVICE_ID)
+    if isinstance(device_id, str):
+        radar = radar_profile_for_device(hass, device_id)
+        if radar is not None:
+            data["radar_profile"] = radar.as_dict()
 
     return async_redact_data(data, TO_REDACT)

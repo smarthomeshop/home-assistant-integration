@@ -21,6 +21,7 @@ export class SensorCoverageCalibration extends LitElement {
   @property({ type: Number }) fov = 120;
   @property({ type: String }) sensorName = 'Selected sensor';
   @property({ type: String }) mountingMode: 'wall' | 'ceiling' = 'wall';
+  @property({ type: String }) radarModel = 'positioning radar';
 
   @state() private _activeCorner = 0;
   @state() private _corners: Array<CalibrationPoint | null> = [null, null, null, null];
@@ -310,9 +311,9 @@ export class SensorCoverageCalibration extends LitElement {
             <div>
               <strong>You are measuring the sensor, not the room</strong>
               <span>
-                LD2450 and LD2460 sensors have a limited range. Mark the furthest reliable position
-                the selected sensor can still see in each direction. The four points define its usable
-                detection area and do not need to touch the room walls.
+                Every radar has a limited reliable range. Mark the furthest position your
+                ${this.radarModel.toUpperCase()} can still see in each direction. The four points define
+                its usable detection area and do not need to touch the room walls.
               </span>
             </div>
           </div>

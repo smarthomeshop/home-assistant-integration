@@ -173,6 +173,59 @@ export interface DeviceEntity {
   attributes: Record<string, unknown>;
 }
 
+export interface RadarTargetEntityMap {
+  index: number;
+  x_entity_id: string;
+  y_entity_id: string;
+  z_entity_id?: string | null;
+  presence_entity_id?: string | null;
+}
+
+export interface RadarProfilePayload {
+  mounting_mode: 'wall' | 'ceiling';
+  coordinate_projection: 'forward_xy' | 'floor_xy';
+  required_installation_mode?: 'top' | 'side' | null;
+  mounting_height_mm?: number | null;
+  maximum_range_mm?: number | null;
+  field_of_view_deg?: number | null;
+  radar_model: string;
+  coordinate_frame?: string | null;
+  coordinate_scale_to_mm: number;
+  maximum_targets: number;
+  hardware_mode_capability?: 'fixed' | 'top_or_side' | null;
+  metadata_source: 'firmware' | 'legacy_fallback';
+  detected_product?: string | null;
+  supplementary_presence_sensors: string[];
+  current_hardware_mode?: 'top' | 'side' | null;
+  installation_mode_entity_id?: string | null;
+  installation_mode_options: string[];
+  missing_metadata_entities: string[];
+  invalid_metadata_entities: string[];
+  positioning_available: boolean;
+}
+
+export interface RadarCapabilitiesPayload {
+  coordinate_mode: 'target' | 'tracking-target' | 'unknown';
+  polygon_zones: boolean;
+  entry_lines: boolean;
+  zone_profiles: boolean;
+  interference_zones: boolean;
+  smoothing: boolean;
+  cross_zone_tracking: boolean;
+}
+
+export interface RadarDeviceProfilePayload {
+  device_id: string;
+  name: string;
+  manufacturer?: string | null;
+  model?: string | null;
+  entity_prefix: string;
+  aliases: string[];
+  profile: RadarProfilePayload;
+  targets: RadarTargetEntityMap[];
+  capabilities: RadarCapabilitiesPayload;
+}
+
 export interface FurnitureType {
   id: string;
   label: string;

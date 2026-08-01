@@ -1,8 +1,13 @@
 import { LitElement, html, css, svg, nothing, PropertyValues } from 'lit';
 import { customElement, property, state, query } from 'lit/decorators.js';
-import type { HomeAssistant, Room } from '../types';
+import type { HomeAssistant, RadarDeviceProfilePayload, RadarTargetEntityMap, Room } from '../types';
 import '../components/sensor-coverage-calibration';
 import type { CalibrationPoint } from '../components/sensor-coverage-calibration';
+import {
+  normalizeRadarCoordinate,
+  projectRadarTargetToRoom,
+  type RadarCoordinateProjection,
+} from '../utils/radar-coordinates';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -39,6 +44,7 @@ type RadarProductFamily = 'ceilsense' | 'ultimate-sensor' | 'unknown';
 interface SensorInstance { id: string; deviceId: string | null; x: number; y: number; rotation: number; range: number; fov: number; heightMm: number; mountingMode: SensorMountingMode; }
 interface RadarCapabilities {
   targetCount: number;
+  availableTargetCount: number;
   coordinateMode: 'target' | 'tracking-target' | 'unknown';
   polygonZones: boolean;
   entryLines: boolean;
@@ -49,10 +55,35 @@ interface RadarCapabilities {
 }
 interface RadarDevice {
   id: string;
+  aliases: string[];
+  entityPrefix: string;
   name: string;
   capabilities: RadarCapabilities;
   productFamily: RadarProductFamily;
   recommendedMountingMode: SensorMountingMode;
+  profile: {
+    mountingMode: SensorMountingMode;
+    coordinateProjection: RadarCoordinateProjection;
+    requiredInstallationMode: 'top' | 'side' | null;
+    mountingHeightMm: number | null;
+    maximumRangeMm: number | null;
+    fieldOfViewDeg: number | null;
+    radarModel: string;
+    coordinateFrame: string | null;
+    coordinateScaleToMm: number;
+    maximumTargets: number;
+    hardwareModeCapability: 'fixed' | 'top_or_side' | null;
+    metadataSource: 'firmware' | 'legacy_fallback';
+    detectedProduct: string | null;
+    supplementaryPresenceSensors: string[];
+    currentHardwareMode: 'top' | 'side' | null;
+    installationModeEntityId: string | null;
+    installationModeOptions: string[];
+    missingMetadataEntities: string[];
+    invalidMetadataEntities: string[];
+    positioningAvailable: boolean;
+  };
+  targets: RadarTargetEntityMap[];
 }
 
 const CANVAS_SIZE = 800;
@@ -155,6 +186,10 @@ export class ZonesPage extends LitElement {
   @state() private _sensors: SensorInstance[] = [];
   @state() private _selectedSensorIndex: number | null = null;
   @state() private _draggingSensorIndex: number | null = null;
+  @state() private _radarDevices: RadarDevice[] = [];
+  @state() private _radarProfilesLoading = true;
+  @state() private _radarProfilesError: string | null = null;
+  @state() private _changingHardwareMode = false;
 
   // Zone state
   @state() private _zones: ZoneData[] = [];
@@ -176,7 +211,7 @@ export class ZonesPage extends LitElement {
   @state() private _editingZoneIndex: number | null = null;
 
   // Live tracking, keyed by sensor instance id
-  @state() private _liveTargets: Record<string, Array<{x: number, y: number, active: boolean}>> = {};
+  @state() private _liveTargets: Record<string, Array<{index: number, x: number, y: number, active: boolean}>> = {};
 
   // Zone sync state
   @state() private _entryExitEnabled = false;
@@ -335,12 +370,38 @@ export class ZonesPage extends LitElement {
     .calibration-details summary { cursor: pointer; }
     select { width: 100%; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; }
     .info-text { color: var(--rd-dim); font-size: 12px; line-height: 1.5; }
-    .firmware-status { margin-top: 10px; padding: 10px; border: 1px solid var(--rd-border); border-radius: 8px; background: var(--rd-deep); }
+    .firmware-status { margin-top: 10px; padding: 11px; border: 1px solid var(--rd-line); border-radius: 9px; background: var(--rd-deep); }
+    .profile-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--rd-line); }
+    .radar-model { color: var(--rd-text); font-size: 13px; font-weight: 750; letter-spacing: 0.025em; }
+    .profile-source { padding: 3px 7px; border-radius: 999px; color: var(--rd-dim2); background: var(--rd-line); font-size: 9px; font-weight: 700; letter-spacing: 0.035em; text-transform: uppercase; }
+    .profile-source.firmware { color: #16844a; background: color-mix(in srgb, #22a35a 14%, var(--rd-panel)); }
     .firmware-status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; }
     .firmware-status-row + .firmware-status-row { margin-top: 6px; }
     .firmware-status-value { color: var(--rd-text); font-weight: 600; text-align: right; }
     .firmware-status-note { margin: 8px 0 0; color: var(--rd-dim); font-size: 11px; line-height: 1.4; }
     .firmware-status-note.warning { color: #f59e0b; }
+    .firmware-status-note.good { color: #22a35a; }
+    .profile-lock { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 10px; border: 1px solid var(--rd-line); border-radius: 7px; color: var(--rd-text); background: var(--rd-deep); font-size: 12px; }
+    .profile-lock ha-icon { --mdc-icon-size: 17px; color: #4361ee; }
+    .supplementary-sources { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--rd-line); }
+    .supplementary-sources strong, .supplementary-sources span, .supplementary-sources small { display: block; }
+    .supplementary-sources strong { color: var(--rd-text); font-size: 11px; }
+    .supplementary-sources span { margin-top: 3px; color: var(--rd-dim2); font-size: 10.5px; }
+    .supplementary-sources small { margin-top: 4px; color: var(--rd-dim); font-size: 10px; line-height: 1.4; }
+    .mode-warning { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid color-mix(in srgb, #d97706 35%, transparent); border-radius: 8px; background: color-mix(in srgb, #d97706 9%, var(--rd-panel)); }
+    .mode-warning ha-icon { --mdc-icon-size: 18px; color: #d97706; }
+    .mode-warning strong, .mode-warning span { display: block; }
+    .mode-warning strong { color: var(--rd-text); font-size: 11px; }
+    .mode-warning span { margin-top: 3px; color: var(--rd-dim2); font-size: 10.5px; line-height: 1.4; }
+    .mode-warning button { margin-top: 8px; padding: 6px 9px; border: 1px solid #d97706; border-radius: 6px; background: transparent; color: #d97706; font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer; }
+    .mode-warning button:disabled { opacity: 0.5; cursor: progress; }
+    .radar-diagnostics { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--rd-line); color: var(--rd-dim); font-size: 10.5px; }
+    .radar-diagnostics summary { color: var(--rd-dim2); cursor: pointer; font-weight: 650; }
+    .radar-diagnostics dl { display: grid; gap: 4px; margin: 8px 0 0; }
+    .radar-diagnostics dl div { display: grid; grid-template-columns: minmax(72px, 0.8fr) minmax(0, 1.2fr); gap: 8px; }
+    .radar-diagnostics dt { color: var(--rd-dim); }
+    .radar-diagnostics dd { margin: 0; color: var(--rd-text); overflow-wrap: anywhere; }
+    .radar-diagnostics p { margin: 7px 0 0; color: #d97706; line-height: 1.4; }
     .sensor-list { display: flex; flex-direction: column; gap: 6px; }
     .sensor-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
     .sensor-item:hover { border-color: var(--rd-line-strong); }
@@ -409,6 +470,8 @@ export class ZonesPage extends LitElement {
     .live-status .dot.active { background: #22c55e; animation: pulse 1s infinite; }
     .live-status .dot.inactive { background: var(--rd-dim); }
     .live-status .count { font-size: 24px; font-weight: bold; }
+    .live-status .occupancy-note { display: flex; align-items: flex-start; gap: 6px; margin: 5px 0 10px; color: #22c55e; font-size: 10.5px; line-height: 1.35; }
+    .live-status .occupancy-note ha-icon { flex: 0 0 auto; width: 14px; height: 14px; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
     .zone-list { display: flex; flex-direction: column; gap: 6px; }
     .zone-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
@@ -468,7 +531,8 @@ export class ZonesPage extends LitElement {
     .zone-type-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
     .zone-type-btn span { display: block; font-size: 12px; color: var(--rd-dim2); margin-top: 4px; }
     .zone-type-btn.active span { color: #4361ee; }
-    @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; } .sidebar-right { grid-column: 1 / -1; max-height: 45vh; overflow-y: auto; } }
+    @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; height: auto; min-height: calc(100vh - 100px); } .sidebar-right { grid-column: 1 / -1; max-height: none; overflow-y: visible; } .canvas-area { min-height: 620px; } }
+    @media (max-width: 760px) { :host { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; } .sidebar { border-radius: 10px; } .canvas-area { min-height: min(78vh, 680px); order: 2; } .sidebar-right { grid-column: auto; order: 3; } .canvas-header { align-items: flex-start; flex-wrap: wrap; } .header-group { max-width: 100%; flex-wrap: wrap; } .mode-btn, .view-toggle-btn { padding: 8px 10px; } }
     .view-toggle { display: flex; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; }
     .view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: var(--rd-dim2); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
@@ -482,6 +546,7 @@ export class ZonesPage extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this._loadRooms();
+    this._loadRadarProfiles();
     this._startTargetUpdates();
     window.addEventListener('keydown', this._handleKeyDown);
   }
@@ -502,9 +567,17 @@ export class ZonesPage extends LitElement {
 
   private _sensorLabel(s: SensorInstance, index: number): string {
     if (s.deviceId) {
-      return s.deviceId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return this._findRadarDevice(s.deviceId)?.name
+        || s.deviceId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     }
     return `Sensor ${index + 1}`;
+  }
+
+  private _entityLabel(entityId: string): string {
+    const state = this.hass?.states?.[entityId];
+    return String(state?.attributes?.friendly_name || entityId.split('.', 2)[1] || entityId)
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, character => character.toUpperCase());
   }
 
   private _sensorColor(index: number): string {
@@ -536,7 +609,27 @@ export class ZonesPage extends LitElement {
   }
 
   private _recommendedMountingMode(deviceId: string | null): SensorMountingMode {
-    return this._radarProductFamily(deviceId) === 'ceilsense' ? 'ceiling' : 'wall';
+    return this._findRadarDevice(deviceId)?.profile.mountingMode
+      || (this._radarProductFamily(deviceId) === 'ceilsense' ? 'ceiling' : 'wall');
+  }
+
+  private _findRadarDevice(deviceId: string | null): RadarDevice | undefined {
+    if (!deviceId) return undefined;
+    return this._radarDevices.find(device =>
+      device.id === deviceId
+      || device.entityPrefix === deviceId
+      || device.aliases.includes(deviceId));
+  }
+
+  private _coordinateProjection(sensor: SensorInstance): RadarCoordinateProjection {
+    const profile = this._findRadarDevice(sensor.deviceId)?.profile;
+    // A saved room may intentionally predate or differ from the newly
+    // reported firmware mounting. Keep its geometry stable until the user
+    // accepts the explicit "Use firmware mounting" action in the UI.
+    if (profile?.mountingMode === sensor.mountingMode) {
+      return profile.coordinateProjection;
+    }
+    return sensor.mountingMode === 'ceiling' ? 'floor_xy' : 'forward_xy';
   }
 
   private _coverageRadius(sensor: SensorInstance): number {
@@ -547,13 +640,22 @@ export class ZonesPage extends LitElement {
   }
 
   private _selectRadarDevice(index: number, deviceId: string | null) {
-    const mountingMode = this._recommendedMountingMode(deviceId);
+    const sensor = this._sensors[index];
+    if (!sensor) return;
+    const radar = this._findRadarDevice(deviceId);
+    const isFirstLink = sensor.deviceId === null && radar !== undefined;
+    if (!isFirstLink) {
+      this._updateSensor(index, { deviceId });
+      return;
+    }
+    // Firmware defaults are suggestions for a newly linked radar only. A
+    // saved room or a user-adjusted radar is never rewritten during reload.
     this._updateSensor(index, {
-      deviceId,
-      mountingMode,
-      heightMm: mountingMode === 'ceiling'
-        ? Math.max(this._sensors[index]?.heightMm || 0, 2400)
-        : Math.min(this._sensors[index]?.heightMm || 1500, 2200),
+      deviceId: radar.id,
+      mountingMode: radar.profile.mountingMode,
+      heightMm: radar.profile.mountingHeightMm ?? sensor.heightMm,
+      range: radar.profile.maximumRangeMm ?? sensor.range,
+      fov: radar.profile.fieldOfViewDeg ?? sensor.fov,
     });
   }
 
@@ -566,6 +668,43 @@ export class ZonesPage extends LitElement {
         ? Math.max(sensor.heightMm || 0, 2400)
         : Math.min(sensor.heightMm || 1500, 2200),
     });
+  }
+
+  private _hardwareModeMismatch(radar: RadarDevice | undefined): boolean {
+    if (!radar || radar.profile.hardwareModeCapability !== 'top_or_side') return false;
+    const required = radar.profile.requiredInstallationMode;
+    const current = radar.profile.currentHardwareMode;
+    return Boolean(required && current && required !== current);
+  }
+
+  private async _applyRequiredHardwareMode(radar: RadarDevice): Promise<void> {
+    const entityId = radar.profile.installationModeEntityId;
+    const required = radar.profile.requiredInstallationMode;
+    if (!entityId || !required || this._changingHardwareMode) return;
+    const accepted = confirm(
+      `${radar.name} is currently set to ${radar.profile.currentHardwareMode || 'an unknown mode'}. `
+      + `Change the radar hardware to ${required} mode for this ${radar.profile.mountingMode} mounting?`,
+    );
+    if (!accepted) return;
+
+    const option = radar.profile.installationModeOptions.find(
+      candidate => candidate.toLowerCase() === required,
+    ) || required;
+    this._changingHardwareMode = true;
+    try {
+      await this.hass.callService('select', 'select_option', {
+        entity_id: entityId,
+        option,
+      });
+      this._radarDevices = this._radarDevices.map(device => device.id === radar.id
+        ? { ...device, profile: { ...device.profile, currentHardwareMode: required } }
+        : device);
+      window.setTimeout(() => this._loadRadarProfiles(), 1200);
+    } catch (error: any) {
+      alert(error?.message || `Could not set ${radar.name} to ${required} mode.`);
+    } finally {
+      this._changingHardwareMode = false;
+    }
   }
 
   private _addSensor() {
@@ -907,25 +1046,55 @@ export class ZonesPage extends LitElement {
     if (!this.hass) return;
 
     let changed = false;
-    const next: Record<string, Array<{x: number, y: number, active: boolean}>> = {};
+    const next: Record<string, Array<{index: number, x: number, y: number, active: boolean}>> = {};
 
     for (const sensor of this._sensors) {
       if (!sensor.deviceId) continue;
-      const targets: Array<{x: number, y: number, active: boolean}> = [];
+      const radar = this._findRadarDevice(sensor.deviceId);
+      const targetMaps = radar?.targets.length
+        ? radar.targets
+        : Array.from({ length: 5 }, (_, offset) => {
+            const index = offset + 1;
+            const x = this._findTargetEntity(sensor.deviceId!, index, 'x');
+            const y = this._findTargetEntity(sensor.deviceId!, index, 'y');
+            return x && y ? { index, x_entity_id: x.entity_id, y_entity_id: y.entity_id } : null;
+          }).filter((target): target is RadarTargetEntityMap => target !== null);
+      const targets: Array<{index: number, x: number, y: number, active: boolean}> = [];
       let trails = this._targetTrails[sensor.id];
-      if (!trails) { trails = Array.from({ length: 5 }, () => []); this._targetTrails[sensor.id] = trails; }
+      const maximumTargets = Math.max(1, radar?.profile.maximumTargets || targetMaps.length || 5);
+      if (!trails || trails.length !== maximumTargets) {
+        trails = Array.from({ length: maximumTargets }, () => []);
+        this._targetTrails[sensor.id] = trails;
+      }
 
-      for (let i = 1; i <= 5; i++) {
-        const xEntity = this._findTargetEntity(sensor.deviceId, i, 'x');
-        const yEntity = this._findTargetEntity(sensor.deviceId, i, 'y');
+      for (const targetMap of targetMaps) {
+        const xEntity = this.hass.states[targetMap.x_entity_id];
+        const yEntity = this.hass.states[targetMap.y_entity_id];
         if (!xEntity || !yEntity) continue;
-        const x = this._targetCoordinateMm(xEntity);
-        const y = this._targetCoordinateMm(yEntity);
-        const active = x !== 0 || y !== 0;
-        targets.push({ x, y, active });
+        const scale = radar?.profile.coordinateScaleToMm ?? 1;
+        const x = this._targetCoordinateMm(xEntity, scale);
+        const y = this._targetCoordinateMm(yEntity, scale);
+        const trailIndex = targetMap.index - 1;
+        if (x === null || y === null) {
+          if (trails[trailIndex]?.length) trails[trailIndex] = [];
+          continue;
+        }
+        const presenceState = targetMap.presence_entity_id
+          ? this.hass.states[targetMap.presence_entity_id]?.state
+          : null;
+        if (presenceState && ['unknown', 'unavailable'].includes(presenceState)) {
+          if (trails[trailIndex]?.length) trails[trailIndex] = [];
+          continue;
+        }
+        const active = presenceState === 'on'
+          ? true
+          : presenceState === 'off'
+            ? false
+            : x !== 0 || y !== 0;
+        targets.push({ index: targetMap.index, x, y, active });
 
         // Record trail history (sensor-local coords, capped length)
-        const trail = trails[i - 1];
+        const trail = trails[trailIndex] || (trails[trailIndex] = []);
         if (active) {
           const last = trail[trail.length - 1];
           if (!last || Math.hypot(x - last.x, y - last.y) > 30) {
@@ -933,7 +1102,7 @@ export class ZonesPage extends LitElement {
             if (trail.length > 60) trail.shift();
           }
         } else if (trail.length > 0) {
-          trails[i - 1] = [];
+          trails[trailIndex] = [];
         }
       }
       next[sensor.id] = targets;
@@ -956,6 +1125,11 @@ export class ZonesPage extends LitElement {
   }
 
   private _findTargetEntity(deviceId: string, target: number, axis: 'x' | 'y') {
+    const discovered = this._findRadarDevice(deviceId)?.targets.find(item => item.index === target);
+    const discoveredEntityId = axis === 'x' ? discovered?.x_entity_id : discovered?.y_entity_id;
+    if (discoveredEntityId && this.hass.states[discoveredEntityId]) {
+      return this.hass.states[discoveredEntityId];
+    }
     for (const entityId of this._targetEntityIds(deviceId, target, axis)) {
       const entity = this.hass.states[entityId];
       if (entity) return entity;
@@ -963,20 +1137,23 @@ export class ZonesPage extends LitElement {
     return undefined;
   }
 
-  private _targetCoordinateMm(entity: any): number {
-    const value = Number.parseFloat(entity?.state);
-    if (!Number.isFinite(value)) return 0;
+  private _targetCoordinateMm(entity: any, coordinateScaleToMm: number): number | null {
+    return normalizeRadarCoordinate(entity?.state, coordinateScaleToMm);
+  }
 
-    const unit = String(entity?.attributes?.unit_of_measurement || '').trim().toLowerCase();
-    if (unit === 'm') return value * 1000;
-    if (unit === 'cm') return value * 10;
-    return value;
+  private _hasSupplementaryPresence(radar: RadarDevice | undefined): boolean {
+    return Boolean(radar?.profile.supplementaryPresenceSensors.some(
+      entityId => this.hass.states[entityId]?.state === 'on',
+    ));
   }
 
   private _getRadarCapabilities(deviceId: string | null): RadarCapabilities {
+    const discovered = this._findRadarDevice(deviceId);
+    if (discovered) return discovered.capabilities;
     if (!deviceId) {
       return {
         targetCount: 0,
+        availableTargetCount: 0,
         coordinateMode: 'unknown',
         polygonZones: false,
         entryLines: false,
@@ -1002,6 +1179,7 @@ export class ZonesPage extends LitElement {
 
     return {
       targetCount,
+      availableTargetCount: targetCount,
       coordinateMode,
       polygonZones: this._entityExists(`text.${deviceId}_polygon_zone_1`),
       entryLines: this._entityExists(`text.${deviceId}_entry_line_1`),
@@ -1014,6 +1192,10 @@ export class ZonesPage extends LitElement {
   }
 
   private _getRadarDevices(): RadarDevice[] {
+    return this._radarDevices.length ? this._radarDevices : this._getLegacyRadarDevices();
+  }
+
+  private _getLegacyRadarDevices(): RadarDevice[] {
     if (!this.hass) return [];
     const devices: RadarDevice[] = [];
     const seen = new Set<string>();
@@ -1029,17 +1211,122 @@ export class ZonesPage extends LitElement {
           seen.add(deviceId);
           const name = deviceId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
           const productFamily = this._radarProductFamily(deviceId);
+          const capabilities = this._getRadarCapabilities(deviceId);
+          const model = capabilities.targetCount > 3 ? 'ld2460' : 'ld2450';
+          const firstX = this._findTargetEntity(deviceId, 1, 'x');
+          const unit = String(firstX?.attributes?.unit_of_measurement || '').trim().toLowerCase();
+          const coordinateScaleToMm = unit === 'm' ? 1000 : unit === 'cm' ? 10 : 1;
+          const mountingMode = productFamily === 'ceilsense' ? 'ceiling' : 'wall';
+          const targets: RadarTargetEntityMap[] = [];
+          for (let index = 1; index <= capabilities.targetCount; index++) {
+            const x = this._findTargetEntity(deviceId, index, 'x');
+            const y = this._findTargetEntity(deviceId, index, 'y');
+            if (x && y) targets.push({ index, x_entity_id: x.entity_id, y_entity_id: y.entity_id });
+          }
           devices.push({
             id: deviceId,
+            aliases: [deviceId],
+            entityPrefix: deviceId,
             name,
-            capabilities: this._getRadarCapabilities(deviceId),
+            capabilities,
             productFamily,
-            recommendedMountingMode: productFamily === 'ceilsense' ? 'ceiling' : 'wall',
+            recommendedMountingMode: mountingMode,
+            profile: {
+              mountingMode,
+              coordinateProjection: mountingMode === 'ceiling' ? 'floor_xy' : 'forward_xy',
+              requiredInstallationMode: mountingMode === 'ceiling' ? 'top' : 'side',
+              mountingHeightMm: mountingMode === 'ceiling' ? 2500 : 1500,
+              maximumRangeMm: 6000,
+              fieldOfViewDeg: 120,
+              radarModel: model,
+              coordinateFrame: 'x_lateral_y_forward',
+              coordinateScaleToMm,
+              maximumTargets: capabilities.targetCount,
+              hardwareModeCapability: model === 'ld2460' ? 'top_or_side' : 'fixed',
+              metadataSource: 'legacy_fallback',
+              detectedProduct: productFamily === 'ceilsense' ? 'ceilsense' : null,
+              supplementaryPresenceSensors: [],
+              currentHardwareMode: null,
+              installationModeEntityId: null,
+              installationModeOptions: [],
+              missingMetadataEntities: ['Radar Mounting Mode', 'Radar Model'],
+              invalidMetadataEntities: [],
+              positioningAvailable: true,
+            },
+            targets,
           });
         }
       }
     });
     return devices.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  private _mapRadarProfile(device: RadarDeviceProfilePayload): RadarDevice {
+    const detectedProduct = device.profile.detected_product || '';
+    const productFamily: RadarProductFamily = detectedProduct === 'ceilsense'
+      ? 'ceilsense'
+      : detectedProduct.startsWith('ultimatesensor')
+        ? 'ultimate-sensor'
+        : 'unknown';
+    return {
+      id: device.device_id,
+      aliases: Array.from(new Set([device.device_id, device.entity_prefix, ...(device.aliases || [])])),
+      entityPrefix: device.entity_prefix,
+      name: device.name,
+      productFamily,
+      recommendedMountingMode: device.profile.mounting_mode,
+      capabilities: {
+        targetCount: device.profile.maximum_targets,
+        availableTargetCount: device.targets.length,
+        coordinateMode: device.capabilities.coordinate_mode,
+        polygonZones: device.capabilities.polygon_zones,
+        entryLines: device.capabilities.entry_lines,
+        zoneProfiles: device.capabilities.zone_profiles,
+        interferenceZones: device.capabilities.interference_zones,
+        smoothing: device.capabilities.smoothing,
+        crossZoneTracking: device.capabilities.cross_zone_tracking,
+      },
+      profile: {
+        mountingMode: device.profile.mounting_mode,
+        coordinateProjection: device.profile.coordinate_projection,
+        requiredInstallationMode: device.profile.required_installation_mode ?? null,
+        mountingHeightMm: device.profile.mounting_height_mm ?? null,
+        maximumRangeMm: device.profile.maximum_range_mm ?? null,
+        fieldOfViewDeg: device.profile.field_of_view_deg ?? null,
+        radarModel: device.profile.radar_model,
+        coordinateFrame: device.profile.coordinate_frame ?? null,
+        coordinateScaleToMm: device.profile.coordinate_scale_to_mm,
+        maximumTargets: device.profile.maximum_targets,
+        hardwareModeCapability: device.profile.hardware_mode_capability ?? null,
+        metadataSource: device.profile.metadata_source,
+        detectedProduct: device.profile.detected_product ?? null,
+        supplementaryPresenceSensors: device.profile.supplementary_presence_sensors || [],
+        currentHardwareMode: device.profile.current_hardware_mode ?? null,
+        installationModeEntityId: device.profile.installation_mode_entity_id ?? null,
+        installationModeOptions: device.profile.installation_mode_options || [],
+        missingMetadataEntities: device.profile.missing_metadata_entities || [],
+        invalidMetadataEntities: device.profile.invalid_metadata_entities || [],
+        positioningAvailable: device.profile.positioning_available,
+      },
+      targets: device.targets || [],
+    };
+  }
+
+  private async _loadRadarProfiles(): Promise<void> {
+    this._radarProfilesLoading = true;
+    try {
+      const result = await this.hass.callWS<{ devices: RadarDeviceProfilePayload[] }>({
+        type: 'smarthomeshop/radar/profiles',
+      });
+      this._radarDevices = (result.devices || []).map(device => this._mapRadarProfile(device));
+      this._radarProfilesError = null;
+    } catch (error: any) {
+      const detail = typeof error?.message === 'string' ? error.message.trim() : '';
+      this._radarProfilesError = detail || 'Radar metadata is temporarily unavailable.';
+      this._radarDevices = this._getLegacyRadarDevices();
+    } finally {
+      this._radarProfilesLoading = false;
+    }
   }
 
   private async _loadRooms() {
@@ -1245,6 +1532,13 @@ export class ZonesPage extends LitElement {
       alert('Add a sensor and link it to a device first!');
       return;
     }
+    const mismatched = linkedSensors
+      .map(sensor => this._findRadarDevice(sensor.deviceId))
+      .filter((radar): radar is RadarDevice => this._hardwareModeMismatch(radar));
+    if (mismatched.length) {
+      alert(`Correct the radar hardware mode for ${mismatched.map(radar => radar.name).join(', ')} before pushing coordinate zones.`);
+      return;
+    }
     this._pushingToESPHome = true;
 
     const detectionZones = this._zones.filter(z => z.type === 'detection');
@@ -1258,7 +1552,9 @@ export class ZonesPage extends LitElement {
 
     try {
       for (const sensor of linkedSensors) {
-        const deviceName = sensor.deviceId!;
+        const radar = this._findRadarDevice(sensor.deviceId);
+        const deviceName = radar?.entityPrefix || sensor.deviceId!;
+        const maximumTargets = Math.max(1, radar?.profile.maximumTargets || 3);
         // The firmware evaluates targets in sensor-local coordinates, so convert
         // room coordinates to this sensor's frame (inverse of the live-target
         // transform used for rendering).
@@ -1286,7 +1582,7 @@ export class ZonesPage extends LitElement {
         const exclusionSlots = toZoneSlots(exclusionZones, 2, 'exclusion zones');
         const toProfileStr = (zone: ZoneData | undefined): string => {
           const profile = zone?.profile || PROFILE_DEFAULTS.default;
-          return `${profile.enterDelayMs},${profile.leaveDelayMs},${profile.minDwellMs},${profile.minTargets}`;
+          return `${profile.enterDelayMs},${profile.leaveDelayMs},${profile.minDwellMs},${Math.min(profile.minTargets, maximumTargets)}`;
         };
 
         const hasNativeZoneTextApi = [
@@ -2209,11 +2505,7 @@ export class ZonesPage extends LitElement {
   }
 
   private _sensorLocalToWorld(sensor: SensorInstance, point: Point): Point {
-    const rotation = (sensor.rotation - 90) * Math.PI / 180;
-    return {
-      x: sensor.x + point.y * Math.cos(rotation) - point.x * Math.sin(rotation),
-      y: sensor.y + point.y * Math.sin(rotation) + point.x * Math.cos(rotation),
-    };
+    return projectRadarTargetToRoom(point, sensor, this._coordinateProjection(sensor));
   }
 
   private _worldToSensorLocal(sensor: SensorInstance, point: Point): Point {
@@ -2228,6 +2520,8 @@ export class ZonesPage extends LitElement {
 
   private _openCoverageCalibration() {
     if (!this._selectedSensor?.deviceId) return;
+    const radar = this._findRadarDevice(this._selectedSensor.deviceId);
+    if (!radar?.profile.positioningAvailable) return;
     this._showCoverageCalibration = true;
   }
 
@@ -2292,6 +2586,10 @@ export class ZonesPage extends LitElement {
     // Polygon zones (detection/exclusion/interference)
     const parts = getZoneParts(zone);
     const profile = zone.profile || PROFILE_DEFAULTS.default;
+    const linkedTargetLimits = this._sensors
+      .map(sensor => this._findRadarDevice(sensor.deviceId)?.profile.maximumTargets)
+      .filter((value): value is number => Number.isFinite(value) && value! > 0);
+    const maximumZoneTargets = linkedTargetLimits.length ? Math.min(...linkedTargetLimits) : 5;
     return html`
       <div class="zone-edit-form">
         <label>Zone name</label>
@@ -2363,8 +2661,8 @@ export class ZonesPage extends LitElement {
             </div>
             <div>
               <label>Minimum targets</label>
-              <input type="number" min="1" max="3" .value="${String(profile.minTargets)}"
-                     @change="${(e: Event) => this._updateZoneProfile(i, { minTargets: Math.max(1, Math.min(3, Number((e.target as HTMLInputElement).value) || 1)) })}"/>
+              <input type="number" min="1" max="${maximumZoneTargets}" .value="${String(Math.min(profile.minTargets, maximumZoneTargets))}"
+                     @change="${(e: Event) => this._updateZoneProfile(i, { minTargets: Math.max(1, Math.min(maximumZoneTargets, Number((e.target as HTMLInputElement).value) || 1)) })}"/>
             </div>
           </div>
         ` : nothing}
@@ -2981,13 +3279,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     // Flatten active targets from all sensors into world positions
     const worldTargets: Array<{ x: number; y: number }> = [];
     for (const sn of this._sensors) {
-      const rotRad = (sn.rotation - 90) * Math.PI / 180;
       for (const t of (this._liveTargets[sn.id] || [])) {
         if (!t.active) continue;
-        worldTargets.push({
-          x: sn.x + t.y * Math.cos(rotRad) - t.x * Math.sin(rotRad),
-          y: sn.y + t.y * Math.sin(rotRad) + t.x * Math.cos(rotRad),
-        });
+        worldTargets.push(projectRadarTargetToRoom(t, sn, this._coordinateProjection(sn)));
       }
     }
 
@@ -3929,17 +4223,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     ];
 
     this._sensors.forEach((sensor, sensorIdx) => {
-      const rotRad = (sensor.rotation - 90) * Math.PI / 180;
-      const toWorld = (t: { x: number; y: number }) => ({
-        x: sensor.x + t.y * Math.cos(rotRad) - t.x * Math.sin(rotRad),
-        y: sensor.y + t.y * Math.sin(rotRad) + t.x * Math.cos(rotRad),
-      });
+      const toWorld = (t: { x: number; y: number }) =>
+        projectRadarTargetToRoom(t, sensor, this._coordinateProjection(sensor));
       const palette = TARGET_COLORS[sensorIdx % TARGET_COLORS.length];
       const targets = this._liveTargets[sensor.id] || [];
       const trails = this._targetTrails[sensor.id] || [];
 
-      targets.forEach((target, i) => {
+      targets.forEach((target) => {
         if (!target.active) return;
+        const i = target.index - 1;
         const world = toWorld(target);
         const tc = this._toCanvas(world);
         const color = palette[i] || '#ef4444';
@@ -4134,9 +4426,21 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const selectedRoom = this.rooms.find(r => r.id === this._selectedRoomId);
     const instr = this._getInstructions();
     const radarDevices = this._getRadarDevices();
-    const selectedRadar = radarDevices.find(device => device.id === this._selectedSensor?.deviceId);
+    const selectedRadar = this._findRadarDevice(this._selectedSensor?.deviceId ?? null)
+      || radarDevices.find(device => device.aliases.includes(this._selectedSensor?.deviceId || ''));
     const selectedRadarCapabilities = this._getRadarCapabilities(this._selectedSensor?.deviceId ?? null);
+    const hardwareModeMismatch = this._hardwareModeMismatch(selectedRadar);
+    const canCalibrate = Boolean(this._selectedSensor?.deviceId && selectedRadar?.profile.positioningAvailable);
+    const hasLinkedHardwareModeMismatch = this._sensors.some(sensor =>
+      this._hardwareModeMismatch(this._findRadarDevice(sensor.deviceId)));
     const activeTargets = Object.values(this._liveTargets).reduce((sum, targets) => sum + targets.filter(t => t.active).length, 0);
+    const sensorsWithSupplementaryPresence = new Set(
+      this._sensors
+        .filter(sensor => this._hasSupplementaryPresence(this._findRadarDevice(sensor.deviceId)))
+        .map(sensor => sensor.id),
+    );
+    const hasUnpositionedPresence = sensorsWithSupplementaryPresence.size > 0;
+    const roomOccupied = activeTargets > 0 || hasUnpositionedPresence;
     const calibrationSensor = this._sensors.find(sensor => sensor.id === this._calibration.sensorId);
 
     return html`
@@ -4231,8 +4535,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 </button>
               </div>
               ${this._designMode === 'sensors' ? html`
-                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId)}"
-                        title="Push zones and entry lines to the linked sensors">
+                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch}"
+                        title="${hasLinkedHardwareModeMismatch ? 'Correct the radar hardware mode before pushing zones' : 'Push zones and entry lines to the linked sensors'}">
                   <ha-icon icon="mdi:upload"></ha-icon>
                   ${this._pushingToESPHome ? 'Pushing...' : 'Push'}
                 </button>
@@ -4340,36 +4644,96 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <div>
               <div class="section-title">SENSOR ${this._selectedSensorIndex! + 1} SETTINGS</div>
               <div class="setting-item">
-                <label>Device</label>
-                <select @change="${(e: Event) => this._selectRadarDevice(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value || null)}">
-                  <option value="">-- Select device --</option>
+                <label>Positioning radar</label>
+                <select
+                  .value="${selectedRadar?.id || ''}"
+                  ?disabled="${this._radarProfilesLoading}"
+                  @change="${(e: Event) => this._selectRadarDevice(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value || null)}"
+                >
+                  <option value="">${this._radarProfilesLoading ? 'Detecting radar hardware...' : '-- Select radar --'}</option>
                   ${radarDevices.map(d => html`
-                    <option value="${d.id}" ?selected="${this._selectedSensor?.deviceId === d.id}">
-                      ${d.name}${d.productFamily === 'ceilsense' ? ' · CeilSense LD2450' : ''}
+                    <option value="${d.id}" ?disabled="${!d.profile.positioningAvailable}">
+                      ${d.name} · ${d.profile.radarModel.toUpperCase()} · ${d.profile.mountingMode === 'ceiling' ? 'Ceiling' : 'Wall'}${d.profile.positioningAvailable ? '' : ' · Presence only'}
                     </option>
                   `)}
                 </select>
+                ${this._radarProfilesError ? html`
+                  <p class="firmware-status-note warning">
+                    ${this._radarProfilesError} Legacy detection is active until Home Assistant reloads the integration.
+                  </p>
+                ` : nothing}
                 ${this._selectedSensor.deviceId ? html`
                   <div class="firmware-status">
+                    ${selectedRadar ? html`
+                      <div class="profile-heading">
+                        <span class="radar-model">${selectedRadar.profile.radarModel.toUpperCase()}</span>
+                        <span class="profile-source ${selectedRadar.profile.metadataSource}">
+                          ${selectedRadar.profile.metadataSource === 'firmware' ? 'Firmware profile' : 'Legacy profile'}
+                        </span>
+                      </div>
+                    ` : html`
+                      <p class="firmware-status-note warning">
+                        This saved radar is not currently available in Home Assistant. The room stays unchanged; reconnect it or choose another positioning radar.
+                      </p>
+                    `}
                     <div class="firmware-status-row">
                       <span>Live tracking</span>
                       <span class="firmware-status-value">
-                        ${selectedRadarCapabilities.targetCount > 0
-                          ? `${selectedRadarCapabilities.targetCount} target${selectedRadarCapabilities.targetCount === 1 ? '' : 's'}`
+                        ${!selectedRadar
+                          ? 'Radar unavailable'
+                          : selectedRadarCapabilities.availableTargetCount > 0
+                          ? `${selectedRadarCapabilities.availableTargetCount} coordinate pair${selectedRadarCapabilities.availableTargetCount === 1 ? '' : 's'} · max ${selectedRadarCapabilities.targetCount}`
                           : 'Not detected'}
                       </span>
                     </div>
+                    ${selectedRadar ? html`
+                      <div class="firmware-status-row">
+                        <span>Projection</span>
+                        <span class="firmware-status-value">
+                          ${selectedRadar.profile.coordinateProjection === 'floor_xy' ? 'Floor X/Y' : 'Forward X/Y'} · ×${selectedRadar.profile.coordinateScaleToMm}
+                        </span>
+                      </div>
+                    ` : nothing}
                     <div class="firmware-status-row">
                       <span>Zone sync</span>
                       <span class="firmware-status-value">
-                        ${selectedRadarCapabilities.zoneProfiles || selectedRadarCapabilities.interferenceZones || selectedRadarCapabilities.smoothing
+                        ${!selectedRadar
+                          ? 'Not available'
+                          : selectedRadarCapabilities.zoneProfiles || selectedRadarCapabilities.interferenceZones || selectedRadarCapabilities.smoothing
                           ? 'Advanced'
                           : selectedRadarCapabilities.polygonZones
-                            ? 'Base LD2450'
+                            ? 'Polygon zones'
                             : 'Visualization only'}
                       </span>
                     </div>
-                    ${!selectedRadarCapabilities.polygonZones ? html`
+                    ${selectedRadar?.profile.supplementaryPresenceSensors.length ? html`
+                      <div class="supplementary-sources">
+                        <strong>Additional occupancy sensors</strong>
+                        <span>${selectedRadar.profile.supplementaryPresenceSensors.map(entityId => this._entityLabel(entityId)).join(' · ')}</span>
+                        <small>These improve presence detection but never create or replace X/Y targets.</small>
+                      </div>
+                    ` : nothing}
+                    ${hardwareModeMismatch && selectedRadar ? html`
+                      <div class="mode-warning" role="alert">
+                        <ha-icon icon="mdi:alert-outline"></ha-icon>
+                        <div>
+                          <strong>Radar hardware mode does not match</strong>
+                          <span>
+                            ${selectedRadar.profile.currentHardwareMode} is active; ${selectedRadar.profile.requiredInstallationMode} is required for ${selectedRadar.profile.mountingMode} mounting.
+                          </span>
+                          <button @click="${() => this._applyRequiredHardwareMode(selectedRadar)}" ?disabled="${this._changingHardwareMode}">
+                            ${this._changingHardwareMode ? 'Applying...' : `Switch to ${selectedRadar.profile.requiredInstallationMode}`}
+                          </button>
+                        </div>
+                      </div>
+                    ` : selectedRadar?.profile.hardwareModeCapability === 'top_or_side' ? html`
+                      <p class="firmware-status-note good">
+                        Hardware mode ${selectedRadar.profile.currentHardwareMode || 'not reported'}${selectedRadar.profile.currentHardwareMode === selectedRadar.profile.requiredInstallationMode ? ' matches this mounting.' : '.'}
+                      </p>
+                    ` : selectedRadar?.profile.hardwareModeCapability === 'fixed' ? html`
+                      <p class="firmware-status-note">This radar uses fixed coordinates and needs no top/side hardware setting.</p>
+                    ` : nothing}
+                    ${!selectedRadar ? nothing : !selectedRadarCapabilities.polygonZones ? html`
                       <p class="firmware-status-note warning">
                         Live room tracking is available, but this firmware does not expose polygon zones to Home Assistant.
                       </p>
@@ -4380,24 +4744,60 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     ` : html`
                       <p class="firmware-status-note">All Room Designer zone and tracking controls are available.</p>
                     `}
-                    ${selectedRadar?.productFamily === 'ceilsense' ? html`
+                    ${selectedRadar?.profile.coordinateProjection === 'floor_xy' ? html`
                       <p class="firmware-status-note">
-                        CeilSense LD2450 is ceiling mounted. Its three X/Y targets are projected onto the floor; tracking orientation aligns those coordinates with this room.
+                        Coordinates already represent positions on the floor. Orientation aligns the radar axes with this room without applying wall-facing assumptions.
                       </p>
+                    ` : nothing}
+                    ${selectedRadar?.profile.metadataSource === 'legacy_fallback' ? html`
+                      <p class="firmware-status-note warning">
+                        This profile was derived from older firmware. Update the device firmware to publish mounting, radar model and coordinate metadata explicitly.
+                      </p>
+                    ` : nothing}
+                    ${selectedRadar ? html`
+                      <details class="radar-diagnostics">
+                        <summary>Detection details</summary>
+                        <dl>
+                          <div><dt>Product</dt><dd>${selectedRadar.profile.detectedProduct || selectedRadar.productFamily}</dd></div>
+                          <div><dt>Source</dt><dd>${selectedRadar.profile.metadataSource}</dd></div>
+                          <div><dt>Radar</dt><dd>${selectedRadar.profile.radarModel}</dd></div>
+                          <div><dt>Mounting</dt><dd>${selectedRadar.profile.mountingMode} · ${selectedRadar.profile.coordinateProjection}</dd></div>
+                          <div><dt>Coordinate frame</dt><dd>${selectedRadar.profile.coordinateFrame || 'not reported'}</dd></div>
+                          <div><dt>Coordinate scale</dt><dd>${selectedRadar.profile.coordinateScaleToMm} to mm</dd></div>
+                          <div><dt>Hardware mode</dt><dd>${selectedRadar.profile.currentHardwareMode || 'not reported'} / required ${selectedRadar.profile.requiredInstallationMode || 'none'}</dd></div>
+                        </dl>
+                        ${selectedRadar.profile.missingMetadataEntities.length ? html`
+                          <p>Missing: ${selectedRadar.profile.missingMetadataEntities.join(', ')}</p>
+                        ` : nothing}
+                        ${selectedRadar.profile.invalidMetadataEntities.length ? html`
+                          <p>Invalid: ${selectedRadar.profile.invalidMetadataEntities.join(', ')}</p>
+                        ` : nothing}
+                      </details>
                     ` : nothing}
                   </div>
                 ` : nothing}
               </div>
               <div class="setting-item">
                 <label>Mounting type</label>
-                <select .value="${this._selectedSensor.mountingMode}"
-                        @change="${(e: Event) => this._setSensorMountingMode(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value as SensorMountingMode)}">
-                  <option value="wall">Wall mounted</option>
-                  <option value="ceiling">Ceiling mounted</option>
-                </select>
-                ${selectedRadar?.productFamily === 'ceilsense' && this._selectedSensor.mountingMode !== 'ceiling' ? html`
-                  <p class="firmware-status-note warning">CeilSense is designed for ceiling mounting. Use wall mode only for a custom installation.</p>
-                ` : nothing}
+                ${selectedRadar?.profile.metadataSource === 'firmware' ? html`
+                  <div class="profile-lock">
+                    <ha-icon icon="${selectedRadar.profile.mountingMode === 'ceiling' ? 'mdi:ceiling-light' : 'mdi:wall'}"></ha-icon>
+                    <span>${selectedRadar.profile.mountingMode === 'ceiling' ? 'Ceiling mounted' : 'Wall mounted'} · reported by firmware</span>
+                  </div>
+                  ${this._selectedSensor.mountingMode !== selectedRadar.profile.mountingMode ? html`
+                    <p class="firmware-status-note warning">This saved room still uses ${this._selectedSensor.mountingMode} projection.</p>
+                    <button class="secondary-action" @click="${() => this._setSensorMountingMode(this._selectedSensorIndex!, selectedRadar.profile.mountingMode)}">
+                      Use firmware mounting
+                    </button>
+                  ` : nothing}
+                ` : html`
+                  <select .value="${this._selectedSensor.mountingMode}"
+                          @change="${(e: Event) => this._setSensorMountingMode(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value as SensorMountingMode)}">
+                    <option value="wall">Wall mounted</option>
+                    <option value="ceiling">Ceiling mounted</option>
+                  </select>
+                  <p class="firmware-status-note">Manual choice for legacy firmware. Saved room values are preserved.</p>
+                `}
               </div>
               <div class="setting-item">
                 <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Tracking orientation' : 'Rotation'}: ${this._selectedSensor.rotation}°</label>
@@ -4422,9 +4822,11 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                   <p class="firmware-status-note">Effective floor radius: ${(this._coverageRadius(this._selectedSensor) / 1000).toFixed(1)}m.</p>
                 ` : nothing}
               </div>
-              <p class="firmware-status-note">
-                CeilSense LD2412 is presence-only and is intentionally not listed here because it does not expose X/Y target positions.
-              </p>
+              ${radarDevices.some(device => !device.profile.positioningAvailable) ? html`
+                <p class="firmware-status-note">
+                  Presence-only radars such as LD2412 are shown for clarity but cannot be selected because they do not expose X/Y positions.
+                </p>
+              ` : nothing}
             </div>
           ` : nothing}
         ` : this._toolMode === 'zone' && this._drawingZone.length > 0 ? html`
@@ -4444,7 +4846,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <span>Sensor coverage calibration</span>
           </div>
           <p class="info-text">
-            Measure the furthest positions the selected LD2450 or LD2460 can reliably see.
+            Measure the furthest positions the selected positioning radar can reliably see.
             This sets the sensor's usable detection area, not the room size.
           </p>
           <div class="coverage-summary ${this._calibration.corners.length === 4 ? 'calibrated' : ''}">
@@ -4465,14 +4867,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                      @change="${(e: Event) => this._updateCalibration({ enabled: (e.target as HTMLInputElement).checked })}"/>
             </div>
           ` : nothing}
-          <button class="secondary-action" @click="${this._openCoverageCalibration}" ?disabled="${!this._selectedSensor?.deviceId}">
+          <button class="secondary-action" @click="${this._openCoverageCalibration}" ?disabled="${!canCalibrate}">
             <ha-icon icon="mdi:map-marker-radius"></ha-icon>
             ${this._calibration.corners.length === 4 ? 'Measure again' : 'Start live measurement'}
           </button>
-          ${!this._selectedSensor?.deviceId ? html`
-            <p class="firmware-status-note warning">Select an LD2450 or LD2460 device above before starting.</p>
+          ${!canCalibrate ? html`
+            <p class="firmware-status-note warning">Select an LD2450, LD2460 or LD6002B positioning radar before starting.</p>
           ` : html`
-            <p class="firmware-status-note">Uses live X/Y target positions from ${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}.</p>
+            <p class="firmware-status-note">
+              Uses normalized live X/Y positions from ${this._sensorLabel(this._selectedSensor!, this._selectedSensorIndex!)} (${selectedRadar?.profile.radarModel.toUpperCase()}).
+            </p>
           `}
           <div class="settings-row">
             <label>Grid size</label>
@@ -4660,23 +5064,32 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
 
         ${this._sensors.some(sn => sn.deviceId) ? html`
-          <div class="live-status" style="border-left: 3px solid ${activeTargets > 0 ? '#22c55e' : 'var(--rd-dim)'};">
+          <div class="live-status" style="border-left: 3px solid ${roomOccupied ? '#22c55e' : 'var(--rd-dim)'};">
             <div class="header">
-              <span class="dot ${activeTargets > 0 ? 'active' : 'inactive'}"></span>
+              <span class="dot ${roomOccupied ? 'active' : 'inactive'}"></span>
               <span style="font-weight: 600; color: var(--rd-text);">Live Tracking</span>
             </div>
-            <div class="count" style="color: ${activeTargets > 0 ? '#22c55e' : 'var(--rd-dim)'};">
-              ${activeTargets} ${activeTargets === 1 ? 'person' : 'people'}
+            <div class="count" style="color: ${roomOccupied ? '#22c55e' : 'var(--rd-dim)'};">
+              ${activeTargets} ${hasUnpositionedPresence
+                ? (activeTargets === 1 ? 'positioned person' : 'positioned people')
+                : (activeTargets === 1 ? 'person' : 'people')}
             </div>
+            ${hasUnpositionedPresence ? html`
+              <div class="occupancy-note">
+                <ha-icon icon="mdi:account-eye-outline"></ha-icon>
+                <span>Additional presence is active without an X/Y position. No target is invented.</span>
+              </div>
+            ` : nothing}
             ${this._sensors.map((sn, si) => {
               if (!sn.deviceId) return nothing;
               const sensorTargets = this._liveTargets[sn.id] || [];
               const activeCount = sensorTargets.filter(t => t.active).length;
+              const supplementaryActive = sensorsWithSupplementaryPresence.has(sn.id);
               return html`
                 <div class="live-sensor-row">
                   <span class="sensor-dot small" style="background: ${this._sensorColor(si)};">${si + 1}</span>
                   <span class="live-sensor-name">${this._sensorLabel(sn, si)}</span>
-                  <span class="live-sensor-count">${activeCount} active</span>
+                  <span class="live-sensor-count">${activeCount} positioned${supplementaryActive ? ' · presence' : ''}</span>
                 </div>
               `;
             })}
@@ -4869,6 +5282,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           .range="${this._selectedSensor.range}"
           .fov="${this._selectedSensor.fov}"
           .mountingMode="${this._selectedSensor.mountingMode}"
+          .radarModel="${this._findRadarDevice(this._selectedSensor.deviceId)?.profile.radarModel || 'positioning radar'}"
           .sensorName="${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}"
           @calibration-cancel="${() => this._showCoverageCalibration = false}"
           @calibration-save="${this._saveCoverageCalibration}"

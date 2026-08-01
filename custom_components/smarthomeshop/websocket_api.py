@@ -40,6 +40,7 @@ from .const import (
     resolve_api_base_url,
 )
 from .storage import SmartHomeShopStore
+from .radar_profiles import discover_radar_device_profiles
 
 # Water option keys (mirror config_flow); stored in entry.options
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
@@ -76,6 +77,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
 
     websocket_api.async_register_command(hass, ws_get_config)
     websocket_api.async_register_command(hass, ws_get_devices)
+    websocket_api.async_register_command(hass, ws_get_radar_profiles)
     websocket_api.async_register_command(hass, ws_get_rooms)
     websocket_api.async_register_command(hass, ws_save_room)
     websocket_api.async_register_command(hass, ws_delete_room)
@@ -207,6 +209,22 @@ def ws_get_devices(
 
     LOGGER.debug("Found %d SmartHomeShop devices", len(devices))
     connection.send_result(msg["id"], {"devices": devices})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "smarthomeshop/radar/profiles"}
+)
+@callback
+def ws_get_radar_profiles(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return metadata-first radar profiles for Room Designer."""
+    profiles = discover_radar_device_profiles(hass)
+    connection.send_result(
+        msg["id"], {"devices": [profile.as_dict() for profile in profiles]}
+    )
 
 
 @websocket_api.websocket_command({vol.Required("type"): "smarthomeshop/rooms"})
