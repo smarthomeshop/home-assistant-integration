@@ -162,6 +162,8 @@ export interface SmartHomeShopDevice {
   entity_count: number;
   online?: boolean;
   last_seen?: string | null;
+  integration_linked?: boolean;
+  esphome_configured?: boolean;
 }
 
 export interface DeviceEntity {

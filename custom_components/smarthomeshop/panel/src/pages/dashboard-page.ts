@@ -9,6 +9,16 @@ interface DeviceWithEntities extends SmartHomeShopDevice {
   entities?: DeviceEntity[];
 }
 
+type DeviceRemovalMode = 'unlink' | 'full';
+
+interface DeviceRemovalResult {
+  ok: boolean;
+  mode: DeviceRemovalMode;
+  removed_smarthomeshop: boolean;
+  removed_esphome: boolean;
+  require_restart: boolean;
+}
+
 interface ProductConfig {
   asset?: string;
   icon: string;
@@ -42,6 +52,12 @@ export class DashboardPage extends LitElement {
   @state() private _detailTab: 'overview' | 'automations' | 'settings' = 'overview';
   @state() private _linking = false;
   @state() private _linkError = '';
+  @state() private _removeDevice: DeviceWithEntities | null = null;
+  @state() private _removeMode: DeviceRemovalMode = 'unlink';
+  @state() private _removeConfirm = '';
+  @state() private _removeBusy = false;
+  @state() private _removeError = '';
+  @state() private _removalNotice = '';
   private _insightsTimer?: number;
 
   static styles = css`
@@ -102,6 +118,7 @@ export class DashboardPage extends LitElement {
 
     /* Device Card */
     .device-card {
+      position: relative;
       background: var(--card-background-color);
       border: 1px solid var(--divider-color);
       border-radius: var(--ha-card-border-radius, 12px);
@@ -119,7 +136,7 @@ export class DashboardPage extends LitElement {
     }
 
     .device-header {
-      padding: 14px 16px;
+      padding: 14px 54px 14px 16px;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -195,6 +212,38 @@ export class DashboardPage extends LitElement {
       background: rgba(247, 37, 133, 0.12);
       color: #f72585;
     }
+
+    .device-type-badge.unlinked {
+      background: var(--secondary-background-color);
+      color: var(--secondary-text-color);
+    }
+
+    .device-remove {
+      width: 32px;
+      height: 32px;
+      position: absolute;
+      top: 13px;
+      right: 11px;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+    }
+
+    .device-remove:hover,
+    .device-remove:focus-visible {
+      border-color: color-mix(in srgb, var(--error-color, #ef4444) 28%, var(--divider-color));
+      background: color-mix(in srgb, var(--error-color, #ef4444) 8%, transparent);
+      color: var(--error-color, #ef4444);
+      outline: none;
+    }
+
+    .device-remove ha-icon { --mdc-icon-size: 18px; }
 
     .online-dot {
       width: 7px;
@@ -455,6 +504,153 @@ export class DashboardPage extends LitElement {
     .offline-detail-title { font-size: 14.5px; font-weight: 600; color: var(--primary-text-color); margin-bottom: 4px; }
     .offline-detail-sub { font-size: 13px; color: var(--secondary-text-color); line-height: 1.5; }
 
+    /* Device removal: destructive choices stay explicit and isolated. */
+    .removal-notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin: 0 0 14px;
+      padding: 11px 13px;
+      border: 1px solid color-mix(in srgb, #22c55e 24%, var(--divider-color));
+      border-radius: 10px;
+      background: color-mix(in srgb, #22c55e 7%, var(--card-background-color));
+      color: var(--primary-text-color);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .removal-notice ha-icon { --mdc-icon-size: 18px; color: #16a06b; flex: 0 0 auto; margin-top: 1px; }
+    .notice-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .notice-close { display: grid; place-items: center; padding: 1px; border: 0; background: transparent; color: var(--secondary-text-color); cursor: pointer; }
+    .notice-close ha-icon { --mdc-icon-size: 17px; color: inherit; }
+
+    .remove-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(15, 23, 42, 0.56);
+    }
+    .remove-dialog {
+      width: min(100%, 560px);
+      max-height: min(720px, 92vh);
+      overflow-y: auto;
+      border: 1px solid var(--divider-color);
+      border-radius: 16px;
+      background: var(--card-background-color);
+      color: var(--primary-text-color);
+      box-shadow: 0 22px 64px rgba(0, 0, 0, 0.34);
+    }
+    .remove-head {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 18px 20px 15px;
+      border-bottom: 1px solid var(--divider-color);
+    }
+    .remove-head-icon {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 36px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--error-color, #ef4444) 10%, transparent);
+      color: var(--error-color, #ef4444);
+    }
+    .remove-head-icon ha-icon { --mdc-icon-size: 20px; }
+    .remove-head-copy { flex: 1; min-width: 0; }
+    .remove-title { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
+    .remove-subtitle { margin-top: 3px; color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.4; }
+    .remove-close {
+      display: grid;
+      place-items: center;
+      padding: 4px;
+      border: 0;
+      background: transparent;
+      color: var(--secondary-text-color);
+      cursor: pointer;
+    }
+    .remove-close:focus-visible { outline: 2px solid var(--shs-primary); outline-offset: 2px; border-radius: 6px; }
+    .remove-close ha-icon { --mdc-icon-size: 20px; }
+    .remove-body { padding: 18px 20px; }
+    .remove-intro { margin: 0 0 14px; color: var(--secondary-text-color); font-size: 13px; line-height: 1.5; }
+    .remove-options { display: grid; gap: 10px; }
+    .remove-option {
+      display: grid;
+      grid-template-columns: auto 34px minmax(0, 1fr);
+      align-items: start;
+      gap: 11px;
+      padding: 13px;
+      border: 1px solid var(--divider-color);
+      border-radius: 11px;
+      cursor: pointer;
+    }
+    .remove-option:hover { border-color: color-mix(in srgb, var(--shs-primary) 45%, var(--divider-color)); }
+    .remove-option.selected { border-color: var(--shs-primary); background: color-mix(in srgb, var(--shs-primary) 6%, transparent); }
+    .remove-option.danger.selected { border-color: var(--error-color, #ef4444); background: color-mix(in srgb, var(--error-color, #ef4444) 6%, transparent); }
+    .remove-option.disabled { opacity: 0.5; cursor: not-allowed; }
+    .remove-option input { margin: 4px 0 0; accent-color: var(--shs-primary); }
+    .remove-option.danger input { accent-color: var(--error-color, #ef4444); }
+    .remove-option-icon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: var(--secondary-background-color);
+      color: var(--secondary-text-color);
+    }
+    .remove-option.danger .remove-option-icon { background: color-mix(in srgb, var(--error-color, #ef4444) 9%, transparent); color: var(--error-color, #ef4444); }
+    .remove-option-icon ha-icon { --mdc-icon-size: 19px; }
+    .remove-option-copy { min-width: 0; }
+    .remove-option-title { display: block; font-size: 13.5px; font-weight: 650; line-height: 1.35; }
+    .remove-option-desc { display: block; margin-top: 3px; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+    .remove-warning {
+      display: flex;
+      align-items: flex-start;
+      gap: 9px;
+      margin-top: 14px;
+      padding: 11px 12px;
+      border-radius: 10px;
+      background: color-mix(in srgb, #f59e0b 10%, var(--card-background-color));
+      color: var(--secondary-text-color);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .remove-warning.danger { background: color-mix(in srgb, var(--error-color, #ef4444) 9%, var(--card-background-color)); }
+    .remove-warning ha-icon { --mdc-icon-size: 18px; flex: 0 0 auto; margin-top: 1px; color: #d97706; }
+    .remove-warning.danger ha-icon { color: var(--error-color, #ef4444); }
+    .remove-confirm { margin-top: 15px; }
+    .remove-confirm label { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 600; line-height: 1.45; }
+    .remove-confirm code { padding: 1px 5px; border-radius: 4px; background: var(--secondary-background-color); font-family: inherit; overflow-wrap: anywhere; }
+    .remove-confirm input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 11px;
+      border: 1px solid var(--divider-color);
+      border-radius: 9px;
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+    }
+    .remove-confirm input:focus { outline: none; border-color: var(--error-color, #ef4444); box-shadow: 0 0 0 2px color-mix(in srgb, var(--error-color, #ef4444) 16%, transparent); }
+    .remove-error { margin-top: 12px; color: var(--error-color, #ef4444); font-size: 12.5px; line-height: 1.45; }
+    .remove-foot {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 15px 20px;
+      border-top: 1px solid var(--divider-color);
+    }
+    .remove-btn { padding: 9px 15px; border-radius: 9px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .remove-btn.cancel { border: 1px solid var(--divider-color); background: transparent; color: var(--primary-text-color); }
+    .remove-btn.confirm { border: 0; background: var(--shs-primary); color: white; }
+    .remove-btn.confirm.danger { background: var(--error-color, #ef4444); }
+    .remove-btn:disabled { opacity: 0.46; cursor: default; }
+    .remove-btn:focus-visible { outline: 2px solid var(--shs-primary); outline-offset: 2px; }
+
     /* Loading */
     .loading {
       display: flex;
@@ -485,6 +681,16 @@ export class DashboardPage extends LitElement {
       .sensor-grid.combined {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
+
+      .remove-backdrop { align-items: end; padding: 0; }
+      .remove-dialog { max-height: 94vh; border-radius: 16px 16px 0 0; border-bottom: 0; }
+      .remove-head, .remove-body, .remove-foot { padding-inline: 16px; }
+      .remove-foot { flex-wrap: wrap; }
+      .remove-btn { flex: 1 1 150px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .device-card, .device-remove { transition: none; }
     }
   `;
 
@@ -586,6 +792,83 @@ export class DashboardPage extends LitElement {
       }
     } finally {
       if (this._detailDevice?.id === deviceId) this._linking = false;
+    }
+  }
+
+  private async _openRemoveDialog(event: Event, device: DeviceWithEntities): Promise<void> {
+    event.stopPropagation();
+    if (!this.hass.user?.is_admin) return;
+    this._removeDevice = device;
+    this._removeMode = device.integration_linked === false ? 'full' : 'unlink';
+    this._removeConfirm = '';
+    this._removeError = '';
+    this._removeBusy = false;
+    await this.updateComplete;
+    this.renderRoot.querySelector<HTMLInputElement>('input[name="device-removal-mode"]:checked')?.focus();
+  }
+
+  private _closeRemoveDialog(): void {
+    if (this._removeBusy) return;
+    this._removeDevice = null;
+    this._removeConfirm = '';
+    this._removeError = '';
+  }
+
+  private _handleRemoveDialogKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this._closeRemoveDialog();
+    }
+  }
+
+  private _setRemoveMode(mode: DeviceRemovalMode): void {
+    const device = this._removeDevice;
+    if (!device || this._removeBusy) return;
+    if (mode === 'unlink' && device.integration_linked === false) return;
+    if (mode === 'full' && device.esphome_configured === false) return;
+    this._removeMode = mode;
+    this._removeConfirm = '';
+    this._removeError = '';
+  }
+
+  private _canConfirmRemoval(): boolean {
+    const device = this._removeDevice;
+    if (!device || this._removeBusy) return false;
+    if (this._removeMode === 'unlink') return device.integration_linked !== false;
+    return device.esphome_configured !== false
+      && this._removeConfirm.trim() === device.name;
+  }
+
+  private async _confirmDeviceRemoval(): Promise<void> {
+    const device = this._removeDevice;
+    if (!device || !this._canConfirmRemoval()) return;
+    const deviceId = device.id;
+    const deviceName = device.name;
+    const mode = this._removeMode;
+    this._removeBusy = true;
+    this._removeError = '';
+    try {
+      const result = await this.hass.callWS<DeviceRemovalResult>({
+        type: 'smarthomeshop/device/remove',
+        device_id: deviceId,
+        mode,
+      });
+      if (!result.ok) throw new Error('Home Assistant did not confirm the removal.');
+
+      if (this._detailDevice?.id === deviceId) this._closeDetail();
+      this._removeBusy = false;
+      this._removeDevice = null;
+      this._removeConfirm = '';
+      await this._loadDevices();
+      this._removalNotice = mode === 'full'
+        ? `${deviceName} was removed from SmartHomeShop and ESPHome in Home Assistant.${result.require_restart ? ' Restart Home Assistant to finish unloading it.' : ''}`
+        : `${deviceName} was unlinked from SmartHomeShop. Its ESPHome device and original entities are still available in Home Assistant.`;
+    } catch (err: any) {
+      if (this._removeDevice?.id === deviceId) {
+        this._removeError = err?.message || 'Could not remove this device. Check the Home Assistant logs and try again.';
+      }
+    } finally {
+      if (this._removeDevice?.id === deviceId) this._removeBusy = false;
     }
   }
 
@@ -1561,6 +1844,141 @@ export class DashboardPage extends LitElement {
     `;
   }
 
+  private _renderRemoveDialog() {
+    const device = this._removeDevice;
+    if (!device) return nothing;
+    const linked = device.integration_linked !== false;
+    const hasEsphome = device.esphome_configured !== false;
+    const fullRemoval = this._removeMode === 'full';
+
+    return html`
+      <div
+        class="remove-backdrop"
+        @click=${this._closeRemoveDialog}
+        @keydown=${this._handleRemoveDialogKeydown}
+      >
+        <section
+          class="remove-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-dialog-title"
+          aria-describedby="remove-dialog-description"
+          @click=${(event: Event) => event.stopPropagation()}
+        >
+          <div class="remove-head">
+            <span class="remove-head-icon"><ha-icon icon="mdi:delete-outline"></ha-icon></span>
+            <div class="remove-head-copy">
+              <h2 class="remove-title" id="remove-dialog-title">Remove ${device.name}?</h2>
+              <div class="remove-subtitle">Choose what Home Assistant should remove.</div>
+            </div>
+            <button
+              class="remove-close"
+              type="button"
+              aria-label="Close"
+              ?disabled=${this._removeBusy}
+              @click=${this._closeRemoveDialog}
+            ><ha-icon icon="mdi:close"></ha-icon></button>
+          </div>
+
+          <div class="remove-body">
+            <p class="remove-intro" id="remove-dialog-description">
+              The safe option only disconnects SmartHomeShop. Complete removal also removes this device's ESPHome configuration from Home Assistant.
+            </p>
+            <div class="remove-options" role="radiogroup" aria-label="Removal scope">
+              <label class="remove-option ${this._removeMode === 'unlink' ? 'selected' : ''} ${!linked ? 'disabled' : ''}">
+                <input
+                  type="radio"
+                  name="device-removal-mode"
+                  value="unlink"
+                  .checked=${this._removeMode === 'unlink'}
+                  ?disabled=${!linked || this._removeBusy}
+                  @change=${() => this._setRemoveMode('unlink')}
+                >
+                <span class="remove-option-icon"><ha-icon icon="mdi:link-variant-off"></ha-icon></span>
+                <span class="remove-option-copy">
+                  <span class="remove-option-title">Only unlink SmartHomeShop</span>
+                  <span class="remove-option-desc">
+                    ${linked
+                      ? 'Remove SmartHomeShop settings and derived entities. The ESPHome device and its original entities stay in Home Assistant.'
+                      : 'This device is already not linked to the SmartHomeShop integration.'}
+                  </span>
+                </span>
+              </label>
+
+              <label class="remove-option danger ${this._removeMode === 'full' ? 'selected' : ''} ${!hasEsphome ? 'disabled' : ''}">
+                <input
+                  type="radio"
+                  name="device-removal-mode"
+                  value="full"
+                  .checked=${this._removeMode === 'full'}
+                  ?disabled=${!hasEsphome || this._removeBusy}
+                  @change=${() => this._setRemoveMode('full')}
+                >
+                <span class="remove-option-icon"><ha-icon icon="mdi:delete-forever-outline"></ha-icon></span>
+                <span class="remove-option-copy">
+                  <span class="remove-option-title">Remove completely from Home Assistant</span>
+                  <span class="remove-option-desc">
+                    ${hasEsphome
+                      ? 'Remove both the SmartHomeShop link and ESPHome configuration. This does not erase the firmware or delete the node from the ESPHome dashboard.'
+                      : 'No ESPHome configuration is attached to this device, so complete removal is unavailable here.'}
+                  </span>
+                </span>
+              </label>
+            </div>
+
+            ${fullRemoval ? html`
+              <div class="remove-warning danger" role="alert">
+                <ha-icon icon="mdi:alert-outline"></ha-icon>
+                <span>
+                  All live entities from this device disappear from Home Assistant. Cards and automations that reference them stop working. Recorder history may remain until Home Assistant purges it.
+                </span>
+              </div>
+              <div class="remove-confirm">
+                <label for="remove-device-confirm">
+                  Type <code>${device.name}</code> to confirm permanent removal
+                </label>
+                <input
+                  id="remove-device-confirm"
+                  type="text"
+                  autocomplete="off"
+                  spellcheck="false"
+                  .value=${this._removeConfirm}
+                  ?disabled=${this._removeBusy}
+                  @input=${(event: Event) => { this._removeConfirm = (event.target as HTMLInputElement).value; }}
+                >
+              </div>
+            ` : html`
+              <div class="remove-warning">
+                <ha-icon icon="mdi:information-outline"></ha-icon>
+                <span>
+                  The device stays visible here as “Not linked” because ESPHome still supplies it. You can link it to SmartHomeShop again later.
+                </span>
+              </div>
+            `}
+
+            ${this._removeError ? html`<div class="remove-error" role="alert">${this._removeError}</div>` : nothing}
+          </div>
+
+          <div class="remove-foot">
+            <button class="remove-btn cancel" type="button" ?disabled=${this._removeBusy} @click=${this._closeRemoveDialog}>Cancel</button>
+            <button
+              class="remove-btn confirm ${fullRemoval ? 'danger' : ''}"
+              type="button"
+              ?disabled=${!this._canConfirmRemoval()}
+              @click=${this._confirmDeviceRemoval}
+            >
+              ${this._removeBusy
+                ? 'Removing…'
+                : fullRemoval
+                  ? 'Remove from Home Assistant'
+                  : 'Unlink SmartHomeShop'}
+            </button>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
   protected render() {
     if (this._loading) {
       return html`
@@ -1595,6 +2013,16 @@ export class DashboardPage extends LitElement {
           </a>
         </div>
 
+        ${this._removalNotice ? html`
+          <div class="removal-notice" role="status">
+            <ha-icon icon="mdi:check-circle-outline"></ha-icon>
+            <span class="notice-copy">${this._removalNotice}</span>
+            <button class="notice-close" type="button" aria-label="Dismiss" @click=${() => { this._removalNotice = ''; }}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+        ` : nothing}
+
         <div class="devices-grid">
           ${this._devices.map(device => {
             const config = this._getProductConfig(device.product_type);
@@ -1614,6 +2042,9 @@ export class DashboardPage extends LitElement {
                       ${device.product_type === 'waterp1meterkit' ? html`
                         <span class="device-type-badge energy">energy</span>
                       ` : nothing}
+                      ${device.integration_linked === false ? html`
+                        <span class="device-type-badge unlinked">not linked</span>
+                      ` : nothing}
                       ${device.product_name || 'Unknown'}
                     </div>
                   </div>
@@ -1629,6 +2060,15 @@ export class DashboardPage extends LitElement {
                   ` : html`<span class="online-dot" title="Online"></span>`}
                 </div>
                 ${this._renderDeviceSensors(device)}
+                ${this.hass.user?.is_admin ? html`
+                  <button
+                    class="device-remove"
+                    type="button"
+                    title="Remove device"
+                    aria-label="Remove ${device.name}"
+                    @click=${(event: Event) => this._openRemoveDialog(event, device)}
+                  ><ha-icon icon="mdi:delete-outline"></ha-icon></button>
+                ` : nothing}
               </div>
             `;
           })}
@@ -1657,6 +2097,8 @@ export class DashboardPage extends LitElement {
           <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
         </button>
       </div>
+
+      ${this._renderRemoveDialog()}
     `;
   }
 

@@ -24,6 +24,13 @@ const nl: Record<string, string> = {
   'Measured every 15 minutes from battery flows and running schedules, valued against the day-average electricity price.': "Elke 15 minuten gemeten aan de hand van batterijstroom en actieve schema's, gewaardeerd tegen de gemiddelde stroomprijs van de dag.",
 
   'Live energy': 'Live energie',
+  'Live power flow': 'Live energiestroom',
+  'Direction and speed follow the power moving right now': 'Richting en snelheid volgen het vermogen van dit moment',
+  'Pause flow animation': 'Animatie pauzeren',
+  'Resume flow animation': 'Animatie hervatten',
+  'Home': 'Woning',
+  'Live usage': 'Actueel verbruik',
+  'Incomplete sensor data': 'Onvolledige sensordata',
   '{count} source connected': '{count} bron verbonden',
   '{count} sources connected': '{count} bronnen verbonden',
   'Live energy unavailable': 'Live energie niet beschikbaar',

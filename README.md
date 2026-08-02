@@ -1,6 +1,6 @@
 # SmartHomeShop.io Integration for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default/pull/9476)
 
 Custom integration for Home Assistant to integrate SmartHomeShop.io devices.
 
@@ -8,31 +8,22 @@ Custom integration for Home Assistant to integrate SmartHomeShop.io devices.
 
 ### HACS (Recommended)
 
-Use this installation method if you have HACS installed in Home Assistant.
-
-1. Click the My Home Assistant button below to open this repository in HACS.
-
-   [![Open your Home Assistant instance and add this repository to HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
-
-2. Click **Add**.
-3. Search for **SmartHomeShop.io** in HACS and install it.
-4. Restart Home Assistant.
-
-If the button does not work:
+SmartHomeShop.io is included in the default HACS store. You no longer need to
+add this repository as a custom repository.
 
 1. Open **HACS** in Home Assistant.
-2. Go to **Integrations**.
-3. Click the three dots in the top right corner and select **Custom repositories**.
-4. Add this repository URL:
+2. Search for **SmartHomeShop.io**.
+3. Open the integration and click **Download**.
+4. Restart Home Assistant.
+5. Go to **Settings > Devices & services > Add integration** and search for
+   **SmartHomeShop.io**.
 
-   ```text
-   https://github.com/smarthomeshop/home-assistant-integration
-   ```
+You can also use this button to open the repository directly in HACS:
 
-5. Select **Integration** as the category.
-6. Click **Add**.
-7. Search for **SmartHomeShop.io** and install it.
-8. Restart Home Assistant.
+[![Open your Home Assistant instance and open the SmartHomeShop.io repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
+
+The repository was [approved and merged into the HACS default repository
+list](https://github.com/hacs/default/pull/9476) on August 1, 2026.
 
 ### Manual Installation
 

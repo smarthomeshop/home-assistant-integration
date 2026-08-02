@@ -86,6 +86,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_device_config)
     websocket_api.async_register_command(hass, ws_set_device_config)
     websocket_api.async_register_command(hass, ws_link_device)
+    websocket_api.async_register_command(hass, ws_remove_device)
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
     websocket_api.async_register_command(hass, ws_refresh_account)
@@ -205,6 +206,12 @@ def ws_get_devices(
             "entity_count": entity_count,
             "online": online,
             "last_seen": last_seen.isoformat() if (not online and last_seen) else None,
+            "integration_linked": _entry_for_device(hass, device_entry.id) is not None,
+            "esphome_configured": any(
+                (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+                and entry.domain == "esphome"
+                for entry_id in device_entry.config_entries
+            ),
         })
 
     LOGGER.debug("Found %d SmartHomeShop devices", len(devices))
@@ -484,6 +491,23 @@ def _entry_for_device(hass: HomeAssistant, device_id: str):
     return None
 
 
+def _product_for_registry_device(hass: HomeAssistant, device) -> str | None:
+    """Resolve a supported product from metadata or its registered entities."""
+    product_type = product_for_device(device.manufacturer, device.model)
+    if product_type is not None:
+        return product_type
+
+    entity_registry = er.async_get(hass)
+    for entity in er.async_entries_for_device(
+        entity_registry, device.id, include_disabled_entities=True
+    ):
+        entity_id_lower = entity.entity_id.lower()
+        for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
+            if pattern in entity_id_lower:
+                return product
+    return None
+
+
 # Accepted clock values for a "time" field: HH:MM as the panel input sends it,
 # and the HH:MM:SS the options-flow TimeSelector may have stored, so an
 # untouched field survives a save from the panel.
@@ -733,24 +757,10 @@ async def ws_link_device(hass: HomeAssistant, connection, msg: dict) -> None:
         )
         return
 
-    # Same product detection as the devices list: ESPHome project info
-    # first, entity-id patterns as fallback for older firmware. Patterns are
-    # checked most-specific-first (longest first): "ultimatesensor" is a
-    # substring of every "ultimatesensor_mini" entity id, so plain dict order
-    # would misdetect a Mini and persist the wrong product into the entry.
-    product_type = product_for_device(device.manufacturer, device.model)
-    if product_type is None:
-        entity_registry = er.async_get(hass)
-        for entity in er.async_entries_for_device(
-            entity_registry, device_id, include_disabled_entities=True
-        ):
-            entity_id_lower = entity.entity_id.lower()
-            for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
-                if pattern in entity_id_lower:
-                    product_type = product
-                    break
-            if product_type:
-                break
+    # ESPHome project metadata wins; entity ids cover older firmware. The
+    # shared resolver also protects the removal endpoint from being used for
+    # arbitrary non-SmartHomeShop devices.
+    product_type = _product_for_registry_device(hass, device)
     if product_type is None:
         connection.send_error(
             msg["id"],
@@ -798,6 +808,107 @@ async def ws_link_device(hass: HomeAssistant, connection, msg: dict) -> None:
         "link_failed",
         messages.get(reason, f"Could not link this device ({reason})"),
     )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/device/remove",
+    vol.Required("device_id"): str,
+    vol.Required("mode"): vol.In(("unlink", "full")),
+})
+@websocket_api.async_response
+async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Unlink SmartHomeShop or remove the device's ESPHome entry as well."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+
+    device_id = msg["device_id"]
+    mode = msg["mode"]
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+
+    # A caller can provide any registry id over WebSocket. Never let this
+    # convenience endpoint remove a device outside the products shown by our
+    # panel, even for an administrator.
+    product_type = _product_for_registry_device(hass, device)
+    if product_type is None:
+        connection.send_error(
+            msg["id"], "unsupported_device", "This is not a SmartHomeShop device"
+        )
+        return
+
+    integration_entry = _entry_for_device(hass, device_id)
+    esphome_entries = [
+        entry
+        for entry_id in device.config_entries
+        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        and entry.domain == "esphome"
+    ]
+
+    if mode == "unlink" and integration_entry is None:
+        connection.send_error(
+            msg["id"], "not_linked", "This device is not linked to SmartHomeShop"
+        )
+        return
+    if mode == "full" and not esphome_entries:
+        connection.send_error(
+            msg["id"],
+            "esphome_not_found",
+            "No ESPHome configuration was found for this device",
+        )
+        return
+
+    removed_domains: list[str] = []
+    require_restart = False
+    try:
+        # Remove our layer first. If that fails, the ESPHome source and its
+        # entities remain untouched. The full option only continues after the
+        # SmartHomeShop cleanup has completed successfully.
+        if integration_entry is not None:
+            result = await hass.config_entries.async_remove(
+                integration_entry.entry_id
+            )
+            require_restart = require_restart or bool(result.get("require_restart"))
+            removed_domains.append(DOMAIN)
+
+        if mode == "full":
+            for entry in esphome_entries:
+                result = await hass.config_entries.async_remove(entry.entry_id)
+                require_restart = require_restart or bool(
+                    result.get("require_restart")
+                )
+                removed_domains.append("esphome")
+    except Exception:  # Home Assistant logs the underlying integration error.
+        LOGGER.exception(
+            "Failed to remove device %s in mode %s after removing %s",
+            device_id,
+            mode,
+            removed_domains,
+        )
+        detail = (
+            "The SmartHomeShop link was removed, but Home Assistant could not "
+            "finish removing ESPHome. Open Devices & Services to review it."
+            if DOMAIN in removed_domains and mode == "full"
+            else "Home Assistant could not remove this device. No ESPHome entry was removed."
+        )
+        connection.send_error(msg["id"], "remove_failed", detail)
+        return
+
+    LOGGER.info(
+        "Removed device %s (%s) from %s",
+        device_id,
+        product_type,
+        ", ".join(removed_domains),
+    )
+    connection.send_result(msg["id"], {
+        "ok": True,
+        "mode": mode,
+        "removed_smarthomeshop": DOMAIN in removed_domains,
+        "removed_esphome": "esphome" in removed_domains,
+        "require_restart": require_restart,
+    })
 
 
 def _account_result(hass: HomeAssistant) -> dict:

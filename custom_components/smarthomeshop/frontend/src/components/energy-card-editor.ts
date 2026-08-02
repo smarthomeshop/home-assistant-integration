@@ -68,8 +68,8 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
     }
     .toggle:last-child { border-bottom: 0; }
     .toggle-copy { min-width: 0; }
-    .toggle-name { color: var(--primary-text-color); font-size: 13px; font-weight: 560; }
-    .toggle-note { margin-top: 2px; color: var(--secondary-text-color); font-size: 10.5px; line-height: 1.35; }
+    .toggle-name { display: block; color: var(--primary-text-color); font-size: 13px; font-weight: 560; }
+    .toggle-note { display: block; margin-top: 2px; color: var(--secondary-text-color); font-size: 10.5px; line-height: 1.35; }
     input[type="checkbox"] { width: 19px; height: 19px; flex: 0 0 auto; accent-color: var(--primary-color); }
     .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
     @media (max-width: 420px) { .pair { grid-template-columns: 1fr; } }
@@ -138,8 +138,24 @@ export class SmartHomeShopEnergyCardEditor extends LitElement {
 
   private _typeFields() {
     if (this.cardType === 'live') {
+      const showFlow = this.config.show_flow ?? false;
       return html`
-        ${this.toggle('show_home', 'Home consumption', 'Large calculated consumption overview')}
+        ${this.toggle(
+          'show_flow',
+          'Live power flow',
+          'Show the direction and speed of power moving between grid, solar, home and battery',
+          false,
+        )}
+        ${showFlow ? html`
+          ${this.toggle('animate_flow', 'Animate power flow', 'Moving dots follow the live direction; speed reflects power', true)}
+          ${this.toggle('show_details', 'Source details below flow', 'Keep the familiar home overview and source rows below the flow', true)}
+        ` : nothing}
+        <div class="section-title">Sources</div>
+        ${this.toggle(
+          'show_home',
+          'Home consumption',
+          showFlow ? 'Large calculated consumption overview below the flow' : 'Large calculated consumption overview',
+        )}
         ${this.toggle('show_grid', 'Grid', 'Current grid import or export')}
         ${this.toggle('show_solar', 'Solar', 'Live solar production when configured')}
         ${this.toggle('show_battery', 'Battery', 'Battery flow and state of charge')}
