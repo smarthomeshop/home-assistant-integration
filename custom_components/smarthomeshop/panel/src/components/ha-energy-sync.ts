@@ -303,8 +303,8 @@ export class HaEnergySync extends LitElement {
   private _target(): SyncTarget {
     const importedCandidate = this._entityBySuffix('_grid_import_energy_cc', '_grid_import_energy');
     const exportedCandidate = this._entityBySuffix('_grid_export_energy_cc', '_grid_export_energy');
+    const netPowerCandidate = this._entityBySuffix('_net_grid_power_cc', '_net_power_cc');
     const importPowerCandidate = this._entityBySuffix('_grid_import_power_cc', '_grid_import_power', '_power_consumed');
-    const exportPowerCandidate = this._entityBySuffix('_grid_export_power_cc', '_grid_export_power', '_power_produced');
     const gasCandidate = this._entityBySuffix(
       '_gas_consumption_cc',
       '_gas_consumption',
@@ -314,16 +314,24 @@ export class HaEnergySync extends LitElement {
     const waterCandidate = this._entityBySuffix('_water_meter_total', '_water_total_consumption');
     const importedCheck = this._entityCompatibility(importedCandidate, 'energy');
     const exportedCheck = this._entityCompatibility(exportedCandidate, 'energy');
+    const netPowerCheck = this._entityCompatibility(netPowerCandidate, 'power');
     const importPowerCheck = this._entityCompatibility(importPowerCandidate, 'power');
-    const exportPowerCheck = this._entityCompatibility(exportPowerCandidate, 'power');
     const gasCheck = this._entityCompatibility(gasCandidate, 'gas');
     const waterCheck = this._entityCompatibility(waterCandidate, 'water');
-    const imported = importedCheck.compatible ? importedCandidate : undefined;
-    const exported = exportedCheck.compatible ? exportedCandidate : undefined;
-    const importPower = importPowerCheck.compatible ? importPowerCandidate : undefined;
-    const exportPower = exportPowerCheck.compatible ? exportPowerCandidate : undefined;
-    const gas = gasCheck.compatible ? gasCandidate : undefined;
-    const water = waterCheck.compatible ? waterCandidate : undefined;
+    const imported = importedCheck.compatible && importedCheck.ready ? importedCandidate : undefined;
+    // Return totals are optional. Never put an unknown/unavailable statistic in
+    // HA Energy: installations without export would otherwise get a permanent
+    // statistics warning for a source that can never produce a value.
+    const exported = exportedCheck.compatible && exportedCheck.ready ? exportedCandidate : undefined;
+    // Prefer the signed SmartHomeShop net-power sensor. Supplying separate
+    // import/export power sensors makes HA create its own generated helper;
+    // re-saving an older malformed setup can then produce recursively growing
+    // entity IDs. A direct stat_rate is both simpler and stable.
+    const netPower = netPowerCheck.compatible && netPowerCheck.ready ? netPowerCandidate : undefined;
+    const importPower = importPowerCheck.compatible && importPowerCheck.ready ? importPowerCandidate : undefined;
+    const gridPower = netPower || importPower;
+    const gas = gasCheck.compatible && gasCheck.ready ? gasCandidate : undefined;
+    const water = waterCheck.compatible && waterCheck.ready ? waterCandidate : undefined;
     const importPrice = this._priceEntity('electricity_price');
     const exportPrice = this._priceEntity('electricity_feed_in_price');
     const gasPrice = this._priceEntity('gas_price');
@@ -340,15 +348,14 @@ export class HaEnergySync extends LitElement {
         entity_energy_price: importPrice || null,
         number_energy_price: null,
         stat_compensation: null,
-        entity_energy_price_export: exportPrice || null,
+        entity_energy_price_export: exported ? exportPrice || null : null,
         number_energy_price_export: null,
         cost_adjustment_day: 0,
         name,
       };
-      if (importPower && exportPower) {
+      if (gridPower) {
         grid.power_config = {
-          stat_rate_from: importPower,
-          stat_rate_to: exportPower,
+          stat_rate: gridPower,
         };
       }
       sources.push(grid);
@@ -378,11 +385,20 @@ export class HaEnergySync extends LitElement {
 
     const items: SyncItem[] = [
       { label: 'Electricity imported', entity: importedCandidate, issue: importedCheck.issue },
-      { label: 'Electricity returned', entity: exportedCandidate, issue: exportedCheck.issue, optional: true },
+      {
+        label: 'Electricity returned',
+        entity: exportedCandidate,
+        issue: exportedCheck.compatible && !exportedCheck.ready
+          ? 'No return reading — omitted from HA Energy'
+          : exportedCheck.issue,
+        optional: true,
+      },
       {
         label: 'Live grid power',
-        entity: importPowerCandidate && exportPowerCandidate ? `${importPowerCandidate} + ${exportPowerCandidate}` : undefined,
-        issue: !importPowerCheck.compatible ? importPowerCheck.issue : !exportPowerCheck.compatible ? exportPowerCheck.issue : undefined,
+        entity: netPowerCandidate || importPowerCandidate,
+        issue: netPowerCandidate
+          ? netPowerCheck.issue
+          : importPowerCheck.issue,
         optional: true,
       },
       { label: 'Contract import price', entity: importPrice, issue: this._entityCompatibility(importPrice, 'price').issue, optional: true },
@@ -451,9 +467,18 @@ export class HaEnergySync extends LitElement {
       const existing = this._prefs.energy_sources.find(item => this._sameTarget(item, source));
       if (!existing) return false;
       const keys = source.type === 'grid'
-        ? ['stat_energy_from', 'stat_energy_to', 'entity_energy_price', 'entity_energy_price_export', 'power_config']
+        ? ['stat_energy_from', 'stat_energy_to', 'entity_energy_price', 'entity_energy_price_export']
         : ['stat_energy_from', 'entity_energy_price'];
-      return keys.every(key => JSON.stringify(existing[key] ?? null) === JSON.stringify(source[key] ?? null));
+      if (!keys.every(key => JSON.stringify(existing[key] ?? null) === JSON.stringify(source[key] ?? null))) {
+        return false;
+      }
+      if (source.type === 'grid' && source.power_config) {
+        if (JSON.stringify(existing.power_config ?? null) !== JSON.stringify(source.power_config)) return false;
+        // HA persists the effective power sensor separately. Checking it here
+        // makes a stale generated net-power helper repairable with one sync.
+        if (source.power_config.stat_rate && existing.stat_rate !== source.power_config.stat_rate) return false;
+      }
+      return true;
     });
   }
 
@@ -463,7 +488,14 @@ export class HaEnergySync extends LitElement {
     for (const target of targets) {
       const exactIndex = result.findIndex(existing => this._sameTarget(existing, target));
       if (exactIndex >= 0) {
-        result[exactIndex] = { ...result[exactIndex], ...target };
+        const merged = { ...result[exactIndex], ...target };
+        if (target.power_config) {
+          // The Energy backend derives stat_rate from power_config. Do not send
+          // a stale generated helper from an earlier configuration back into
+          // the next save operation.
+          delete merged.stat_rate;
+        }
+        result[exactIndex] = merged;
         continue;
       }
       if (replaceConflicts) result = result.filter(existing => existing.type !== target.type);
@@ -702,14 +734,18 @@ export class HaEnergySync extends LitElement {
           <div class="rows">
             ${target.items.map(item => html`
               <div class="row">
-                <ha-icon icon=${item.entity && !item.issue ? 'mdi:check-circle-outline' : item.entity ? 'mdi:alert-outline' : 'mdi:minus-circle-outline'}></ha-icon>
+                <ha-icon icon=${item.entity && !item.issue
+                  ? 'mdi:check-circle-outline'
+                  : item.optional
+                    ? 'mdi:minus-circle-outline'
+                    : 'mdi:alert-outline'}></ha-icon>
                 <span class="row-label">${item.label}</span>
                 <span class="row-entity" title=${item.entity || ''}>${item.entity || 'Not available'}</span>
                 ${item.entity && !item.issue
                   ? html`<span class="row-state"><ha-icon icon="mdi:check"></ha-icon>Ready</span>`
-                  : item.entity
+                  : item.entity && !item.optional
                     ? html`<span class="row-state warn"><ha-icon icon="mdi:alert-outline"></ha-icon>${item.issue || 'Needs attention'}</span>`
-                    : html`<span class="row-state muted">Optional</span>`}
+                    : html`<span class="row-state muted">${item.issue || 'Optional'}</span>`}
               </div>
             `)}
           </div>
