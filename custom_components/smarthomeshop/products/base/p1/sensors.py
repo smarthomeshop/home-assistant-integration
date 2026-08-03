@@ -58,6 +58,19 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
             data.energy_returned_t1, data.energy_returned_t2
         ),
     ),
+    # Publish one stable gas total for both DSMR naming variants. Belgian
+    # meters commonly expose ``gas_consumed_belgium`` instead of
+    # ``gas_consumed``; EnergyTracker already normalises both into gas_total.
+    P1SensorDescription(
+        key="gas_consumption",
+        name="Gas consumption (CC)",
+        icon="mdi:fire",
+        native_unit_of_measurement="m³",
+        device_class=SensorDeviceClass.GAS,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=3,
+        value_fn=lambda data: data.gas_total,
+    ),
     P1SensorDescription(
         key="standby_power",
         name="Standby power (CC)",

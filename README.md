@@ -25,6 +25,24 @@ You can also use this button to open the repository directly in HACS:
 The repository was [approved and merged into the HACS default repository
 list](https://github.com/hacs/default/pull/9476) on August 1, 2026.
 
+## See SmartHomeShop.io in action
+
+WaterP1MeterKit, WaterMeterKit and P1MeterKit include purpose-built Lovelace
+cards. The Smart Energy panel adds live grid, solar and battery flow, source
+mapping, Home Assistant Energy sync, ready-to-use automations and complete home
+battery planning. The demo below walks through the cards and the full energy
+management experience.
+
+[![Watch the SmartHomeShop.io utility card demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-utility-cards-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
+
+[Watch the full-quality demo video](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
+
+More product demos:
+
+- [WaterFlowKit](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
+- [CeilSense](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
+- [UltimateSensor Mini](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
+
 ### Manual Installation
 
 1. Download the latest release

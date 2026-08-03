@@ -561,6 +561,24 @@ export class ZonesPage extends LitElement {
     this._dirty = true;
   }
 
+  private _commitNumberInput(
+    event: Event,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+    allowEmpty = false,
+  ): number {
+    const input = event.target as HTMLInputElement;
+    const raw = input.value.trim();
+    if (allowEmpty && raw === '') return 0;
+    const parsed = Number(raw);
+    const value = Number.isFinite(parsed)
+      ? Math.min(maximum, Math.max(minimum, parsed))
+      : fallback;
+    input.value = String(value);
+    return value;
+  }
+
   private get _selectedSensor(): SensorInstance | null {
     return this._selectedSensorIndex !== null ? this._sensors[this._selectedSensorIndex] ?? null : null;
   }
@@ -2645,24 +2663,32 @@ export class ZonesPage extends LitElement {
             <div>
               <label>Enter delay (ms)</label>
               <input type="number" min="0" step="100" .value="${String(profile.enterDelayMs)}"
-                     @change="${(e: Event) => this._updateZoneProfile(i, { enterDelayMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+                     @change="${(e: Event) => this._updateZoneProfile(i, {
+                       enterDelayMs: Math.round(this._commitNumberInput(e, profile.enterDelayMs, 0, 600000)),
+                     })}"/>
             </div>
             <div>
               <label>Leave delay (ms)</label>
               <input type="number" min="0" step="250" .value="${String(profile.leaveDelayMs)}"
-                     @change="${(e: Event) => this._updateZoneProfile(i, { leaveDelayMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+                     @change="${(e: Event) => this._updateZoneProfile(i, {
+                       leaveDelayMs: Math.round(this._commitNumberInput(e, profile.leaveDelayMs, 0, 600000)),
+                     })}"/>
             </div>
           </div>
           <div class="input-row">
             <div>
               <label>Minimum dwell (ms)</label>
               <input type="number" min="0" step="100" .value="${String(profile.minDwellMs)}"
-                     @change="${(e: Event) => this._updateZoneProfile(i, { minDwellMs: Math.max(0, Number((e.target as HTMLInputElement).value) || 0) })}"/>
+                     @change="${(e: Event) => this._updateZoneProfile(i, {
+                       minDwellMs: Math.round(this._commitNumberInput(e, profile.minDwellMs, 0, 600000)),
+                     })}"/>
             </div>
             <div>
               <label>Minimum targets</label>
               <input type="number" min="1" max="${maximumZoneTargets}" .value="${String(Math.min(profile.minTargets, maximumZoneTargets))}"
-                     @change="${(e: Event) => this._updateZoneProfile(i, { minTargets: Math.max(1, Math.min(maximumZoneTargets, Number((e.target as HTMLInputElement).value) || 1)) })}"/>
+                     @change="${(e: Event) => this._updateZoneProfile(i, {
+                       minTargets: Math.round(this._commitNumberInput(e, profile.minTargets, 1, maximumZoneTargets)),
+                     })}"/>
             </div>
           </div>
         ` : nothing}
@@ -4296,12 +4322,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <div>
             <label>Width (cm)</label>
             <input type="number" min="10" max="500" .value="${String(sel.width / 10)}"
-              @input="${(e: Event) => this._updateSelectedFurniture({ width: (parseInt((e.target as HTMLInputElement).value) || 10) * 10 })}"/>
+              @change="${(e: Event) => this._updateSelectedFurniture({
+                width: Math.round(this._commitNumberInput(e, sel.width / 10, 10, 500) * 10),
+              })}"/>
           </div>
           <div>
             <label>Depth (cm)</label>
             <input type="number" min="10" max="500" .value="${String(sel.height / 10)}"
-              @input="${(e: Event) => this._updateSelectedFurniture({ height: (parseInt((e.target as HTMLInputElement).value) || 10) * 10 })}"/>
+              @change="${(e: Event) => this._updateSelectedFurniture({
+                height: Math.round(this._commitNumberInput(e, sel.height / 10, 10, 500) * 10),
+              })}"/>
           </div>
         </div>
         <div class="panel-btn-row">
@@ -4925,12 +4955,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <div class="settings-row">
             <label>Maximum jump</label>
             <input type="number" min="100" max="5000" step="100" .value="${String(this._tracking.maxJumpMm)}"
-                   @change="${(e: Event) => this._updateTracking({ maxJumpMm: parseInt((e.target as HTMLInputElement).value, 10) || 1200 })}"/>
+                   @change="${(e: Event) => this._updateTracking({
+                     maxJumpMm: Math.round(this._commitNumberInput(e, this._tracking.maxJumpMm, 100, 5000)),
+                   })}"/>
           </div>
           <div class="settings-row">
             <label>Track hold (ms)</label>
             <input type="number" min="0" max="10000" step="100" .value="${String(this._tracking.trackHoldMs)}"
-                   @change="${(e: Event) => this._updateTracking({ trackHoldMs: parseInt((e.target as HTMLInputElement).value, 10) || 0 })}"/>
+                   @change="${(e: Event) => this._updateTracking({
+                     trackHoldMs: Math.round(this._commitNumberInput(e, this._tracking.trackHoldMs, 0, 10000)),
+                   })}"/>
           </div>
           <div class="settings-row">
             <label>Keep identity across zones</label>
@@ -5177,12 +5211,12 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <div>
                 <label>Width (cm)</label>
                 <input type="number" placeholder="e.g. 400" .value="${this._newRoomWidth || ''}"
-                  @input="${(e: Event) => this._newRoomWidth = parseInt((e.target as HTMLInputElement).value) || 0}"/>
+                  @change="${(e: Event) => this._newRoomWidth = this._commitNumberInput(e, 0, 1, 10000, true)}"/>
               </div>
               <div>
                 <label>Length (cm)</label>
                 <input type="number" placeholder="e.g. 500" .value="${this._newRoomLength || ''}"
-                  @input="${(e: Event) => this._newRoomLength = parseInt((e.target as HTMLInputElement).value) || 0}"/>
+                  @change="${(e: Event) => this._newRoomLength = this._commitNumberInput(e, 0, 1, 10000, true)}"/>
               </div>
             </div>
             <div class="dialog-buttons">
@@ -5202,12 +5236,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <div>
                 <label>Width (cm)</label>
                 <input type="number" min="10" max="500" .value="${String(this._furnitureWidth / 10)}"
-                  @input="${(e: Event) => this._furnitureWidth = (parseInt((e.target as HTMLInputElement).value) || 100) * 10}"/>
+                  @change="${(e: Event) => this._furnitureWidth = Math.round(
+                    this._commitNumberInput(e, this._furnitureWidth / 10, 10, 500) * 10,
+                  )}"/>
               </div>
               <div>
                 <label>Depth (cm)</label>
                 <input type="number" min="10" max="500" .value="${String(this._furnitureHeight / 10)}"
-                  @input="${(e: Event) => this._furnitureHeight = (parseInt((e.target as HTMLInputElement).value) || 100) * 10}"/>
+                  @change="${(e: Event) => this._furnitureHeight = Math.round(
+                    this._commitNumberInput(e, this._furnitureHeight / 10, 10, 500) * 10,
+                  )}"/>
               </div>
             </div>
             <div class="dialog-buttons">
@@ -5224,7 +5262,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <h3>${this._editingDoorIndex !== null ? 'Edit Door' : 'Add Door'}</h3>
             <label>Width (cm)</label>
             <input type="number" .value="${String(this._doorWidth / 10)}"
-              @input="${(e: Event) => this._doorWidth = (parseInt((e.target as HTMLInputElement).value) || 90) * 10}"/>
+              @change="${(e: Event) => this._doorWidth = Math.round(
+                this._commitNumberInput(e, this._doorWidth / 10, 10, 500) * 10,
+              )}"/>
             <label>Opening direction</label>
             <select .value="${this._doorOpenDirection}" @change="${(e: Event) => this._doorOpenDirection = (e.target as HTMLSelectElement).value as 'inward' | 'outward'}">
               <option value="inward">Inward</option>
@@ -5251,12 +5291,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <div>
                 <label>Width (cm)</label>
                 <input type="number" .value="${String(this._windowWidth / 10)}"
-                  @input="${(e: Event) => this._windowWidth = (parseInt((e.target as HTMLInputElement).value) || 120) * 10}"/>
+                  @change="${(e: Event) => this._windowWidth = Math.round(
+                    this._commitNumberInput(e, this._windowWidth / 10, 10, 500) * 10,
+                  )}"/>
               </div>
               <div>
                 <label>Height (cm)</label>
                 <input type="number" .value="${String(this._windowHeight / 10)}"
-                  @input="${(e: Event) => this._windowHeight = (parseInt((e.target as HTMLInputElement).value) || 100) * 10}"/>
+                  @change="${(e: Event) => this._windowHeight = Math.round(
+                    this._commitNumberInput(e, this._windowHeight / 10, 10, 500) * 10,
+                  )}"/>
               </div>
             </div>
             <label>Window type</label>

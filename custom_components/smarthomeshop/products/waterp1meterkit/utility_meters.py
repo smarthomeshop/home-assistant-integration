@@ -9,7 +9,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ...const import CONF_WATER_SENSOR, LOGGER
-from ..base.p1.utility_meters import create_single_utility_meter as _create_single_utility_meter
+from ..base.p1.utility_meters import (
+    create_single_utility_meter as _create_single_utility_meter,
+    resolve_gas_source,
+)
 
 # Utility meter cycles to create
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
@@ -69,7 +72,7 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
     water_entity = f"sensor.waterp1meterkit_{short_id}_water_total_consumption"
 
     # Gas source entity (from ESPHome P1 meter)
-    gas_entity = f"sensor.waterp1meterkit_{short_id}_gas_consumed"
+    gas_entity = resolve_gas_source(hass, f"sensor.waterp1meterkit_{short_id}")
 
     meters_created = 0
 
@@ -136,16 +139,17 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
             meters_created += 1
 
     # Create gas meters
-    for cycle in METER_CYCLES:
-        if await _create_single_utility_meter(
-            hass,
-            name=f"WaterP1 {short_id} Gas {cycle.capitalize()} (CC)",
-            source=gas_entity,
-            cycle=cycle,
-            unique_id=f"waterp1_{short_id}_gas_{cycle}",
-            periodically_resetting=False,  # Gas meter totals never reset
-        ):
-            meters_created += 1
+    if gas_entity:
+        for cycle in METER_CYCLES:
+            if await _create_single_utility_meter(
+                hass,
+                name=f"WaterP1 {short_id} Gas {cycle.capitalize()} (CC)",
+                source=gas_entity,
+                cycle=cycle,
+                unique_id=f"waterp1_{short_id}_gas_{cycle}",
+                periodically_resetting=False,  # Gas meter totals never reset
+            ):
+                meters_created += 1
 
     # Total expected:
     # - 8 energy consumed (4 cycles x 2 tariffs)

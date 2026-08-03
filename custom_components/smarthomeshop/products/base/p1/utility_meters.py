@@ -10,6 +10,15 @@ from ....const import LOGGER
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
 
 
+def resolve_gas_source(hass: HomeAssistant, entity_base: str) -> str | None:
+    """Return the available DSMR gas total, including the Belgian variant."""
+    for suffix in ("gas_consumed", "gas_consumed_belgium"):
+        entity_id = f"{entity_base}_{suffix}"
+        if hass.states.get(entity_id):
+            return entity_id
+    return None
+
+
 async def async_setup_energy_utility_meters(
     hass: HomeAssistant,
     label: str,
@@ -24,7 +33,7 @@ async def async_setup_energy_utility_meters(
     """
     consumed_t1 = f"{entity_base}_energy_consumed_tariff_1"
     consumed_t2 = f"{entity_base}_energy_consumed_tariff_2"
-    gas_entity = f"{entity_base}_gas_consumed"
+    gas_entity = resolve_gas_source(hass, entity_base)
 
     # Returned energy entities differ per firmware generation
     returned_entities = {
@@ -65,7 +74,7 @@ async def async_setup_energy_utility_meters(
             ):
                 created += 1
 
-    if hass.states.get(gas_entity):
+    if gas_entity:
         for cycle in METER_CYCLES:
             if await create_single_utility_meter(
                 hass,
@@ -91,6 +100,18 @@ async def create_single_utility_meter(
     for entry in hass.config_entries.async_entries("utility_meter"):
         entry_name = entry.options.get("name", entry.title)
         if entry_name == name:
+            current_source = entry.options.get("source")
+            if current_source != source:
+                hass.config_entries.async_update_entry(
+                    entry,
+                    options={**entry.options, "source": source},
+                )
+                LOGGER.info(
+                    "Updated utility meter %s source from %s to %s",
+                    name,
+                    current_source or "an unset entity",
+                    source,
+                )
             LOGGER.debug("Utility meter config entry for '%s' already exists", name)
             return True
 

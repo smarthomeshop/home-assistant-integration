@@ -12,8 +12,30 @@ interface EnergyPreferences {
 
 interface SyncTarget {
   sources: EnergySource[];
-  items: Array<{ label: string; entity?: string; optional?: boolean }>;
+  items: SyncItem[];
   missing: string[];
+}
+
+interface SyncItem {
+  label: string;
+  entity?: string;
+  optional?: boolean;
+  issue?: string;
+}
+
+interface PriceEntities {
+  electricity_price?: string | null;
+  feed_in_price?: string | null;
+  gas_price?: string | null;
+  water_price?: string | null;
+}
+
+type CompatibilityKind = 'energy' | 'gas' | 'water' | 'power' | 'price';
+
+interface EntityCompatibility {
+  compatible: boolean;
+  ready: boolean;
+  issue?: string;
 }
 
 const EMPTY_PREFS: EnergyPreferences = {
@@ -36,6 +58,8 @@ export class HaEnergySync extends LitElement {
   @state() private _reviewConflicts = false;
   @state() private _message = '';
   @state() private _error = '';
+  @state() private _priceEntities: PriceEntities = {};
+  @state() private _lastImportedMappings: Array<{ label: string; entity: string }> = [];
 
   static styles = css`
     :host { display: block; --sync-blue: var(--shs-blue, var(--shs-primary, #4361ee)); }
@@ -96,6 +120,13 @@ export class HaEnergySync extends LitElement {
     .row-entity { max-width: 55%; overflow: hidden; color: var(--secondary-text-color); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
     .row-state { display: inline-flex; align-items: center; gap: 4px; color: #16864b; font-size: 11.5px; }
     .row-state ha-icon { --mdc-icon-size: 14px; color: currentColor; }
+    .row-state.warn { color: #a65a00; }
+    .row-state.muted { color: var(--secondary-text-color); }
+    .imported-map { margin-top: 14px; padding: 12px; border-radius: 9px; background: color-mix(in srgb, #22c55e 8%, var(--card-background-color)); }
+    .imported-title { color: #16864b; font-size: 12px; font-weight: 700; }
+    .imported-item { display: flex; gap: 8px; margin-top: 7px; color: var(--secondary-text-color); font-size: 11.5px; }
+    .imported-item strong { min-width: 94px; color: var(--primary-text-color); }
+    .imported-item span { min-width: 0; overflow-wrap: anywhere; }
     .notice {
       display: flex;
       align-items: flex-start;
@@ -179,15 +210,23 @@ export class HaEnergySync extends LitElement {
     }
     this._loading = true;
     this._error = '';
-    try {
-      this._prefs = await this.hass.callWS<EnergyPreferences>({ type: 'energy/get_prefs' });
-    } catch (err: any) {
+    const [preferences, priceEntities] = await Promise.allSettled([
+      this.hass.callWS<EnergyPreferences>({ type: 'energy/get_prefs' }),
+      this.hass.callWS<{ entities: PriceEntities }>({ type: 'smarthomeshop/prices/entities' }),
+    ]);
+    if (preferences.status === 'fulfilled') {
+      this._prefs = preferences.value;
+    } else {
+      const err = preferences.reason;
       if (err?.code === 'not_found' || /no prefs/i.test(err?.message || '')) {
         this._prefs = { ...EMPTY_PREFS };
       } else {
         this._error = `Could not read HA Energy settings. ${err?.message || ''}`.trim();
       }
     }
+    this._priceEntities = priceEntities.status === 'fulfilled'
+      ? priceEntities.value.entities || {}
+      : {};
     this._loading = false;
   }
 
@@ -200,24 +239,91 @@ export class HaEnergySync extends LitElement {
     })?.entity_id;
   }
 
+  private _entityBySuffix(...suffixes: string[]): string | undefined {
+    for (const suffix of suffixes) {
+      const wanted = suffix.toLowerCase();
+      const match = (this.deviceEntities || []).find(
+        entity => entity.entity_id.toLowerCase().endsWith(wanted),
+      );
+      if (match) return match.entity_id;
+    }
+    return undefined;
+  }
+
   private _priceEntity(key: 'electricity_price' | 'electricity_feed_in_price' | 'gas_price' | 'water_price'): string | undefined {
-    const exact = `sensor.smarthomeshop_energy_prices_${key}`;
-    const usable = (entityId: string): boolean => {
-      const state = this.hass.states[entityId]?.state;
-      return !!state && state !== 'unavailable' && state !== 'unknown';
+    const resolvedKey = key === 'electricity_feed_in_price' ? 'feed_in_price' : key;
+    const resolved = this._priceEntities[resolvedKey as keyof PriceEntities];
+    const legacyAliases: Record<typeof key, string[]> = {
+      electricity_price: [
+        'sensor.smarthomeshop_energy_prices_electricity_import_price_now',
+        'sensor.smarthomeshop_energy_prices_electricity_price',
+      ],
+      electricity_feed_in_price: [
+        'sensor.smarthomeshop_energy_prices_electricity_feed_in_price',
+      ],
+      gas_price: ['sensor.smarthomeshop_energy_prices_gas_price'],
+      water_price: ['sensor.smarthomeshop_energy_prices_water_price'],
     };
-    if (usable(exact)) return exact;
-    return Object.keys(this.hass.states).find(entityId =>
-      entityId.startsWith('sensor.') && entityId.includes(`energy_prices_${key}`) && usable(entityId));
+    const candidates = [resolved || '', ...legacyAliases[key]].filter(Boolean);
+    return candidates.find(entityId => this._entityCompatibility(entityId, 'price').compatible);
+  }
+
+  private _entityCompatibility(entityId: string | undefined, kind: CompatibilityKind): EntityCompatibility {
+    if (!entityId) return { compatible: false, ready: false, issue: 'Not available' };
+    const state = this.hass.states[entityId];
+    if (!state) return { compatible: false, ready: false, issue: 'Entity is not loaded' };
+
+    const attributes = state.attributes || {};
+    const stateClass = String(attributes.state_class || '').toLowerCase();
+    const deviceClass = String(attributes.device_class || '').toLowerCase();
+    const unit = String(attributes.unit_of_measurement || '');
+    const available = state.state !== 'unknown' && state.state !== 'unavailable' && state.state !== '';
+    const numeric = available && Number.isFinite(Number(state.state));
+
+    if (kind === 'price') {
+      if (!numeric) return { compatible: false, ready: false, issue: 'Price is not numeric' };
+      return { compatible: true, ready: true };
+    }
+    if (kind === 'power') {
+      const compatible = deviceClass === 'power' && /^(m?w|kw)$/i.test(unit);
+      if (!compatible) return { compatible: false, ready: false, issue: 'Not a compatible power sensor' };
+      return { compatible: true, ready: available, issue: available ? undefined : 'Unavailable now' };
+    }
+
+    const cumulative = stateClass === 'total' || stateClass === 'total_increasing';
+    const classMatches = kind === 'energy'
+      ? deviceClass === 'energy'
+      : deviceClass === kind || (kind === 'water' && deviceClass === 'volume');
+    if (!cumulative || !classMatches) {
+      return { compatible: false, ready: false, issue: `Missing ${kind} total metadata` };
+    }
+    return { compatible: true, ready: available, issue: available ? undefined : 'Unavailable now' };
   }
 
   private _target(): SyncTarget {
-    const imported = this._entity('grid_import_energy_cc', 'grid import energy (cc)');
-    const exported = this._entity('grid_export_energy_cc', 'grid export energy (cc)');
-    const importPower = this._entity('grid_import_power_cc', 'grid import power (cc)', '_power_consumed');
-    const exportPower = this._entity('grid_export_power_cc', 'grid export power (cc)', '_power_produced');
-    const gas = this._entity('_gas_consumed');
-    const water = this._entity('_water_total_consumption');
+    const importedCandidate = this._entityBySuffix('_grid_import_energy_cc', '_grid_import_energy');
+    const exportedCandidate = this._entityBySuffix('_grid_export_energy_cc', '_grid_export_energy');
+    const importPowerCandidate = this._entityBySuffix('_grid_import_power_cc', '_grid_import_power', '_power_consumed');
+    const exportPowerCandidate = this._entityBySuffix('_grid_export_power_cc', '_grid_export_power', '_power_produced');
+    const gasCandidate = this._entityBySuffix(
+      '_gas_consumption_cc',
+      '_gas_consumption',
+      '_gas_consumed',
+      '_gas_consumed_belgium',
+    );
+    const waterCandidate = this._entityBySuffix('_water_meter_total', '_water_total_consumption');
+    const importedCheck = this._entityCompatibility(importedCandidate, 'energy');
+    const exportedCheck = this._entityCompatibility(exportedCandidate, 'energy');
+    const importPowerCheck = this._entityCompatibility(importPowerCandidate, 'power');
+    const exportPowerCheck = this._entityCompatibility(exportPowerCandidate, 'power');
+    const gasCheck = this._entityCompatibility(gasCandidate, 'gas');
+    const waterCheck = this._entityCompatibility(waterCandidate, 'water');
+    const imported = importedCheck.compatible ? importedCandidate : undefined;
+    const exported = exportedCheck.compatible ? exportedCandidate : undefined;
+    const importPower = importPowerCheck.compatible ? importPowerCandidate : undefined;
+    const exportPower = exportPowerCheck.compatible ? exportPowerCandidate : undefined;
+    const gas = gasCheck.compatible ? gasCandidate : undefined;
+    const water = waterCheck.compatible ? waterCandidate : undefined;
     const importPrice = this._priceEntity('electricity_price');
     const exportPrice = this._priceEntity('electricity_feed_in_price');
     const gasPrice = this._priceEntity('gas_price');
@@ -270,21 +376,32 @@ export class HaEnergySync extends LitElement {
       });
     }
 
-    const items = [
-      { label: 'Electricity imported', entity: imported },
-      { label: 'Electricity returned', entity: exported, optional: true },
-      { label: 'Live grid power', entity: importPower && exportPower ? `${importPower} + ${exportPower}` : undefined, optional: true },
-      { label: 'Contract import price', entity: importPrice, optional: true },
-      { label: 'Contract feed-in price', entity: exportPrice, optional: true },
-      { label: 'Gas', entity: gas, optional: true },
-      { label: 'Water', entity: water, optional: true },
+    const items: SyncItem[] = [
+      { label: 'Electricity imported', entity: importedCandidate, issue: importedCheck.issue },
+      { label: 'Electricity returned', entity: exportedCandidate, issue: exportedCheck.issue, optional: true },
+      {
+        label: 'Live grid power',
+        entity: importPowerCandidate && exportPowerCandidate ? `${importPowerCandidate} + ${exportPowerCandidate}` : undefined,
+        issue: !importPowerCheck.compatible ? importPowerCheck.issue : !exportPowerCheck.compatible ? exportPowerCheck.issue : undefined,
+        optional: true,
+      },
+      { label: 'Contract import price', entity: importPrice, issue: this._entityCompatibility(importPrice, 'price').issue, optional: true },
+      { label: 'Contract feed-in price', entity: exportPrice, issue: this._entityCompatibility(exportPrice, 'price').issue, optional: true },
+      { label: 'Gas total', entity: gasCandidate, issue: gasCheck.issue, optional: true },
+      { label: 'Contract gas price', entity: gasPrice, issue: this._entityCompatibility(gasPrice, 'price').issue, optional: true },
+      { label: 'Water total', entity: waterCandidate, issue: waterCheck.issue, optional: true },
+      { label: 'Contract water price', entity: waterPrice, issue: this._entityCompatibility(waterPrice, 'price').issue, optional: true },
     ];
-    const missing = imported ? [] : ['Combined grid import energy sensor'];
+    const missing = imported ? [] : [importedCheck.issue || 'Combined grid import energy sensor'];
     return { sources, items, missing };
   }
 
   private _hasSmartHomeShopSetup(): boolean {
     return this.deviceEntities.some(entity => entity.platform === 'smarthomeshop');
+  }
+
+  private _hasCombinedImportSensor(): boolean {
+    return !!this._entityBySuffix('_grid_import_energy_cc', '_grid_import_energy');
   }
 
   private async _linkDevice(): Promise<void> {
@@ -402,40 +519,87 @@ export class HaEnergySync extends LitElement {
       });
       const config: Record<string, any> = {
         ...(current.sources || {}),
-        p1_device: this.deviceId,
       };
       const solar = this._prefs.energy_sources.find(source => source.type === 'solar');
       const battery = this._prefs.energy_sources.find(source => source.type === 'battery');
-      if (solar?.stat_rate && this.hass.states[solar.stat_rate]) {
+      const imported: Array<{ label: string; entity: string }> = [];
+      const haP1 = this._p1DeviceFromHaEnergy();
+      if (haP1) {
+        config.p1_device = haP1.deviceId;
+        imported.push({ label: 'P1 meter', entity: haP1.entity });
+      } else if (!config.p1_device) {
+        config.p1_device = this.deviceId;
+      }
+      if (solar?.stat_rate && this._entityCompatibility(solar.stat_rate, 'power').compatible) {
         config.solar_power = solar.stat_rate;
         config.solar_invert = false;
+        imported.push({ label: 'Solar power', entity: solar.stat_rate });
       }
-      if (battery?.stat_rate && this.hass.states[battery.stat_rate]) {
+      if (battery?.stat_rate && this._entityCompatibility(battery.stat_rate, 'power').compatible) {
         config.battery_power = battery.stat_rate;
         config.battery_invert = false;
+        imported.push({ label: 'Battery power', entity: battery.stat_rate });
       }
       if (battery?.stat_soc && this.hass.states[battery.stat_soc]) {
         config.battery_soc = battery.stat_soc;
+        imported.push({ label: 'Battery state of charge', entity: battery.stat_soc });
       }
       await this.hass.callWS({
         type: 'smarthomeshop/energy_sources/set',
         config,
       });
-      this._message = solar || battery
-        ? 'Compatible P1, solar and battery mappings were imported from HA Energy. Your SmartHomeShop contract remains the price source.'
-        : 'This P1 meter is now selected for Smart Energy. HA Energy has no compatible solar or battery power mappings to import.';
-      this.dispatchEvent(new CustomEvent('ha-energy-synced', { bubbles: true, composed: true }));
+      this._lastImportedMappings = imported;
+      this._message = imported.length
+        ? `${imported.length} compatible ${imported.length === 1 ? 'mapping was' : 'mappings were'} imported into Smart Energy. Contract prices continue to come from SmartHomeShop.`
+        : 'HA Energy does not expose compatible P1, live solar or battery mappings to import. Nothing was changed.';
+      this.dispatchEvent(new CustomEvent('ha-energy-synced', {
+        detail: { importedMappings: imported, p1Device: haP1?.deviceId },
+        bubbles: true,
+        composed: true,
+      }));
     } catch (err: any) {
       this._error = `Could not import HA Energy settings. ${err?.message || ''}`.trim();
     }
     this._busy = false;
   }
 
+  private _p1DeviceFromHaEnergy(): { deviceId: string; entity: string } | undefined {
+    const references: string[] = [];
+    for (const source of this._prefs.energy_sources || []) {
+      if (!['grid', 'gas', 'water'].includes(source.type)) continue;
+      for (const key of ['stat_energy_from', 'stat_energy_to']) {
+        if (typeof source[key] === 'string') references.push(source[key]);
+      }
+      for (const key of ['stat_rate_from', 'stat_rate_to']) {
+        if (typeof source.power_config?.[key] === 'string') references.push(source.power_config[key]);
+      }
+    }
+
+    const registryEntities = Object.values(this.hass.entities || {});
+    for (const entityId of references) {
+      const deviceId = this.hass.entities?.[entityId]?.device_id;
+      if (!deviceId) continue;
+      const linkedP1 = registryEntities.some(entity =>
+        entity.device_id === deviceId
+        && entity.platform === 'smarthomeshop'
+        && /_grid_import_energy(?:_cc)?$/.test(entity.entity_id));
+      if (linkedP1) return { deviceId, entity: entityId };
+    }
+
+    const selectedIds = new Set((this.deviceEntities || []).map(entity => entity.entity_id));
+    const selectedReference = references.find(entityId => selectedIds.has(entityId));
+    return selectedReference ? { deviceId: this.deviceId, entity: selectedReference } : undefined;
+  }
+
   private _status(target = this._target()): { label: string; kind: string; icon: string } {
     if (target.missing.length && !this._hasSmartHomeShopSetup()) {
       return { label: 'SmartHomeShop setup required', kind: 'warn', icon: 'mdi:link-variant-plus' };
     }
-    if (target.missing.length) return { label: 'Restart required', kind: 'warn', icon: 'mdi:restart-alert' };
+    if (target.missing.length) {
+      return this._hasCombinedImportSensor()
+        ? { label: 'Needs attention', kind: 'warn', icon: 'mdi:alert-circle-outline' }
+        : { label: 'Restart required', kind: 'warn', icon: 'mdi:restart-alert' };
+    }
     if (this._isInSync(target)) return { label: 'In sync', kind: 'good', icon: 'mdi:check-circle' };
     if (!this._prefs.energy_sources.length) return { label: 'Not configured', kind: '', icon: 'mdi:circle-outline' };
     if (this._conflicts(target).length) return { label: 'Review required', kind: 'warn', icon: 'mdi:alert-circle-outline' };
@@ -452,6 +616,7 @@ export class HaEnergySync extends LitElement {
     const conflicts = this._conflicts(target);
     const admin = !!this.hass.user?.is_admin;
     const setupRequired = !!target.missing.length && !this._hasSmartHomeShopSetup();
+    const restartRequired = !!target.missing.length && this._hasSmartHomeShopSetup() && !this._hasCombinedImportSensor();
 
     if (this.compact) {
       return html`
@@ -463,7 +628,7 @@ export class HaEnergySync extends LitElement {
                 <div class="title">Home Assistant Energy Dashboard</div>
                 <span class="status ${status.kind}"><ha-icon icon=${status.icon}></ha-icon>${status.label}</span>
               </div>
-              <div class="sub">Use this P1 meter for grid import, return, live power${this._entity('_gas_consumed') ? ', gas' : ''}${this._entity('_water_total_consumption') ? ' and water' : ''}.</div>
+              <div class="sub">Use this P1 meter for grid import, return, live power${this._entityBySuffix('_gas_consumption_cc', '_gas_consumed', '_gas_consumed_belgium') ? ', gas' : ''}${this._entityBySuffix('_water_meter_total', '_water_total_consumption') ? ' and water' : ''}.</div>
             </div>
           </div>
           <div class="body">
@@ -535,12 +700,16 @@ export class HaEnergySync extends LitElement {
             </div>
           </div>
           <div class="rows">
-            ${target.items.filter(item => item.entity || !item.optional).map(item => html`
+            ${target.items.map(item => html`
               <div class="row">
-                <ha-icon icon=${item.entity ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon>
+                <ha-icon icon=${item.entity && !item.issue ? 'mdi:check-circle-outline' : item.entity ? 'mdi:alert-outline' : 'mdi:minus-circle-outline'}></ha-icon>
                 <span class="row-label">${item.label}</span>
                 <span class="row-entity" title=${item.entity || ''}>${item.entity || 'Not available'}</span>
-                ${item.entity ? html`<span class="row-state"><ha-icon icon="mdi:check"></ha-icon>Ready</span>` : nothing}
+                ${item.entity && !item.issue
+                  ? html`<span class="row-state"><ha-icon icon="mdi:check"></ha-icon>Ready</span>`
+                  : item.entity
+                    ? html`<span class="row-state warn"><ha-icon icon="mdi:alert-outline"></ha-icon>${item.issue || 'Needs attention'}</span>`
+                    : html`<span class="row-state muted">Optional</span>`}
               </div>
             `)}
           </div>
@@ -555,7 +724,17 @@ export class HaEnergySync extends LitElement {
               <ha-icon icon=${setupRequired ? 'mdi:link-variant-plus' : 'mdi:restart-alert'}></ha-icon>
               ${setupRequired
                 ? 'This P1 meter is available through ESPHome, but its SmartHomeShop setup is missing. Complete setup to create the cumulative import and export sensors.'
-                : 'Restart Home Assistant once to load the newly added cumulative import and export sensors needed by the Energy Dashboard.'}
+                : restartRequired
+                  ? 'Restart Home Assistant once to load the newly added cumulative import, export and normalised gas sensors needed by the Energy Dashboard.'
+                  : `The selected import sensor is not compatible with HA Energy: ${target.missing.join(', ')}.`}
+            </div>
+          ` : nothing}
+          ${this._lastImportedMappings.length ? html`
+            <div class="imported-map">
+              <div class="imported-title">Imported into Smart Energy</div>
+              ${this._lastImportedMappings.map(mapping => html`
+                <div class="imported-item"><strong>${mapping.label}</strong><span>${mapping.entity}</span></div>
+              `)}
             </div>
           ` : nothing}
           ${this._message ? html`<div class="notice success"><ha-icon icon="mdi:check-circle"></ha-icon>${this._message}</div>` : nothing}
@@ -577,7 +756,7 @@ export class HaEnergySync extends LitElement {
             <button ?disabled=${!admin || this._busy || !this._prefs.energy_sources.length}
               @click=${this._syncFromHa}>
               <ha-icon icon="mdi:arrow-left"></ha-icon>
-              Import compatible setup from HA
+              Import Smart Energy sources from HA
             </button>
             ${this._reviewConflicts ? html`
               <button @click=${() => { this._reviewConflicts = false; }}>Cancel review</button>

@@ -1101,6 +1101,7 @@ def ws_get_price_entities(hass: HomeAssistant, connection, msg: dict) -> None:
         "electricity_price": eid("sensor", "electricity_price"),
         "price_level": eid("sensor", "electricity_price_level"),
         "feed_in_price": eid("sensor", "electricity_feed_in_price"),
+        "gas_price": eid("sensor", "gas_price"),
         "water_price": eid("sensor", "water_price"),
         "contract_name": eid("sensor", "contract_name"),
         "energy_provider": eid("sensor", "energy_provider"),
