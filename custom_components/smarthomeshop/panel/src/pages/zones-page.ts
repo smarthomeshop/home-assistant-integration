@@ -270,6 +270,13 @@ export class ZonesPage extends LitElement {
   @state() private _newRoomName = '';
   @state() private _newRoomWidth = 0;
   @state() private _newRoomLength = 0;
+  @state() private _showRenameRoomDialog = false;
+  @state() private _renameRoomId: string | null = null;
+  @state() private _renameRoomName = '';
+  @state() private _showDeleteRoomDialog = false;
+  @state() private _deleteRoomId: string | null = null;
+  @state() private _roomActionBusy = false;
+  @state() private _roomActionError = '';
 
   // Trail history per sensor per target, in sensor-local coordinates
   private _targetTrails: Record<string, Array<Array<{ x: number; y: number }>>> = {};
@@ -303,12 +310,19 @@ export class ZonesPage extends LitElement {
     .sidebar { background: var(--rd-panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
     .section-title { font-size: 11px; font-weight: 600; color: var(--rd-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
     .room-list { display: flex; flex-direction: column; gap: 6px; }
-    .room-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
+    .room-item { display: flex; align-items: center; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; transition: all 0.15s; }
     .room-item:hover { border-color: var(--rd-line-strong); }
     .room-item.selected { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
+    .room-select { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 10px 8px 10px 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .room-select:focus-visible { outline: 2px solid #4361ee; outline-offset: -2px; }
     .room-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--rd-line); border-radius: 6px; }
     .room-icon ha-icon { --mdc-icon-size: 18px; color: var(--rd-dim2); }
-    .room-name { flex: 1; font-size: 13px; color: var(--rd-text); font-weight: 500; }
+    .room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--rd-text); font-weight: 500; }
+    .room-actions { display: flex; align-items: center; gap: 2px; padding-right: 6px; }
+    .room-action { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--rd-dim2); cursor: pointer; }
+    .room-action:hover, .room-action:focus-visible { color: #4361ee; background: color-mix(in srgb, #4361ee 12%, transparent); outline: none; }
+    .room-action.delete:hover, .room-action.delete:focus-visible { color: #ef4444; background: color-mix(in srgb, #ef4444 12%, transparent); }
+    .room-action ha-icon { --mdc-icon-size: 17px; }
     .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
     .tool-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
     .tool-btn:hover { border-color: var(--rd-line-strong); background: var(--rd-panel); }
@@ -461,6 +475,11 @@ export class ZonesPage extends LitElement {
     .dialog-btn { padding: 10px 18px; border-radius: 8px; font-size: 13px; cursor: pointer; border: none; }
     .dialog-btn.cancel { background: transparent; border: 1px solid var(--rd-line-strong); color: var(--rd-dim2); }
     .dialog-btn.primary { background: #4361ee; color: white; }
+    .dialog-btn.danger { background: #dc2626; color: white; }
+    .dialog-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .dialog-warning { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0; padding: 11px 12px; border: 1px solid color-mix(in srgb, #ef4444 35%, var(--rd-line)); border-radius: 9px; background: color-mix(in srgb, #ef4444 8%, var(--rd-panel)); color: var(--rd-dim2); font-size: 12px; line-height: 1.45; }
+    .dialog-warning ha-icon { --mdc-icon-size: 19px; flex: 0 0 auto; color: #ef4444; }
+    .dialog-error { margin-top: 10px; color: #ef4444; font-size: 12px; }
     .remove-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 8px; margin-top: 4px; background: transparent; border: 1px solid var(--rd-line); border-radius: 6px; color: #ef4444; font-size: 12px; cursor: pointer; }
     .remove-sensor-btn:hover { border-color: #ef4444; }
     .remove-sensor-btn ha-icon { --mdc-icon-size: 16px; }
@@ -1016,6 +1035,82 @@ export class ZonesPage extends LitElement {
     }
   }
 
+  private _openRenameRoom(roomId: string): void {
+    const room = this.rooms.find(item => item.id === roomId);
+    if (!room) return;
+    this._roomActionError = '';
+    this._renameRoomId = roomId;
+    this._renameRoomName = room.name;
+    this._showRenameRoomDialog = true;
+  }
+
+  private async _renameRoom(): Promise<void> {
+    const name = this._renameRoomName.trim();
+    const room = this.rooms.find(item => item.id === this._renameRoomId);
+    if (!room || !name || this._roomActionBusy) return;
+
+    this._roomActionBusy = true;
+    this._roomActionError = '';
+    try {
+      const updatedRoom = { ...room, name };
+      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
+      this.rooms = this.rooms.map(item => item.id === room.id ? updatedRoom : item);
+      this._showRenameRoomDialog = false;
+      this._renameRoomId = null;
+    } catch (error: any) {
+      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
+      this._roomActionError = `Could not rename the room.${detail}`;
+    } finally {
+      this._roomActionBusy = false;
+    }
+  }
+
+  private _openDeleteRoom(roomId: string): void {
+    if (!this.rooms.some(item => item.id === roomId)) return;
+    this._roomActionError = '';
+    this._deleteRoomId = roomId;
+    this._showDeleteRoomDialog = true;
+  }
+
+  private _clearSelectedRoom(): void {
+    this._selectedRoomId = null;
+    this._roomPoints = [];
+    this._furniture = [];
+    this._doors = [];
+    this._windows = [];
+    this._sensors = [];
+    this._zones = [];
+    this._selectedSensorIndex = null;
+    this._selectedZoneIndex = null;
+    this._targetTrails = {};
+    this._liveTargets = {};
+    this._dirty = false;
+  }
+
+  private async _deleteRoom(): Promise<void> {
+    const roomId = this._deleteRoomId;
+    if (!roomId || this._roomActionBusy) return;
+
+    this._roomActionBusy = true;
+    this._roomActionError = '';
+    try {
+      await this.hass.callWS({ type: 'smarthomeshop/room/delete', room_id: roomId });
+      const deletedSelectedRoom = this._selectedRoomId === roomId;
+      this.rooms = this.rooms.filter(item => item.id !== roomId);
+      if (deletedSelectedRoom) {
+        this._clearSelectedRoom();
+        if (this.rooms.length > 0) this._selectRoom(this.rooms[0].id);
+      }
+      this._showDeleteRoomDialog = false;
+      this._deleteRoomId = null;
+    } catch (error: any) {
+      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
+      this._roomActionError = `Could not delete the room.${detail}`;
+    } finally {
+      this._roomActionBusy = false;
+    }
+  }
+
   private _handleKeyDown = (e: KeyboardEvent) => {
     const target = e.composedPath()[0] as HTMLElement | undefined;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return;
@@ -1025,6 +1120,8 @@ export class ZonesPage extends LitElement {
       if (this._showWindowDialog) { this._hideWindowDialog(); return; }
       if (this._showFurnitureDialog) { this._showFurnitureDialog = false; return; }
       if (this._showNewRoomDialog) { this._showNewRoomDialog = false; return; }
+      if (this._showRenameRoomDialog) { this._showRenameRoomDialog = false; return; }
+      if (this._showDeleteRoomDialog) { this._showDeleteRoomDialog = false; return; }
       if (this._drawingZone.length > 0) { this._drawingZone = []; return; }
       if (this._pendingStart) { this._pendingStart = null; this._previewPoint = null; return; }
       this._selectedZoneIndex = null;
@@ -4487,9 +4584,22 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               ${this.rooms.length === 0 ? html`
                 <p class="info-text">No rooms yet. Create your first room with "Add Room" below.</p>
               ` : this.rooms.map(room => html`
-                <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}" @click="${() => this._selectRoom(room.id)}">
-                  <div class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></div>
-                  <span class="room-name">${room.name}</span>
+                <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}">
+                  <button class="room-select" @click=${() => this._selectRoom(room.id)}
+                    aria-label="Open ${room.name}" aria-current=${room.id === this._selectedRoomId ? 'true' : 'false'}>
+                    <span class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></span>
+                    <span class="room-name">${room.name}</span>
+                  </button>
+                  <div class="room-actions" aria-label="Room actions">
+                    <button class="room-action" @click=${() => this._openRenameRoom(room.id)}
+                      title="Rename room" aria-label="Rename ${room.name}">
+                      <ha-icon icon="mdi:pencil-outline"></ha-icon>
+                    </button>
+                    <button class="room-action delete" @click=${() => this._openDeleteRoom(room.id)}
+                      title="Delete room" aria-label="Delete ${room.name}">
+                      <ha-icon icon="mdi:trash-can-outline"></ha-icon>
+                    </button>
+                  </div>
                 </div>
               `)}
               <button class="add-room-btn" @click="${() => { this._newRoomName = ''; this._newRoomWidth = 0; this._newRoomLength = 0; this._showNewRoomDialog = true; }}">
@@ -5226,6 +5336,51 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           </div>
         </div>
       ` : ''}
+
+      ${this._showRenameRoomDialog ? html`
+        <div class="dialog-overlay" @click=${() => !this._roomActionBusy && (this._showRenameRoomDialog = false)}>
+          <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="rename-room-title"
+            @click=${(event: Event) => event.stopPropagation()}>
+            <h3 id="rename-room-title">Rename room</h3>
+            <label>Room name</label>
+            <input type="text" maxlength="120" .value=${this._renameRoomName}
+              @input=${(event: Event) => this._renameRoomName = (event.target as HTMLInputElement).value}
+              @keydown=${(event: KeyboardEvent) => event.key === 'Enter' && this._renameRoom()}
+              autofocus />
+            <p class="help-text">Only the name changes. Your layout, sensors and zones stay in place.</p>
+            ${this._roomActionError ? html`<div class="dialog-error" role="alert">${this._roomActionError}</div>` : nothing}
+            <div class="dialog-buttons">
+              <button class="dialog-btn cancel" ?disabled=${this._roomActionBusy}
+                @click=${() => this._showRenameRoomDialog = false}>Cancel</button>
+              <button class="dialog-btn primary" ?disabled=${this._roomActionBusy || !this._renameRoomName.trim()}
+                @click=${this._renameRoom}>${this._roomActionBusy ? 'Saving...' : 'Save name'}</button>
+            </div>
+          </div>
+        </div>
+      ` : nothing}
+
+      ${this._showDeleteRoomDialog ? (() => {
+        const room = this.rooms.find(item => item.id === this._deleteRoomId);
+        return html`
+          <div class="dialog-overlay" @click=${() => !this._roomActionBusy && (this._showDeleteRoomDialog = false)}>
+            <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-room-title"
+              @click=${(event: Event) => event.stopPropagation()}>
+              <h3 id="delete-room-title">Delete ${room?.name || 'room'}?</h3>
+              <div class="dialog-warning">
+                <ha-icon icon="mdi:alert-outline"></ha-icon>
+                <div>The room layout, furniture, sensor positions and zones will be permanently removed. Your Home Assistant devices and entities are not deleted.</div>
+              </div>
+              ${this._roomActionError ? html`<div class="dialog-error" role="alert">${this._roomActionError}</div>` : nothing}
+              <div class="dialog-buttons">
+                <button class="dialog-btn cancel" ?disabled=${this._roomActionBusy}
+                  @click=${() => this._showDeleteRoomDialog = false}>Cancel</button>
+                <button class="dialog-btn danger" ?disabled=${this._roomActionBusy}
+                  @click=${this._deleteRoom}>${this._roomActionBusy ? 'Deleting...' : 'Delete room'}</button>
+              </div>
+            </div>
+          </div>
+        `;
+      })() : nothing}
 
       ${this._showFurnitureDialog && this._selectedFurnitureType ? html`
         <div class="dialog-overlay" @click="${() => this._showFurnitureDialog = false}">

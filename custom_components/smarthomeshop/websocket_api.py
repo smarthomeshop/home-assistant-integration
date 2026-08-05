@@ -1335,6 +1335,8 @@ _ENERGY_SOURCES_SCHEMA = vol.Schema({
     vol.Optional("battery_capacity_kwh"): vol.Any(None, vol.Coerce(float)),
     vol.Optional("battery_capacity_entity"): vol.Any(None, str),
     vol.Optional("pv_forecast"): vol.Any(None, str),
+    vol.Optional("energy_dashboard_enabled"): bool,
+    vol.Optional("show_smart_savings"): bool,
 }, extra=vol.REMOVE_EXTRA)
 
 

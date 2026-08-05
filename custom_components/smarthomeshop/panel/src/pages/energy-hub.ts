@@ -16,6 +16,8 @@ interface Sources {
   battery_soc?: string;
   battery_capacity_kwh?: number;
   pv_forecast?: string;
+  energy_dashboard_enabled?: boolean;
+  show_smart_savings?: boolean;
 }
 
 interface P1Device {
@@ -147,6 +149,7 @@ export class EnergyHub extends LitElement {
   @state() private _settingsTab: EnergySettingsTab = 'connection';
   @state() private _savings: Record<string, any> = {};
   @state() private _includeFixedDailyCost = false;
+  @state() private _displaySaving = false;
   @state() private _wizardDone = false;
   @state() private _wizardKeyInput = '';
   @state() private _wizardBusy = false;
@@ -360,6 +363,59 @@ export class EnergyHub extends LitElement {
     .p1-select { flex: 1; min-width: 220px; font-family: inherit; font-size: 13px; color: var(--primary-text-color); background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 10px; padding: 8px 10px; }
     .p1-select:disabled { opacity: 0.6; }
     .p1-card shs-energy-automations { display: block; margin-top: 14px; }
+    .display-card {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 15px 16px;
+      border: 1px solid var(--shs-border);
+      border-radius: 12px;
+      background: var(--card-background-color);
+    }
+    .display-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 10px;
+      color: var(--shs-blue);
+      background: var(--shs-blue-soft);
+    }
+    .display-icon ha-icon { --mdc-icon-size: 20px; }
+    .display-copy { flex: 1; min-width: 0; }
+    .display-title { color: var(--primary-text-color); font-size: 13px; font-weight: 700; }
+    .display-sub { margin-top: 3px; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; }
+    .display-card ha-switch { flex: 0 0 auto; }
+    .dashboard-disabled {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 104px;
+      padding: 20px;
+      border: 1px solid var(--shs-border);
+      border-radius: 14px;
+      background: var(--card-background-color);
+    }
+    .dashboard-disabled-icon {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      border-radius: 11px;
+      color: var(--shs-blue);
+      background: var(--shs-blue-soft);
+    }
+    .dashboard-disabled-icon ha-icon { --mdc-icon-size: 23px; }
+    .dashboard-disabled-copy { flex: 1; min-width: 0; }
+    .dashboard-disabled-title { font-size: 14px; font-weight: 720; }
+    .dashboard-disabled-text {
+      margin-top: 4px;
+      color: var(--secondary-text-color);
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
     .cta-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: none; border-radius: 9px; background: var(--shs-blue, var(--shs-primary, #4361ee)); color: #fff; font-size: 12.5px; font-weight: 600; font-family: inherit; cursor: pointer; white-space: nowrap; }
     .cta-btn.ghost { background: transparent; border: 1px solid var(--divider-color); color: var(--primary-text-color); }
     .cta-btn ha-icon { --mdc-icon-size: 15px; }
@@ -872,6 +928,8 @@ export class EnergyHub extends LitElement {
       .settings-tabs-shell { margin-inline: -4px; }
       .settings-tab { min-width: 118px; }
       .settings-page-head { margin-bottom: 16px; }
+      .dashboard-disabled { align-items: flex-start; flex-wrap: wrap; }
+      .dashboard-disabled .cta-btn { width: 100%; justify-content: center; }
     }
   `;
 
@@ -1666,6 +1724,44 @@ export class EnergyHub extends LitElement {
         include ? '1' : '0',
       );
     } catch { /* The live preference still works without browser storage. */ }
+  }
+
+  private async _setShowSmartSavings(show: boolean): Promise<void> {
+    if (this._displaySaving || !this.hass.user?.is_admin) return;
+    const previous = this._sources.show_smart_savings !== false;
+    this._sources = { ...this._sources, show_smart_savings: show };
+    this._displaySaving = true;
+    try {
+      const response = await this._callWS<{ sources: Sources }>({
+        type: 'smarthomeshop/energy_sources/set',
+        config: { show_smart_savings: show },
+      }, EnergyHub.INITIAL_LOAD_TIMEOUT);
+      this._sources = response.sources || this._sources;
+    } catch (error) {
+      this._sources = { ...this._sources, show_smart_savings: previous };
+      console.error('Could not save the Smart Savings visibility preference', error);
+    } finally {
+      this._displaySaving = false;
+    }
+  }
+
+  private async _setEnergyDashboardEnabled(enabled: boolean): Promise<void> {
+    if (this._displaySaving || !this.hass.user?.is_admin) return;
+    const previous = this._sources.energy_dashboard_enabled !== false;
+    this._sources = { ...this._sources, energy_dashboard_enabled: enabled };
+    this._displaySaving = true;
+    try {
+      const response = await this._callWS<{ sources: Sources }>({
+        type: 'smarthomeshop/energy_sources/set',
+        config: { energy_dashboard_enabled: enabled },
+      }, EnergyHub.INITIAL_LOAD_TIMEOUT);
+      this._sources = response.sources || this._sources;
+    } catch (error) {
+      this._sources = { ...this._sources, energy_dashboard_enabled: previous };
+      console.error('Could not save the Energy dashboard visibility preference', error);
+    } finally {
+      this._displaySaving = false;
+    }
   }
 
   private _renderDailyElectricityCost(priceOk: boolean) {
@@ -2725,6 +2821,44 @@ export class EnergyHub extends LitElement {
     `;
   }
 
+  private _renderPageHeader(priceOk: boolean, contractName?: string) {
+    return html`
+      <header class="page-head">
+        <div>
+          <div class="eyebrow">Smart Energy</div>
+          <h1>Energy</h1>
+          <div class="subtitle">Live flow, price planning, and automated control in one overview.</div>
+        </div>
+        <div class="head-actions">
+          ${priceOk ? html`<div class="connection"><span class="connection-dot"></span>${contractName || 'Energy prices connected'}</div>` : nothing}
+          ${this.hass.user?.is_admin ? html`
+            <button class="settings-btn" @click=${() => this._openSettings(priceOk ? '' : 'account')}>
+              <ha-icon icon="mdi:cog-outline"></ha-icon>Settings
+            </button>` : nothing}
+        </div>
+      </header>
+    `;
+  }
+
+  private _renderDashboardDisabled() {
+    return html`
+      <div class="dashboard-disabled" role="status">
+        <div class="dashboard-disabled-icon"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon></div>
+        <div class="dashboard-disabled-copy">
+          <div class="dashboard-disabled-title">Energy dashboard is currently disabled</div>
+          <div class="dashboard-disabled-text">Enable it again to show live energy, prices, costs, trends and smart control.</div>
+        </div>
+        ${this.hass.user?.is_admin ? html`
+          <button class="cta-btn" @click=${() => this._setEnergyDashboardEnabled(true)}>
+            Enable Energy dashboard
+          </button>
+        ` : html`
+          <div class="dashboard-disabled-text">Ask a Home Assistant administrator to enable it.</div>
+        `}
+      </div>
+    `;
+  }
+
   protected render() {
     if (!this._loaded) {
       return html`<div class="loading"><div><div class="loading-ring"></div>Loading energy data</div></div>`;
@@ -2732,6 +2866,14 @@ export class EnergyHub extends LitElement {
 
     if (this._settingsOpen) {
       return this._renderSettingsPage();
+    }
+
+    const priceOk = this._account?.status === 'ok';
+    const contractName = this._account?.contract?.name;
+    const pageHeader = this._renderPageHeader(priceOk, contractName);
+
+    if (this._sources.energy_dashboard_enabled === false) {
+      return html`${pageHeader}${this._renderDashboardDisabled()}`;
     }
 
     const grid = this._gridPower();
@@ -2748,29 +2890,14 @@ export class EnergyHub extends LitElement {
     const house = grid !== null && !contributorDead
       ? Math.max(0, grid + (solar ?? 0) + (battery ?? 0))
       : null;
-    const priceOk = this._account?.status === 'ok';
     const hasKey = !!this._account?.has_key;
     const activeSchedules = this._schedules.filter(schedule =>
       schedule.entity_id ? this.hass.states[schedule.entity_id]?.state === 'on' : schedule.active,
     ).length;
     const batteryOn = !!this._battery?.enabled;
-    const contractName = this._account?.contract?.name;
 
     return html`
-      <header class="page-head">
-        <div>
-          <div class="eyebrow">Smart Energy</div>
-          <h1>Energy</h1>
-          <div class="subtitle">Live flow, price planning, and automated control in one overview.</div>
-        </div>
-        <div class="head-actions">
-          ${priceOk ? html`<div class="connection"><span class="connection-dot"></span>${contractName || 'Energy prices connected'}</div>` : nothing}
-          ${this.hass.user?.is_admin ? html`
-            <button class="settings-btn" @click=${() => this._openSettings(priceOk ? '' : 'account')}>
-              <ha-icon icon="mdi:cog-outline"></ha-icon>Settings
-            </button>` : nothing}
-        </div>
-      </header>
+      ${pageHeader}
 
       ${this._wizardVisible(hasKey) ? this._renderOnboarding(hasKey, priceOk) : nothing}
 
@@ -2798,7 +2925,7 @@ export class EnergyHub extends LitElement {
       ${this._renderLive(house, grid, solar, battery, soc, contributorDead)}
       ${this._renderPriceSection(priceOk)}
       ${this._renderDailyElectricityCost(priceOk)}
-      ${this._renderSavings(priceOk)}
+      ${this._sources.show_smart_savings !== false ? this._renderSavings(priceOk) : nothing}
       ${this._renderPowerSection(grid)}
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
       ${this._renderCompareNudge(priceOk)}
@@ -3124,6 +3251,36 @@ export class EnergyHub extends LitElement {
               `}
             </div>
           ` : nothing}
+          <div class="display-card">
+            <div class="display-icon"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon></div>
+            <div class="display-copy">
+              <div class="display-title">Enable Energy dashboard</div>
+              <div class="display-sub">Show live energy, prices, costs, trends and smart control in the Energy tab.</div>
+            </div>
+            <ha-switch
+              .checked=${this._sources.energy_dashboard_enabled !== false}
+              ?disabled=${this._displaySaving || !this.hass.user?.is_admin}
+              aria-label="Enable the Energy dashboard"
+              @change=${(event: Event) => this._setEnergyDashboardEnabled(
+                (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+              )}
+            ></ha-switch>
+          </div>
+          <div class="display-card">
+            <div class="display-icon"><ha-icon icon="mdi:view-dashboard-outline"></ha-icon></div>
+            <div class="display-copy">
+              <div class="display-title">Show Smart Savings</div>
+              <div class="display-sub">Show or hide the complete Smart Savings section on the Energy overview.</div>
+            </div>
+            <ha-switch
+              .checked=${this._sources.show_smart_savings !== false}
+              ?disabled=${this._displaySaving || !this.hass.user?.is_admin}
+              aria-label="Show Smart Savings on the Energy overview"
+              @change=${(event: Event) => this._setShowSmartSavings(
+                (event.currentTarget as HTMLElement & { checked: boolean }).checked,
+              )}
+            ></ha-switch>
+          </div>
         </div>
       `;
     }

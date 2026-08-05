@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-panel",
-  "version": "1.9.2",
+  "version": "1.10.0",
   "description": "SmartHomeShop Configurator Panel for Home Assistant",
   "license": "AGPL-3.0-only",
   "type": "module",

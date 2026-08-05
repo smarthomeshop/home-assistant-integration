@@ -1,6 +1,9 @@
 import { css, LitElement } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { loadHistorySeries, type HistoryPoint } from '../utils/history';
+
+export type { HistoryPoint } from '../utils/history';
 
 export interface EnergySources {
   p1_device?: string;
@@ -20,14 +23,6 @@ export interface PriceRow {
   feed_in?: number;
   kind?: 'confirmed' | 'predicted';
   confidence?: number;
-}
-
-export interface HistoryPoint {
-  t: number;
-  v: number;
-  min?: number;
-  max?: number;
-  end?: number;
 }
 
 export interface DailyElectricityCost {
@@ -185,78 +180,19 @@ export const loadPowerHistory = async (
 
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  const [statisticsResult, historyResult] = await Promise.allSettled([
-    callWS<Record<string, any[]>>(hass, {
-      type: 'recorder/statistics_during_period',
-      start_time: start.toISOString(),
-      end_time: new Date().toISOString(),
-      statistic_ids: ids,
-      period: '5minute',
-      types: ['mean', 'min', 'max'],
-    }, 25000),
-    callWS<Record<string, any[]>>(hass, {
-      type: 'history/history_during_period',
-      start_time: start.toISOString(),
-      entity_ids: ids,
-      minimal_response: true,
-      no_attributes: true,
-      significant_changes_only: true,
-    }, 25000),
-  ]);
-
-  const output: Record<string, HistoryPoint[]> = {};
-  ids.forEach((entityId) => {
-    const invert = entityId === context.sources.solar_power
-      ? !!context.sources.solar_invert
-      : entityId === context.sources.battery_power
-        ? !!context.sources.battery_invert
-        : false;
-    const factor = unitScale(hass, entityId) * (invert ? -1 : 1);
-    const statistics = statisticsResult.status === 'fulfilled'
-      ? statisticsResult.value[entityId] || []
-      : [];
-    const statisticPoints = statistics.map((point: any) => {
-      const mean = Number(point.mean);
-      const rawMinimum = Number(point.min);
-      const rawMaximum = Number(point.max);
-      const minimum = factor < 0 ? rawMaximum * factor : rawMinimum * factor;
-      const maximum = factor < 0 ? rawMinimum * factor : rawMaximum * factor;
-      return {
-        t: normaliseTimestamp(point.start),
-        end: normaliseTimestamp(point.end),
-        v: mean * factor,
-        min: minimum,
-        max: maximum,
-      };
-    }).filter((point: HistoryPoint) =>
-      Number.isFinite(point.t)
-      && point.t > 0
-      && Number.isFinite(point.v)
-      && Number.isFinite(point.min)
-      && Number.isFinite(point.max));
-
-    if (statisticPoints.length > 1) {
-      output[entityId] = statisticPoints;
-      return;
-    }
-
-    const history = historyResult.status === 'fulfilled'
-      ? historyResult.value[entityId] || []
-      : [];
-    const points = history.map((point: any) => {
-      const rawTime = point.lu ?? point.lc ?? point.last_updated ?? point.last_changed;
-      const numericTime = normaliseTimestamp(rawTime);
-      return { t: numericTime, v: factor * Number(point.s ?? point.state) };
-    }).filter((point: HistoryPoint) =>
-      Number.isFinite(point.t) && point.t > 0 && Number.isFinite(point.v));
-    output[entityId] = downsample(points, 360);
+  return loadHistorySeries(hass, ids, start, new Date(), {
+    period: '5minute',
+    maxPoints: 360,
+    significantChangesOnly: true,
+    factor: (entityId) => {
+      const invert = entityId === context.sources.solar_power
+        ? !!context.sources.solar_invert
+        : entityId === context.sources.battery_power
+          ? !!context.sources.battery_invert
+          : false;
+      return unitScale(hass, entityId) * (invert ? -1 : 1);
+    },
   });
-  return output;
-};
-
-const normaliseTimestamp = (value: unknown): number => {
-  if (typeof value === 'number') return value > 1000000000000 ? value : value * 1000;
-  return Date.parse(String(value));
 };
 
 interface CardHelpers {
@@ -287,29 +223,6 @@ export const ensureStatisticsChart = async (probeEntity?: string): Promise<boole
     })().catch(() => false);
   }
   return window.__shsStatisticsChartReady;
-};
-
-const downsample = (points: HistoryPoint[], maxPoints: number): HistoryPoint[] => {
-  if (points.length <= maxPoints) return points;
-  const first = points[0];
-  const last = points[points.length - 1];
-  const interior = points.slice(1, -1);
-  const bucketCount = Math.max(1, Math.floor((maxPoints - 2) / 2));
-  const sampled: HistoryPoint[] = [first];
-
-  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
-    const from = Math.floor(bucket * interior.length / bucketCount);
-    const to = Math.floor((bucket + 1) * interior.length / bucketCount);
-    const values = interior.slice(from, to);
-    if (!values.length) continue;
-    const minimum = values.reduce((best, point) => point.v < best.v ? point : best);
-    const maximum = values.reduce((best, point) => point.v > best.v ? point : best);
-    sampled.push(...(minimum.t <= maximum.t ? [minimum, maximum] : [maximum, minimum]));
-  }
-
-  sampled.push(last);
-  return sampled.filter((point, index, all) =>
-    index === 0 || point.t !== all[index - 1].t || point.v !== all[index - 1].v);
 };
 
 export const unitScale = (hass: HomeAssistant, entityId?: string): number => {

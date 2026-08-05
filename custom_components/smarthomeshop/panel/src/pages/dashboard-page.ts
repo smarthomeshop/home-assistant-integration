@@ -479,6 +479,47 @@ export class DashboardPage extends LitElement {
     .not-configured { border: 1px dashed var(--divider-color); border-radius: var(--ha-card-border-radius, 12px); padding: 16px; font-size: 13.5px; color: var(--secondary-text-color); margin-bottom: 16px; }
     .not-configured-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
     .not-configured .designer-btn:disabled { opacity: 0.6; cursor: default; }
+    .link-required {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      padding: 16px;
+      border: 1px solid color-mix(in srgb, var(--shs-primary, #4361ee) 28%, var(--divider-color));
+      border-radius: var(--ha-card-border-radius, 12px);
+      background: color-mix(in srgb, var(--shs-primary, #4361ee) 5%, var(--card-background-color));
+    }
+    .link-required-icon {
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--shs-primary, #4361ee) 12%, var(--card-background-color));
+      color: var(--shs-primary, #4361ee);
+    }
+    .link-required-icon ha-icon { --mdc-icon-size: 21px; }
+    .link-required-copy { min-width: 0; }
+    .link-required-title { color: var(--primary-text-color); font-size: 14.5px; font-weight: 650; line-height: 1.35; }
+    .link-required-text { margin-top: 3px; color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.5; }
+    .link-statuses { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .link-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--secondary-background-color);
+      color: var(--secondary-text-color);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .link-status.connected { background: color-mix(in srgb, #22c55e 11%, var(--card-background-color)); color: #15803d; }
+    .link-status ha-icon { --mdc-icon-size: 13px; }
+    .link-required .designer-btn { flex-shrink: 0; background: var(--shs-primary, #4361ee); color: white; }
+    .link-required .designer-btn:hover { background: color-mix(in srgb, var(--shs-primary, #4361ee) 88%, black); }
+    .link-required .designer-btn:disabled { opacity: 0.6; cursor: default; }
     .link-error { color: var(--error-color, #ef4444); font-size: 12.5px; margin-top: 10px; }
     .status-badge { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); text-transform: capitalize; }
     .status-badge.ok { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
@@ -687,6 +728,8 @@ export class DashboardPage extends LitElement {
       .remove-head, .remove-body, .remove-foot { padding-inline: 16px; }
       .remove-foot { flex-wrap: wrap; }
       .remove-btn { flex: 1 1 150px; }
+      .link-required { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+      .link-required .designer-btn { grid-column: 1 / -1; justify-content: center; width: 100%; box-sizing: border-box; }
     }
 
     @media (prefers-reduced-motion: reduce) {
@@ -1054,25 +1097,28 @@ export class DashboardPage extends LitElement {
           `}
         </div>
       ` : html`
-        <div class="not-configured">
-          <div class="not-configured-row">
-            <div style="flex: 1; min-width: 0;">
-              This device is not linked to the SmartHomeShop integration yet.
-              ${this.hass.user?.is_admin ? html`
-                Link it to unlock ${this._integrationFeatures(device.product_type)}.
-                Sensors are detected automatically and you can tune everything afterwards in the Settings tab.
-              ` : html`
-                Ask a Home Assistant administrator to link it and unlock ${this._integrationFeatures(device.product_type)}.
-              `}
-            </div>
-            ${this.hass.user?.is_admin ? html`
-              <button class="designer-btn" style="flex-shrink: 0;" ?disabled=${this._linking} @click=${this._linkDevice}>
-                <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 16px;"></ha-icon>
-                ${this._linking ? 'Linking...' : 'Link now'}
-              </button>
-            ` : nothing}
+        <div class="link-required" role="status">
+          <div class="link-required-icon" aria-hidden="true">
+            <ha-icon icon="mdi:link-variant-off"></ha-icon>
           </div>
-          ${this._linkError ? html`<div class="link-error">${this._linkError}</div>` : nothing}
+          <div class="link-required-copy">
+            <div class="link-required-title">Connected to Home Assistant, not yet to SmartHomeShop</div>
+            <div class="link-required-text">
+              ESPHome already provides this device and its entities. Link it to SmartHomeShop to fill this Overview with ${this._integrationFeatures(device.product_type)}.
+              ${this.hass.user?.is_admin ? 'Your sensors are detected automatically.' : 'Ask a Home Assistant administrator to complete this step.'}
+            </div>
+            <div class="link-statuses" aria-label="Connection status">
+              <span class="link-status connected"><ha-icon icon="mdi:check-circle"></ha-icon>ESPHome connected</span>
+              <span class="link-status"><ha-icon icon="mdi:link-variant-off"></ha-icon>SmartHomeShop not linked</span>
+            </div>
+            ${this._linkError ? html`<div class="link-error">${this._linkError}</div>` : nothing}
+          </div>
+          ${this.hass.user?.is_admin ? html`
+            <button class="designer-btn" ?disabled=${this._linking} @click=${this._linkDevice}>
+              <ha-icon icon="mdi:link-variant" style="--mdc-icon-size: 16px;"></ha-icon>
+              ${this._linking ? 'Linking to SmartHomeShop...' : 'Link to SmartHomeShop'}
+            </button>
+          ` : nothing}
         </div>
       `) : nothing}
 
