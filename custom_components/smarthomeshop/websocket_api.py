@@ -68,6 +68,80 @@ _ENERGY_PRODUCTS = ("waterp1meterkit", "p1meterkit")
 _ACCOUNT_REFRESH_TIMEOUT = 35
 _ACCOUNT_REFRESH_TASK = "account_price_refresh_task"
 
+_SPS30_QUIET_HOURS_ENTITIES: dict[str, tuple[str, str, str]] = {
+    # key: (domain, ESPHome object-id suffix, original name)
+    "enabled": ("switch", "sps30_quiet_hours_enabled", "SPS30 Quiet Hours"),
+    "start_hour": ("number", "sps30_quiet_start_hour", "SPS30 Quiet Start Hour"),
+    "end_hour": ("number", "sps30_quiet_end_hour", "SPS30 Quiet End Hour"),
+    "active": (
+        "binary_sensor",
+        "sps30_quiet_hours_active_sensor",
+        "SPS30 Quiet Hours Active",
+    ),
+    "pm_sensor": ("switch", "pm_sensor_switch", "PM Sensor"),
+    "idle_interval": ("number", "sps30_idle_interval", "SPS30 Idle Interval"),
+}
+_SPS30_QUIET_HOURS_REQUIRED = frozenset(
+    {"enabled", "start_hour", "end_hour", "active"}
+)
+
+
+def _normalise_registry_identity(value: str | None) -> str:
+    """Normalise stable ESPHome registry metadata, never the generated entity id."""
+    return re.sub(r"[^a-z0-9]+", "_", (value or "").lower()).strip("_")
+
+
+def resolve_sps30_quiet_hours_entities(
+    entity_registry, device_id: str
+) -> dict[str, Any]:
+    """Resolve the SPS30 quiet-hours capability from one HA device registry.
+
+    ESPHome entity IDs include a user-controlled device prefix and can be renamed.
+    The resolver therefore uses the device association plus the ESPHome platform,
+    entity domain, stable unique-id suffix and original firmware name.
+    """
+    resolved: dict[str, str] = {}
+    scores: dict[str, int] = {}
+
+    for entity in er.async_entries_for_device(entity_registry, device_id):
+        if entity.platform != "esphome" or entity.device_id != device_id:
+            continue
+
+        unique_id = _normalise_registry_identity(getattr(entity, "unique_id", None))
+        original_name = _normalise_registry_identity(
+            getattr(entity, "original_name", None)
+        )
+        for key, (domain, object_id, firmware_name) in (
+            _SPS30_QUIET_HOURS_ENTITIES.items()
+        ):
+            if entity.domain != domain:
+                continue
+            stable_suffix = _normalise_registry_identity(object_id)
+            stable_name = _normalise_registry_identity(firmware_name)
+            unique_match = bool(unique_id) and unique_id.endswith(stable_suffix)
+            original_name_match = bool(original_name) and original_name == stable_name
+            if not unique_match and not original_name_match:
+                continue
+
+            score = 2 if unique_match else 1
+            if score > scores.get(key, -1):
+                resolved[key] = entity.entity_id
+                scores[key] = score
+
+    missing = sorted(_SPS30_QUIET_HOURS_REQUIRED.difference(resolved))
+    if not resolved:
+        status = "unsupported"
+    elif missing:
+        status = "partial"
+    else:
+        status = "complete"
+
+    return {
+        "status": status,
+        "entities": resolved,
+        "missing": missing,
+    }
+
 
 async def async_register_websocket_api(hass: HomeAssistant) -> None:
     """Register WebSocket API commands."""
@@ -82,6 +156,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_save_room)
     websocket_api.async_register_command(hass, ws_delete_room)
     websocket_api.async_register_command(hass, ws_get_device_entities)
+    websocket_api.async_register_command(hass, ws_enable_device_entity)
     websocket_api.async_register_command(hass, ws_get_device_insights)
     websocket_api.async_register_command(hass, ws_get_device_config)
     websocket_api.async_register_command(hass, ws_set_device_config)
@@ -317,6 +392,7 @@ def ws_get_device_entities(
     """Get all entities for a specific device."""
     entity_registry = er.async_get(hass)
     device_id = msg["device_id"]
+    quiet_hours = resolve_sps30_quiet_hours_entities(entity_registry, device_id)
 
     entities = []
     for entity in entity_registry.entities.values():
@@ -327,11 +403,70 @@ def ws_get_device_entities(
                 "name": entity.name or entity.original_name or entity.entity_id,
                 "platform": entity.platform,
                 "domain": entity.domain,
+                "device_id": entity.device_id,
+                "unique_id": getattr(entity, "unique_id", None),
+                "original_name": getattr(entity, "original_name", None),
+                "disabled_by": (
+                    getattr(entity.disabled_by, "value", entity.disabled_by)
+                    if entity.disabled_by is not None
+                    else None
+                ),
+                "entity_category": (
+                    getattr(entity.entity_category, "value", entity.entity_category)
+                    if entity.entity_category is not None
+                    else None
+                ),
                 "state": state.state if state else None,
                 "attributes": dict(state.attributes) if state else {},
             })
 
-    connection.send_result(msg["id"], {"entities": entities})
+    connection.send_result(
+        msg["id"], {"entities": entities, "quiet_hours": quiet_hours}
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/device/entity/enable",
+    vol.Required("device_id"): str,
+    vol.Required("entity_id"): str,
+})
+@websocket_api.async_response
+async def ws_enable_device_entity(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Enable an explicitly selected disabled ESPHome entity for a device."""
+    entity_registry = er.async_get(hass)
+    entity = entity_registry.async_get(msg["entity_id"])
+
+    if entity is None or entity.device_id != msg["device_id"]:
+        connection.send_error(
+            msg["id"], "entity_not_found", "The entity does not belong to this device"
+        )
+        return
+
+    if entity.platform != "esphome":
+        connection.send_error(
+            msg["id"], "unsupported_entity", "Only ESPHome device entities can be enabled here"
+        )
+        return
+
+    if entity.disabled_by is None:
+        connection.send_result(msg["id"], {"success": True, "already_enabled": True})
+        return
+
+    config_entry_id = entity.config_entry_id
+    entity_registry.async_update_entity(entity.entity_id, disabled_by=None)
+
+    # Disabled-by-default ESPHome entities are not instantiated until their
+    # config entry reloads. Awaiting the reload means the panel can return with
+    # a real state instead of leaving a misleading grey control behind.
+    if config_entry_id and hass.config_entries.async_get_entry(config_entry_id):
+        await hass.config_entries.async_reload(config_entry_id)
+
+    connection.send_result(msg["id"], {"success": True, "already_enabled": False})
 
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/device/insights",

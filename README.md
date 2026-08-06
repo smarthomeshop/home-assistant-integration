@@ -56,6 +56,30 @@ More product demos:
 3. Search for "SmartHomeShop.io"
 4. Follow the configuration steps
 
+## SPS30 Quiet Hours
+
+Supported UltimateSensor Complete firmware can pause the SPS30 fan, laser and
+particulate measurements during a daily quiet period. Open the device in the
+SmartHomeShop.io panel and use **Settings > SPS30 Quiet Hours** to enable the
+schedule and select whole start and end hours. Equal start and end hours mean
+the SPS30 remains quiet for the full 24 hours.
+
+Complete firmware also exposes **Pause between measurement cycles**. The SPS30
+warms up and gathers readings before switching off its fan and laser for the
+selected pause. Choose Continuous, 5, 10, 15 or 30 minutes; five minutes is the
+firmware default and a good balance for normal use. This pause is not an exact
+"one measurement every X minutes" interval. Active Quiet Hours temporarily
+override it without changing the configured value, and the PM Sensor master
+switch remains untouched.
+
+The controls are discovered from the ESPHome entities attached to the Home
+Assistant device, so renamed devices and custom entity-ID prefixes keep
+working. Basic devices do not show this section. If an older Complete firmware
+only exposes part of the required controls, the panel asks for a firmware
+update instead of showing an incomplete schedule. If the Quiet Hours schedule
+is available but SPS30 Idle Interval is missing, only the measurement-cycle
+pause is replaced by a concise Complete-firmware update notice.
+
 ## Dynamic energy and battery planning
 
 The Energy page combines live contract prices with an hourly outlook. Stored

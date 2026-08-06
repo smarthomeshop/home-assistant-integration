@@ -1,3 +1,5 @@
+import { resolveFurnitureRotation, rotatedFurnitureCorners } from './furniture-geometry';
+
 // Shared 3D room renderer for SmartHomeShop.
 //
 // This is a 1:1 port of the Room Designer panel 3D view so the
@@ -199,19 +201,16 @@ export class Room3DRenderer {
 
   private drawFurniture(ctx: CanvasRenderingContext2D, scene: Scene3D): void {
     for (const f of scene.furniture) {
-      const hw = f.width / 2;
-      const hh = f.height / 2;
       const furnitureHeight = 400;
 
       // Bottom corners, rotated around the furniture center
-      const rad = ((f.rotation || 0) * Math.PI) / 180;
-      const cosR = Math.cos(rad), sinR = Math.sin(rad);
-      const cornerOffsets: Array<[number, number]> = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
-      const corners3D: P3[] = cornerOffsets.map(([ox, oy]) => ({
-        x: f.x + ox * cosR - oy * sinR,
-        y: f.y + ox * sinR + oy * cosR,
-        z: 0,
-      }));
+      const corners3D: P3[] = rotatedFurnitureCorners(
+        f.x,
+        f.y,
+        f.width,
+        f.height,
+        resolveFurnitureRotation(f),
+      ).map(corner => ({ ...corner, z: 0 }));
       const topCorners3D = corners3D.map(c => ({ ...c, z: furnitureHeight }));
       const bottom = corners3D.map(c => this.project(c));
       const top = topCorners3D.map(c => this.project(c));

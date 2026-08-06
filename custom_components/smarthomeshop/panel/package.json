@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-panel",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "SmartHomeShop Configurator Panel for Home Assistant",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -8,6 +8,8 @@
     "build": "rollup -c",
     "build:prod": "npm run build && npm run copy",
     "copy": "cp dist/smarthomeshop-panel.js ../www/smarthomeshop-panel.js",
+    "test:furniture": "node --test test/furniture-rotation.test.mjs",
+    "test:quiet-hours": "node --test test/sps30-quiet-hours.test.mjs",
     "watch": "rollup -c -w"
   },
   "dependencies": {

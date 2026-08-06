@@ -8,6 +8,10 @@ import {
   projectRadarTargetToRoom,
   type RadarCoordinateProjection,
 } from '../utils/radar-coordinates';
+import {
+  resolveFurnitureRotation,
+  rotatedFurnitureCorners,
+} from '../utils/furniture-geometry';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -1485,7 +1489,7 @@ export class ZonesPage extends LitElement {
         y: f.y,
         width: f.width,
         height: f.height || f.depth || f.width,
-        rotation: f.rotationDeg ?? f.rotation ?? 0,
+        rotation: resolveFurnitureRotation(f),
       }));
 
       // Load doors and windows
@@ -3023,17 +3027,16 @@ export class ZonesPage extends LitElement {
 
   private _draw3DFurniture(ctx: CanvasRenderingContext2D): void {
     for (const f of this._furniture) {
-      const hw = f.width / 2;
-      const hh = f.height / 2;
       const furnitureHeight = 400; // 40cm default height
 
-      // Bottom corners
-      const corners3D = [
-        { x: f.x - hw, y: f.y - hh, z: 0 },
-        { x: f.x + hw, y: f.y - hh, z: 0 },
-        { x: f.x + hw, y: f.y + hh, z: 0 },
-        { x: f.x - hw, y: f.y + hh, z: 0 },
-      ];
+      // Match the 2D editor: rotate every corner around the furniture centre.
+      const corners3D = rotatedFurnitureCorners(
+        f.x,
+        f.y,
+        f.width,
+        f.height,
+        resolveFurnitureRotation(f),
+      ).map(corner => ({ ...corner, z: 0 }));
 
       // Top corners
       const topCorners3D = corners3D.map(c => ({ ...c, z: furnitureHeight }));

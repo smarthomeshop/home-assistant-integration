@@ -171,8 +171,19 @@ export interface DeviceEntity {
   name: string;
   platform: string;
   domain: string;
+  device_id?: string | null;
+  unique_id?: string | null;
+  original_name?: string | null;
+  disabled_by?: string | null;
+  entity_category?: string | null;
   state?: string;
   attributes: Record<string, unknown>;
+}
+
+export interface Sps30QuietHoursCapability {
+  status: 'complete' | 'partial' | 'unsupported';
+  entities: Partial<Record<'enabled' | 'start_hour' | 'end_hour' | 'active' | 'pm_sensor' | 'idle_interval', string>>;
+  missing: Array<'enabled' | 'start_hour' | 'end_hour' | 'active'>;
 }
 
 export interface RadarTargetEntityMap {

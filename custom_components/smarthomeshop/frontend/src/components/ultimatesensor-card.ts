@@ -12,6 +12,7 @@ import { Room3DRenderer, collectWorldTargets, Scene3D } from '../utils/room3d';
 import { relativeTime } from '../utils/helpers';
 import { loadHistorySeries, type HistoryPoint } from '../utils/history';
 import { productLogo } from '../utils/product-logos';
+import { resolveFurnitureRotation } from '../utils/furniture-geometry';
 import './sensor-settings';
 import { debugLog } from '../utils/debug';
 
@@ -39,9 +40,39 @@ interface RadarCardConfig {
   show_illuminance?: boolean;
   show_voc?: boolean;
   show_trends?: boolean;
+  trend_hours?: number;
+  show_temperature_trend?: boolean;
+  show_humidity_trend?: boolean;
+  show_co2_trend?: boolean;
+  show_illuminance_trend?: boolean;
+  show_voc_trend?: boolean;
+  show_nox_trend?: boolean;
   view_mode?: 'radar' | 'room';
   room_view_mode?: '2d' | '3d';
 }
+
+type TrendMetric = 'temperature' | 'humidity' | 'co2' | 'illuminance' | 'voc' | 'nox';
+
+const ENVIRONMENT_TREND_OPTIONS: ReadonlyArray<{
+  metric: TrendMetric;
+  label: string;
+  visibilityKey: keyof RadarCardConfig;
+  trendKey: keyof RadarCardConfig;
+}> = [
+  { metric: 'temperature', label: 'Temperature', visibilityKey: 'show_temperature', trendKey: 'show_temperature_trend' },
+  { metric: 'humidity', label: 'Humidity', visibilityKey: 'show_humidity', trendKey: 'show_humidity_trend' },
+  { metric: 'co2', label: 'CO2', visibilityKey: 'show_co2', trendKey: 'show_co2_trend' },
+  { metric: 'illuminance', label: 'Illuminance', visibilityKey: 'show_illuminance', trendKey: 'show_illuminance_trend' },
+  { metric: 'voc', label: 'VOC index', visibilityKey: 'show_voc', trendKey: 'show_voc_trend' },
+  { metric: 'nox', label: 'NOx index', visibilityKey: 'show_nox', trendKey: 'show_nox_trend' },
+];
+
+const normaliseTrendHours = (value: unknown): number => {
+  const configured = Number(value ?? 6);
+  return Number.isFinite(configured)
+    ? Math.min(168, Math.max(1, Math.round(configured)))
+    : 6;
+};
 
 interface Target {
   x: number;
@@ -939,6 +970,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       show_pm_values: true,
       show_nox: true,
       show_trends: true,
+      trend_hours: 6,
       show_zones: true,
       show_grid: true,
     };
@@ -956,6 +988,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       show_pm_values: true,
       show_nox: true,
       show_trends: true,
+      trend_hours: 6,
       show_zones: true,
       show_grid: true,
       ...config,
@@ -1355,18 +1388,23 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   }
 
   private async _fetchTrends(): Promise<void> {
-    if (!this.hass || this._config.show_trends === false || this._trendLoading) return;
-    const entityIds = [
-      this._entityIds.temperature,
-      this._entityIds.humidity,
-      this._entityIds.co2,
-      this._entityIds.illuminance,
-      this._entityIds.voc,
-      this._entityIds.nox,
-    ].filter((entityId): entityId is string => Boolean(entityId));
-    if (!entityIds.length) return;
+    if (!this.hass || this._trendLoading) return;
+    if (this._config.show_trends === false) {
+      if (Object.keys(this._trends).length) this._trends = {};
+      return;
+    }
 
-    const signature = entityIds.slice().sort().join('|');
+    const hours = this._trendHours();
+    const entityIds = ENVIRONMENT_TREND_OPTIONS
+      .filter(option => this._config[option.visibilityKey] !== false && this._trendEnabled(option.metric))
+      .map(option => this._entityIds[option.metric])
+      .filter((entityId): entityId is string => Boolean(entityId));
+    if (!entityIds.length) {
+      if (Object.keys(this._trends).length) this._trends = {};
+      return;
+    }
+
+    const signature = `${hours}|${entityIds.slice().sort().join('|')}`;
     const now = Date.now();
     if (signature === this._trendSignature && now - this._lastTrendFetch < 5 * 60 * 1000) return;
 
@@ -1375,10 +1413,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     this._lastTrendFetch = now;
     try {
       const end = new Date(now);
-      const start = new Date(now - 6 * 60 * 60 * 1000);
+      const start = new Date(now - hours * 60 * 60 * 1000);
       const result = await loadHistorySeries(this.hass, entityIds, start, end, {
         period: '5minute',
-        maxPoints: 74,
+        maxPoints: Math.min(360, Math.max(74, hours * 12 + 2)),
         significantChangesOnly: false,
       });
       const trends: Record<string, TrendSeries> = {};
@@ -1407,11 +1445,23 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     }
   }
 
-  private _renderTrend(entityId: string | undefined, unit: string, decimals = 0) {
-    if (!entityId || this._config.show_trends === false) return nothing;
+  private _trendHours(): number {
+    return normaliseTrendHours(this._config.trend_hours);
+  }
+
+  private _trendEnabled(metric: TrendMetric): boolean {
+    const option = ENVIRONMENT_TREND_OPTIONS.find(item => item.metric === metric);
+    return this._config.show_trends !== false && (!option || this._config[option.trendKey] !== false);
+  }
+
+  private _renderTrend(metric: TrendMetric, entityId: string | undefined, unit: string, decimals = 0) {
+    if (!entityId || !this._trendEnabled(metric)) return nothing;
     const trend = this._trends[entityId];
     if (!trend || trend.points.length < 2) return nothing;
 
+    const hours = this._trendHours();
+    const hourWord = hours === 1 ? 'hour' : 'hours';
+    const periodShort = `${hours}h`;
     const width = 240;
     const height = 48;
     const top = 3;
@@ -1444,29 +1494,29 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     const direction = Math.abs(change) < threshold ? 'flat' : change > 0 ? 'up' : 'down';
     const icon = direction === 'up' ? 'mdi:trending-up' : direction === 'down' ? 'mdi:trending-down' : 'mdi:minus';
     const formatted = direction === 'flat'
-      ? `Stable · 6h`
-      : `${change > 0 ? '+' : ''}${change.toFixed(decimals)}${unit ? ` ${unit}` : ''} · 6h`;
+      ? `Stable · ${periodShort}`
+      : `${change > 0 ? '+' : ''}${change.toFixed(decimals)}${unit ? ` ${unit}` : ''} · ${periodShort}`;
     const endPoint = trend.points[trend.points.length - 1];
     const endX = x(endPoint.t);
     const endY = y(endPoint.v);
     const rangeLabel = `${minimum.toFixed(decimals)}–${maximum.toFixed(decimals)}${unit ? ` ${unit}` : ''}`;
 
     return html`
-      <div class="env-card-trend" title="Change over the last 6 hours">
+      <div class="env-card-trend" title="Change over the last ${hours} ${hourWord}">
         <div class="trend-summary">
           <span class="trend-range">Range ${rangeLabel}</span>
           <span class="trend-change"><ha-icon icon=${icon}></ha-icon>${formatted}</span>
         </div>
         <div class="trend-chart">
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img"
-            aria-label="${formatted}; range ${rangeLabel} over the last 6 hours">
+            aria-label="${formatted}; range ${rangeLabel} over the last ${hours} ${hourWord}">
             <title>${formatted}; range ${rangeLabel}</title>
             <line class="trend-grid" x1="0" y1=${(height / 2).toFixed(1)} x2=${width} y2=${(height / 2).toFixed(1)}></line>
             <path class="trend-band" d=${band}></path>
             <path class="trend-line" d=${path}></path>
             <circle class="trend-end" cx=${endX.toFixed(1)} cy=${endY.toFixed(1)} r="2.6"></circle>
           </svg>
-          <div class="trend-axis" aria-hidden="true"><span>6h ago</span><span>Now</span></div>
+          <div class="trend-axis" aria-hidden="true"><span>${periodShort} ago</span><span>Now</span></div>
         </div>
       </div>
     `;
@@ -1898,7 +1948,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
           return filtered.map((f: any) => {
               const fx = f.x / 1000, fy = f.y / 1000;
               const fw = f.width / 1000, fh = f.height / 1000;
-              const rot = f.rotation || 0;
+              const rot = resolveFurnitureRotation(f);
               return svg`
                 <g transform="translate(${fx}, ${fy}) rotate(${rot})">
                   <rect x="${-fw/2}" y="${-fh/2}" width="${fw}" height="${fh}"
@@ -1982,7 +2032,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       y: f.y,
       width: f.width,
       height: f.height || f.depth || f.width,
-      rotation: f.rotationDeg ?? f.rotation ?? 0,
+      rotation: resolveFurnitureRotation(f),
       name: f.name || f.typeId || 'Furniture',
     }));
     const sensors = ((room.sensors && room.sensors.length > 0) ? room.sensors : (room.sensor ? [room.sensor] : []))
@@ -2405,7 +2455,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">Temperature</span>
                   </div>
                   <div class="env-card-value">${temperature.toFixed(1)}<span>°C</span></div>
-                  ${this._renderTrend(this._entityIds.temperature, '°C', 1)}
+                  ${this._renderTrend('temperature', this._entityIds.temperature, '°C', 1)}
                 </div>
               ` : nothing}
 
@@ -2416,7 +2466,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">Humidity</span>
                   </div>
                   <div class="env-card-value">${humidity.toFixed(0)}<span>%</span></div>
-                  ${this._renderTrend(this._entityIds.humidity, '%')}
+                  ${this._renderTrend('humidity', this._entityIds.humidity, '%')}
                 </div>
               ` : nothing}
 
@@ -2427,7 +2477,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">CO₂</span>
                   </div>
                   <div class="env-card-value">${co2.toFixed(0)}<span>ppm</span></div>
-                  ${this._renderTrend(this._entityIds.co2, 'ppm')}
+                  ${this._renderTrend('co2', this._entityIds.co2, 'ppm')}
                 </div>
               ` : nothing}
 
@@ -2438,7 +2488,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">Illuminance</span>
                   </div>
                   <div class="env-card-value">${illuminance.toFixed(0)}<span>lx</span></div>
-                  ${this._renderTrend(this._entityIds.illuminance, 'lx')}
+                  ${this._renderTrend('illuminance', this._entityIds.illuminance, 'lx')}
                 </div>
               ` : nothing}
 
@@ -2449,7 +2499,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">VOC Index</span>
                   </div>
                   <div class="env-card-value">${voc.toFixed(0)}<span></span></div>
-                  ${this._renderTrend(this._entityIds.voc, '')}
+                  ${this._renderTrend('voc', this._entityIds.voc, '')}
                 </div>
               ` : nothing}
 
@@ -2460,7 +2510,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
                     <span class="env-card-label">NOx Index</span>
                   </div>
                   <div class="env-card-value">${nox.toFixed(0)}</div>
-                  ${this._renderTrend(this._entityIds.nox, '')}
+                  ${this._renderTrend('nox', this._entityIds.nox, '')}
                 </div>
               ` : nothing}
             </div>
@@ -2611,6 +2661,7 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
   @state() private _devices: Array<{ id: string; name: string }> = [];
 
   static styles = css`
+    :host { display: block; container-type: inline-size; }
     .form-row {
       margin-bottom: 16px;
     }
@@ -2658,6 +2709,106 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
       padding: 8px 0 0 12px;
       border-left: 2px solid var(--divider-color);
     }
+    .trend-settings {
+      margin-top: 11px;
+      padding-top: 11px;
+      border-top: 1px solid var(--divider-color);
+    }
+    .trend-settings-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .trend-settings-head .checkbox-row { margin-bottom: 0; }
+    .trend-settings-note {
+      color: var(--secondary-text-color);
+      font-size: 11px;
+      line-height: 1.35;
+      text-align: right;
+    }
+    .trend-details {
+      margin-top: 11px;
+      padding-left: 26px;
+    }
+    .trend-hours-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 11px;
+    }
+    .trend-hours-label {
+      min-width: 0;
+      color: var(--primary-text-color);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .trend-hours-hint {
+      margin-top: 2px;
+      color: var(--secondary-text-color);
+      font-size: 10.5px;
+      font-weight: 400;
+    }
+    .trend-hours-control {
+      display: flex;
+      align-items: stretch;
+      flex: 0 0 auto;
+      overflow: hidden;
+      border: 1px solid var(--divider-color);
+      border-radius: 8px;
+      background: var(--card-background-color);
+    }
+    .trend-hours-control:focus-within { border-color: var(--primary-color); }
+    .trend-hours-control input[type='number'] {
+      width: 62px;
+      padding: 7px 8px;
+      border: 0;
+      border-radius: 0;
+      text-align: right;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+    .trend-hours-control input[type='number']:focus { border-color: transparent; }
+    .trend-hours-unit {
+      display: flex;
+      align-items: center;
+      padding: 0 9px;
+      border-left: 1px solid var(--divider-color);
+      color: var(--secondary-text-color);
+      background: var(--secondary-background-color);
+      font-size: 11px;
+    }
+    .trend-sensor-title {
+      margin-bottom: 6px;
+      color: var(--secondary-text-color);
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .trend-sensor-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .trend-sensor-toggle {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      margin: 0;
+      padding: 7px 8px;
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--primary-color) 4%, var(--card-background-color));
+      color: var(--primary-text-color);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .trend-sensor-toggle input { width: 16px; height: 16px; flex: 0 0 auto; margin: 0; }
+    .trend-sensor-toggle span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trend-sensor-toggle.disabled { opacity: 0.46; cursor: not-allowed; }
     .info {
       font-size: 12px;
       color: var(--secondary-text-color);
@@ -2703,6 +2854,12 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
     }
     .info-banner a:hover {
       text-decoration: underline;
+    }
+    @container (max-width: 360px) {
+      .trend-settings-head, .trend-hours-row { align-items: stretch; flex-direction: column; }
+      .trend-settings-note { text-align: left; }
+      .trend-hours-control { align-self: flex-start; }
+      .trend-sensor-grid { grid-template-columns: 1fr; }
     }
   `;
 
@@ -2754,6 +2911,13 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
         composed: true,
       })
     );
+  }
+
+  private _trendHoursChanged(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    const hours = normaliseTrendHours(input.value);
+    input.value = String(hours);
+    this._valueChanged('trend_hours', hours);
   }
 
   protected render() {
@@ -2844,10 +3008,52 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
                   @change=${(e: Event) => this._valueChanged('show_co2_bar', (e.target as HTMLInputElement).checked)} />
                 <label for="show_co2_bar">CO2 quality meter</label>
               </div>
-              <div class="checkbox-row">
-                <input type="checkbox" id="show_trends" .checked=${this._config.show_trends !== false}
-                  @change=${(e: Event) => this._valueChanged('show_trends', (e.target as HTMLInputElement).checked)} />
-                <label for="show_trends">6-hour value trends</label>
+              <div class="trend-settings">
+                <div class="trend-settings-head">
+                  <div class="checkbox-row">
+                    <input type="checkbox" id="show_trends" .checked=${this._config.show_trends !== false}
+                      @change=${(e: Event) => this._valueChanged('show_trends', (e.target as HTMLInputElement).checked)} />
+                    <label for="show_trends">Value graphs</label>
+                  </div>
+                  <div class="trend-settings-note">Home Assistant Recorder history</div>
+                </div>
+                ${this._config.show_trends !== false ? html`
+                  <div class="trend-details">
+                    <div class="trend-hours-row">
+                      <div class="trend-hours-label">
+                        History range
+                        <div class="trend-hours-hint">Show the latest 1–168 hours</div>
+                      </div>
+                      <div class="trend-hours-control">
+                        <input id="trend_hours" type="number" min="1" max="168" step="1"
+                          aria-label="Number of hours shown in value graphs"
+                          .value=${String(normaliseTrendHours(this._config.trend_hours))}
+                          @input=${this._trendHoursChanged} />
+                        <span class="trend-hours-unit">hours</span>
+                      </div>
+                    </div>
+                    <div class="trend-sensor-title">Graphs shown</div>
+                    <div class="trend-sensor-grid">
+                      ${ENVIRONMENT_TREND_OPTIONS.map(option => {
+                        const sensorVisible = this._config[option.visibilityKey] !== false;
+                        return html`
+                          <label class="trend-sensor-toggle ${sensorVisible ? '' : 'disabled'}"
+                            title=${sensorVisible ? `Show ${option.label} graph` : `Enable ${option.label} first`}>
+                            <input type="checkbox" id=${String(option.trendKey)}
+                              .checked=${this._config[option.trendKey] !== false}
+                              ?disabled=${!sensorVisible}
+                              aria-label="Show ${option.label} graph"
+                              @change=${(e: Event) => this._valueChanged(
+                                String(option.trendKey),
+                                (e.target as HTMLInputElement).checked,
+                              )} />
+                            <span>${option.label}</span>
+                          </label>
+                        `;
+                      })}
+                    </div>
+                  </div>
+                ` : nothing}
               </div>
             </div>
           ` : nothing}
