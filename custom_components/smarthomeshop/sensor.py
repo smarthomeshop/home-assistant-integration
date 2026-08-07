@@ -21,7 +21,6 @@ from .const import (
     DOMAIN,
     CONF_PRODUCT_TYPE,
     PRODUCT_P1METERKIT,
-    PRODUCT_WATERFLOWKIT,
     PRODUCT_WATERMETERKIT,
     PRODUCT_WATERP1METERKIT,
     PRODUCT_ULTIMATESENSOR,
@@ -44,7 +43,6 @@ from .products.ultimatesensor import (
     RoomQualitySensorDescription,
     UltimateSensorCoordinator,
 )
-from .products.ultimatesensor.coordinator import RoomQualityData
 
 # Key under hass.data[DOMAIN] holding the entry that carries the account-wide
 # entities (prices, savings, battery plan, deadline schedules).
@@ -241,9 +239,10 @@ class SmartHomeShopWaterSensor(CoordinatorEntity[WaterCoordinator], SensorEntity
         # Create unique ID
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
 
-        # Link to existing ESPHome device
-        if coordinator.device_info:
-            self._attr_device_info = coordinator.device_info
+        # Link to the physical ESPHome device without claiming ownership of a
+        # duplicate SmartHomeShop registry device (required by HA 2026.8).
+        if coordinator.device_entry:
+            self.device_entry = coordinator.device_entry
 
     @property
     def native_value(self) -> Any:
@@ -282,9 +281,8 @@ class SmartHomeShopRoomQualitySensor(
         # Create unique ID
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
 
-        # Link to existing ESPHome device
-        if coordinator.device_info:
-            self._attr_device_info = coordinator.device_info
+        if coordinator.device_entry:
+            self.device_entry = coordinator.device_entry
 
     @property
     def native_value(self) -> Any:
@@ -312,8 +310,8 @@ class SmartHomeShopP1Sensor(CoordinatorEntity, RestoreSensor):
         self.entity_description = description
         self._config_entry = config_entry
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
-        if coordinator.device_info:
-            self._attr_device_info = coordinator.device_info
+        if coordinator.device_entry:
+            self.device_entry = coordinator.device_entry
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

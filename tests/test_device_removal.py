@@ -3,7 +3,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from custom_components.smarthomeshop import websocket_api
+from custom_components.smarthomeshop import device_linking, websocket_api
 
 
 _remove_device = websocket_api.ws_remove_device.__wrapped__
@@ -58,8 +58,18 @@ def _hass(monkeypatch, *, linked: bool = True, esphome: bool = True):
         entries.append(_entry("esphome-entry", "esphome"))
         config_entry_ids.add("esphome-entry")
     device = SimpleNamespace(id=device_id, config_entries=config_entry_ids)
-    registry = SimpleNamespace(async_get=lambda requested: device if requested == device_id else None)
-    monkeypatch.setattr(websocket_api.dr, "async_get", lambda _hass: registry)
+    registry = SimpleNamespace(
+        devices={device_id: device},
+        async_get=lambda requested: device if requested == device_id else None,
+    )
+    monkeypatch.setattr(device_linking.dr, "async_get", lambda _hass: registry)
+    entity_registry = SimpleNamespace(entities={})
+    monkeypatch.setattr(websocket_api.er, "async_get", lambda _hass: entity_registry)
+    monkeypatch.setattr(
+        websocket_api.er,
+        "async_entries_for_device",
+        lambda *_args, **_kwargs: [],
+    )
     monkeypatch.setattr(
         websocket_api,
         "_product_for_registry_device",

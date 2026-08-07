@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import slugify
 
 from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
+from ...device_linking import resolve_source_device
 
 # What each room-quality input actually measures. Home Assistant device
 # classes survive a rename, so they identify the right entity even when the
@@ -80,38 +80,17 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         self._config_entry = config_entry
         self._device_id = config_entry.data.get(CONF_DEVICE_ID)
 
-        # Get device info from source ESPHome device (links to existing device)
-        self._device_info = self._get_source_device_info()
+        # Link calculated entities to the existing ESPHome device without
+        # making SmartHomeShop a second owner of that registry device.
+        self._device_entry = resolve_source_device(hass, self._device_id)
 
         # Sensor entity IDs (populated during first update)
         self._sensor_ids: dict[str, str] = {}
 
-    def _get_source_device_info(self) -> DeviceInfo | None:
-        """Get device info from the source ESPHome device to link entities."""
-        if not self._device_id:
-            LOGGER.warning("No device_id configured for UltimateSensor")
-            return None
-
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get(self._device_id)
-
-        if not device:
-            LOGGER.warning("Device %s not found in registry", self._device_id)
-            return None
-
-        # Link to existing device via identifiers - this merges with ESPHome device
-        if device.identifiers:
-            LOGGER.info("Linking UltimateSensor to existing device: %s", device.name)
-            return DeviceInfo(identifiers=device.identifiers)
-        if device.connections:
-            return DeviceInfo(connections=device.connections)
-
-        return None
-
     @property
-    def device_info(self) -> DeviceInfo | None:
-        """Return device info - links to existing ESPHome device."""
-        return self._device_info
+    def device_entry(self) -> DeviceEntry | None:
+        """Return the concrete ESPHome registry device."""
+        return self._device_entry
 
     def _entity_match_key(self, entity) -> str:
         """Slug of the entity's firmware name, without the device prefix.
@@ -551,4 +530,3 @@ class UltimateSensorCoordinator(DataUpdateCoordinator[RoomQualityData]):
         """Fetch and calculate room quality data."""
         LOGGER.debug("Updating UltimateSensor room quality data")
         return self._calculate_room_quality()
-

@@ -171,8 +171,8 @@ class WaterFlowKitLeakBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._line = line
         self._attr_name = f"{label} leak alarm (CC)"
         self._attr_unique_id = f"{config_entry.entry_id}_{line}_leak_alarm_cc"
-        if getattr(coordinator, "device_info", None):
-            self._attr_device_info = coordinator.device_info
+        if getattr(coordinator, "device_entry", None):
+            self.device_entry = coordinator.device_entry
 
     def _score(self) -> dict[str, Any] | None:
         line = (self.coordinator.data or {}).get(self._line) or {}
@@ -217,9 +217,8 @@ class SmartHomeShopWaterBinarySensor(
         # Create unique ID
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
 
-        # Link to existing ESPHome device
-        if coordinator.device_info:
-            self._attr_device_info = coordinator.device_info
+        if coordinator.device_entry:
+            self.device_entry = coordinator.device_entry
 
     @property
     def is_on(self) -> bool:

@@ -7,11 +7,12 @@ from datetime import timedelta
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
+from ...device_linking import resolve_source_device
 from ..base.p1 import EnergyData, EnergyTracker
 
 
@@ -27,7 +28,7 @@ class P1MeterKitCoordinator(DataUpdateCoordinator[EnergyData]):
             config_entry=config_entry,
         )
         self._device_id = config_entry.data.get(CONF_DEVICE_ID)
-        self._device_info = self._get_source_device_info()
+        self._device_entry = resolve_source_device(hass, self._device_id)
 
         prefix, short_id = self._resolve_entity_prefix()
         self.entity_prefix = prefix
@@ -69,22 +70,10 @@ class P1MeterKitCoordinator(DataUpdateCoordinator[EnergyData]):
         tail = slug.rsplit("_", 1)[-1]
         return tail if re.fullmatch(r"[a-f0-9]{6,}", tail) else slug
 
-    def _get_source_device_info(self) -> DeviceInfo | None:
-        """Link our entities to the existing ESPHome device."""
-        if not self._device_id:
-            return None
-        device = dr.async_get(self.hass).async_get(self._device_id)
-        if not device:
-            return None
-        if device.identifiers:
-            return DeviceInfo(identifiers=device.identifiers)
-        if device.connections:
-            return DeviceInfo(connections=device.connections)
-        return None
-
     @property
-    def device_info(self) -> DeviceInfo | None:
-        return self._device_info
+    def device_entry(self) -> DeviceEntry | None:
+        """Return the concrete ESPHome registry device."""
+        return self._device_entry
 
     async def _async_update_data(self) -> EnergyData:
         await self.energy_tracker.async_load_ha_prices()

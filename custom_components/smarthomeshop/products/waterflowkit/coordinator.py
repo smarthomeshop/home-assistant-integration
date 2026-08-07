@@ -12,8 +12,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
@@ -28,6 +27,7 @@ from ...const import (
     MICRO_LEAK_THRESHOLD,
     UPDATE_INTERVAL_SECONDS,
 )
+from ...device_linking import resolve_source_device
 from ..base.water.coordinator import (
     CONF_CONTINUOUS_FLOW_MINUTES,
     CONF_LEAK_SCORE_THRESHOLD,
@@ -227,8 +227,14 @@ class WaterFlowKitCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.flow2_water_sensor = self._water_sensors.get("flow2")
         self.flow2_flow_sensor = self._flow_sensors.get("flow2")
 
-        # Get device info from source entity
-        self._device_info = self._get_source_device_info()
+        self._device_entry = resolve_source_device(
+            hass,
+            config_entry.data.get("device_id"),
+            source_entity_ids=(
+                *self._water_sensors.values(),
+                *self._flow_sensors.values(),
+            ),
+        )
 
         # Per-line trackers (leak detection, history, sessions). The leak
         # engine follows the same options the panel advertises for water
@@ -274,42 +280,10 @@ class WaterFlowKitCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         return tuple(dict.fromkeys(BASE_FLOW_LINES + configured))
 
-    def _get_source_device_info(self) -> DeviceInfo | None:
-        """Get device info from the source water sensor entity."""
-        water_sensor = next(
-            (self._water_sensors[line] for line in self._lines
-             if self._water_sensors.get(line)),
-            None,
-        )
-        if not water_sensor:
-            return None
-
-        entity_registry = er.async_get(self.hass)
-        entity_entry = entity_registry.async_get(water_sensor)
-
-        if not entity_entry or not entity_entry.device_id:
-            LOGGER.warning("Source entity %s not found in registry", water_sensor)
-            return None
-
-        device_registry = dr.async_get(self.hass)
-        device = device_registry.async_get(entity_entry.device_id)
-
-        if not device:
-            LOGGER.warning("Device %s not found", entity_entry.device_id)
-            return None
-
-        # Link to existing device via identifiers or connections
-        if device.identifiers:
-            return DeviceInfo(identifiers=device.identifiers)
-        if device.connections:
-            return DeviceInfo(connections=device.connections)
-
-        return None
-
     @property
-    def device_info(self) -> DeviceInfo | None:
-        """Return device information - links to existing ESPHome device."""
-        return self._device_info
+    def device_entry(self) -> DeviceEntry | None:
+        """Return the concrete ESPHome registry device."""
+        return self._device_entry
 
     async def async_config_entry_first_refresh(self) -> None:
         """Load the learned baselines and day anchors before the first update."""

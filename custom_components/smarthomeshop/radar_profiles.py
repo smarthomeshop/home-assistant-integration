@@ -18,6 +18,7 @@ from .const import (
     PRODUCT_ULTIMATESENSOR_MINI,
     product_for_device,
 )
+from .device_linking import iter_esphome_source_devices, resolve_source_device
 
 UNAVAILABLE_STATES = {"", "none", "null", "nan", "unknown", "unavailable"}
 POSITIONING_RADARS = {"ld2450", "ld2460", "ld6002b"}
@@ -547,13 +548,10 @@ def _snapshots_for_device(hass: Any, device_id: str) -> tuple[RadarEntitySnapsho
 
 def discover_radar_device_profiles(hass: Any) -> list[RadarDeviceProfile]:
     """Discover SmartHomeShop radar devices through their registry association."""
-    from homeassistant.helpers import device_registry as dr
-
-    devices = dr.async_get(hass)
     discovered: list[RadarDeviceProfile] = []
     metadata_suffixes = tuple(spec.suffix for spec in _METADATA.values())
 
-    for device in devices.devices.values():
+    for device in iter_esphome_source_devices(hass):
         snapshots = _snapshots_for_device(hass, device.id)
         if not snapshots:
             continue
@@ -598,9 +596,7 @@ def discover_radar_device_profiles(hass: Any) -> list[RadarDeviceProfile]:
 
 def radar_profile_for_device(hass: Any, device_id: str) -> RadarDeviceProfile | None:
     """Resolve one registry device for diagnostics."""
-    from homeassistant.helpers import device_registry as dr
-
-    device = dr.async_get(hass).async_get(device_id)
+    device = resolve_source_device(hass, device_id)
     if device is None:
         return None
     resolved = resolve_radar_device_profile(

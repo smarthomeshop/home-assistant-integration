@@ -11,7 +11,7 @@ from homeassistant.components import websocket_api
 from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.core import HomeAssistant, callback, valid_entity_id
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DOMAIN,
@@ -41,6 +41,12 @@ from .const import (
 )
 from .storage import SmartHomeShopStore
 from .radar_profiles import discover_radar_device_profiles
+from .device_linking import (
+    config_entries_for_device_domain,
+    entry_matches_source_device,
+    iter_esphome_source_devices,
+    resolve_source_device,
+)
 
 # Water option keys (mirror config_flow); stored in entry.options
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
@@ -208,13 +214,12 @@ def ws_get_devices(
     msg: dict[str, Any],
 ) -> None:
     """Get SmartHomeShop devices."""
-    device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
 
     devices = []
     product_filter = msg.get("product_type")
 
-    for device_entry in device_registry.devices.values():
+    for device_entry in iter_esphome_source_devices(hass):
         # Prefer the ESPHome project info (manufacturer/model); entity_id
         # patterns are only a fallback for firmware without project info.
         detected_product = product_for_device(
@@ -229,36 +234,39 @@ def ws_get_devices(
         # Only ESPHome sensor entities count for online state: our own
         # coordinator entities, update entities and the voice-assistant
         # selects stay available even when the device itself is offline.
-        for entity in entity_registry.entities.values():
-            if entity.device_id == device_entry.id:
-                entity_count += 1
-
-                if entity.platform == "esphome" and entity.domain in (
-                    "sensor",
-                    "binary_sensor",
-                ):
-                    state = hass.states.get(entity.entity_id)
-                    if state is not None:
-                        # The ESPHome status sensor is authoritative: it
-                        # stays available and flips to 'off' on disconnect.
-                        if entity.original_device_class == "connectivity":
-                            if state.state == "on":
-                                online = True
-                            elif state.state == "off":
-                                status_off_since = state.last_changed
-                        elif state.state not in ("unavailable", "unknown"):
+        device_entities = er.async_entries_for_device(
+            entity_registry,
+            device_entry.id,
+            include_disabled_entities=True,
+        )
+        entity_count = len(device_entities)
+        for entity in device_entities:
+            if entity.platform == "esphome" and entity.domain in (
+                "sensor",
+                "binary_sensor",
+            ):
+                state = hass.states.get(entity.entity_id)
+                if state is not None:
+                    # The ESPHome status sensor is authoritative: it stays
+                    # available and flips to 'off' on disconnect.
+                    if entity.original_device_class == "connectivity":
+                        if state.state == "on":
                             online = True
-                        elif state.last_changed and (
-                            last_seen is None or state.last_changed > last_seen
-                        ):
-                            last_seen = state.last_changed
+                        elif state.state == "off":
+                            status_off_since = state.last_changed
+                    elif state.state not in ("unavailable", "unknown"):
+                        online = True
+                    elif state.last_changed and (
+                        last_seen is None or state.last_changed > last_seen
+                    ):
+                        last_seen = state.last_changed
 
-                if not detected_product:
-                    entity_id_lower = entity.entity_id.lower()
-                    for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
-                        if pattern in entity_id_lower:
-                            detected_product = product
-                            break
+            if not detected_product:
+                entity_id_lower = entity.entity_id.lower()
+                for pattern, product in _PATTERNS_MOST_SPECIFIC_FIRST:
+                    if pattern in entity_id_lower:
+                        detected_product = product
+                        break
 
         if status_off_since is not None and not online:
             last_seen = status_off_since
@@ -282,11 +290,7 @@ def ws_get_devices(
             "online": online,
             "last_seen": last_seen.isoformat() if (not online and last_seen) else None,
             "integration_linked": _entry_for_device(hass, device_entry.id) is not None,
-            "esphome_configured": any(
-                (entry := hass.config_entries.async_get_entry(entry_id)) is not None
-                and entry.domain == "esphome"
-                for entry_id in device_entry.config_entries
-            ),
+            "esphome_configured": True,
         })
 
     LOGGER.debug("Found %d SmartHomeShop devices", len(devices))
@@ -391,7 +395,9 @@ def ws_get_device_entities(
 ) -> None:
     """Get all entities for a specific device."""
     entity_registry = er.async_get(hass)
-    device_id = msg["device_id"]
+    requested_device_id = msg["device_id"]
+    source_device = resolve_source_device(hass, requested_device_id)
+    device_id = source_device.id if source_device is not None else requested_device_id
     quiet_hours = resolve_sps30_quiet_hours_entities(entity_registry, device_id)
 
     entities = []
@@ -440,8 +446,10 @@ async def ws_enable_device_entity(
     """Enable an explicitly selected disabled ESPHome entity for a device."""
     entity_registry = er.async_get(hass)
     entity = entity_registry.async_get(msg["entity_id"])
+    source_device = resolve_source_device(hass, msg["device_id"])
+    device_id = source_device.id if source_device is not None else msg["device_id"]
 
-    if entity is None or entity.device_id != msg["device_id"]:
+    if entity is None or entity.device_id != device_id:
         connection.send_error(
             msg["id"], "entity_not_found", "The entity does not belong to this device"
         )
@@ -479,13 +487,11 @@ def ws_get_device_insights(
     msg: dict[str, Any],
 ) -> None:
     """Return internal product insights for a configured device."""
-    device_id = msg["device_id"]
+    requested_device_id = msg["device_id"]
+    source_device = resolve_source_device(hass, requested_device_id)
+    device_id = source_device.id if source_device is not None else requested_device_id
 
-    entry = None
-    for candidate in hass.config_entries.async_entries(DOMAIN):
-        if candidate.data.get("device_id") == device_id:
-            entry = candidate
-            break
+    entry = _entry_for_device(hass, device_id)
 
     online, last_seen = _connectivity_for_device(hass, device_id)
 
@@ -617,17 +623,18 @@ def ws_get_device_insights(
 
 
 def _entry_for_device(hass: HomeAssistant, device_id: str):
-    """Return the SmartHomeShop config entry that owns this device."""
-    from .const import CONF_DEVICE_ID
-
+    """Return the SmartHomeShop entry linked to an ESPHome source device."""
+    source = resolve_source_device(hass, device_id)
+    source_device_id = source.id if source is not None else device_id
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.data.get(CONF_DEVICE_ID) == device_id:
+        if entry_matches_source_device(hass, entry, source_device_id):
             return entry
     return None
 
 
 def _product_for_registry_device(hass: HomeAssistant, device) -> str | None:
     """Resolve a supported product from metadata or its registered entities."""
+    device = resolve_source_device(hass, device.id) or device
     product_type = product_for_device(device.manufacturer, device.model)
     if product_type is not None:
         return product_type
@@ -881,10 +888,11 @@ async def ws_link_device(hass: HomeAssistant, connection, msg: dict) -> None:
         return
 
     device_id = msg["device_id"]
-    device = dr.async_get(hass).async_get(device_id)
+    device = resolve_source_device(hass, device_id)
     if device is None:
         connection.send_error(msg["id"], "not_found", "Device not found")
         return
+    device_id = device.id
 
     if _entry_for_device(hass, device_id) is not None:
         connection.send_error(
@@ -959,10 +967,11 @@ async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
 
     device_id = msg["device_id"]
     mode = msg["mode"]
-    device = dr.async_get(hass).async_get(device_id)
+    device = resolve_source_device(hass, device_id)
     if device is None:
         connection.send_error(msg["id"], "not_found", "Device not found")
         return
+    device_id = device.id
 
     # A caller can provide any registry id over WebSocket. Never let this
     # convenience endpoint remove a device outside the products shown by our
@@ -975,12 +984,7 @@ async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
         return
 
     integration_entry = _entry_for_device(hass, device_id)
-    esphome_entries = [
-        entry
-        for entry_id in device.config_entries
-        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
-        and entry.domain == "esphome"
-    ]
+    esphome_entries = config_entries_for_device_domain(hass, device_id, "esphome")
 
     if mode == "unlink" and integration_entry is None:
         connection.send_error(

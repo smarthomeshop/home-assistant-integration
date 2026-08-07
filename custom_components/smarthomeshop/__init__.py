@@ -29,6 +29,7 @@ from .const import (
 )
 from .load_plugins import load_plugins
 from .websocket_api import async_register_websocket_api
+from .device_linking import prepare_config_entry_source_device
 
 # Import product-specific coordinators
 from .products.waterp1meterkit import WaterP1MeterKitCoordinator
@@ -189,6 +190,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: SmartHomeShopConfigEntry
 ) -> bool:
     """Set up SmartHomeShop from a config entry."""
+    # HA 2026.8 split formerly shared devices into one registry device per
+    # integration.  Always canonicalise to the physical ESPHome split and
+    # remove our obsolete duplicate before entities are created.
+    prepare_config_entry_source_device(hass, entry)
+
     product_type = entry.data.get(CONF_PRODUCT_TYPE)
 
     LOGGER.info("Setting up SmartHomeShop device: %s (%s)", entry.title, product_type)
@@ -281,6 +287,26 @@ async def async_setup_entry(
             prices.async_refresh_tariff_source()
 
     LOGGER.info("SmartHomeShop.io integration setup complete for %s", entry.title)
+    return True
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: SmartHomeShopConfigEntry
+) -> bool:
+    """Migrate product entries to canonical ESPHome source-device links."""
+    if entry.version > 2:
+        LOGGER.error(
+            "Cannot migrate %s from unsupported future version %s",
+            entry.title,
+            entry.version,
+        )
+        return False
+
+    prepare_config_entry_source_device(hass, entry)
+    if entry.version < 2 or entry.minor_version < 1:
+        hass.config_entries.async_update_entry(
+            entry, version=2, minor_version=1
+        )
     return True
 
 

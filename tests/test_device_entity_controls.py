@@ -74,6 +74,7 @@ def test_device_entities_report_registry_disabled_state(monkeypatch) -> None:
     entity = _entity()
     registry = _Registry(entity)
     monkeypatch.setattr(websocket_api.er, "async_get", lambda _hass: registry)
+    monkeypatch.setattr(websocket_api, "resolve_source_device", lambda *_args: None)
     hass = SimpleNamespace(states={})
     connection = _Connection()
 
@@ -91,6 +92,7 @@ def test_enable_device_entity_enables_and_reloads_esphome(monkeypatch) -> None:
     entity = _entity()
     registry = _Registry(entity)
     monkeypatch.setattr(websocket_api.er, "async_get", lambda _hass: registry)
+    monkeypatch.setattr(websocket_api, "resolve_source_device", lambda *_args: None)
     config_entries = _ConfigEntries()
     hass = SimpleNamespace(config_entries=config_entries)
     connection = _Connection()
@@ -117,6 +119,7 @@ def test_enable_rejects_entity_from_another_device(monkeypatch) -> None:
     entity = _entity(device_id="another-device")
     registry = _Registry(entity)
     monkeypatch.setattr(websocket_api.er, "async_get", lambda _hass: registry)
+    monkeypatch.setattr(websocket_api, "resolve_source_device", lambda *_args: None)
     hass = SimpleNamespace(config_entries=_ConfigEntries())
     connection = _Connection()
 

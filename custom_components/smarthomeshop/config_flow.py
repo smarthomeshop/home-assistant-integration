@@ -14,7 +14,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
@@ -40,7 +39,6 @@ from .const import (
     DEFAULT_NIGHT_START,
     DOMAIN,
     LOGGER,
-    PRODUCT_CEILSENSE,
     PRODUCT_DESCRIPTIONS,
     PRODUCT_NAMES,
     PRODUCT_P1METERKIT,
@@ -52,6 +50,11 @@ from .const import (
     PRODUCT_WATERMETERKIT,
     PRODUCT_WATERP1METERKIT,
     product_for_device,
+)
+from .device_linking import (
+    entry_matches_source_device,
+    iter_esphome_source_devices,
+    resolve_source_device,
 )
 
 # WaterFlowKit dual sensor config keys
@@ -69,7 +72,7 @@ CONF_VACATION_MODE_ENTITY = "vacation_mode_entity"
 class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartHomeShop.io."""
 
-    VERSION = 1
+    VERSION = 2
     MINOR_VERSION = 1
 
     def __init__(self) -> None:
@@ -88,7 +91,6 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def _find_devices_for_product(self, product_type: str) -> dict[str, str]:
         """Find all ESPHome devices matching the product type."""
-        device_registry = dr.async_get(self.hass)
         entity_registry = er.async_get(self.hass)
 
         devices: dict[str, str] = {}
@@ -96,7 +98,8 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
 
         LOGGER.debug("Searching for %s devices with patterns: %s", product_type, patterns)
 
-        for device in device_registry.devices.values():
+        existing_entries = self._async_current_entries()
+        for device in iter_esphome_source_devices(self.hass):
             if not device.name:
                 continue
 
@@ -133,9 +136,8 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
 
             if is_match:
                 # Check if already configured
-                existing_entries = self._async_current_entries()
                 already_configured = any(
-                    entry.data.get(CONF_DEVICE_ID) == device.id
+                    entry_matches_source_device(self.hass, entry, device.id)
                     for entry in existing_entries
                 )
 
@@ -290,9 +292,11 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
         if not device_id or product_type not in PRODUCT_NAMES:
             return self.async_abort(reason="invalid_link_request")
 
-        device = dr.async_get(self.hass).async_get(device_id)
+        device = resolve_source_device(self.hass, device_id)
         if device is None:
             return self.async_abort(reason="device_not_found")
+
+        device_id = device.id
 
         self._product_type = product_type
         self._device_id = device_id
@@ -663,7 +667,4 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
 
         # Nothing to configure here: keep whatever is stored.
         return self.async_create_entry(title="", data=dict(self.config_entry.options))
-
-
-
 
