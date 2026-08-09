@@ -37,11 +37,17 @@ management experience.
 
 [Watch the full-quality demo video](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
 
-More product demos:
+### WaterFlowKit
 
-- [WaterFlowKit](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
-- [CeilSense](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
-- [UltimateSensor Mini](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
+[![Watch the SmartHomeShop.io WaterFlowKit demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-waterflowkit-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
+
+### CeilSense
+
+[![Watch the SmartHomeShop.io CeilSense demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ceilsense-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
+
+### UltimateSensor and UltimateSensor Mini
+
+[![Watch the SmartHomeShop.io UltimateSensor demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ultimatesensor-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
 
 ### Manual Installation
 
