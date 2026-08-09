@@ -37,11 +37,17 @@ management experience.
 
 [Watch the full-quality demo video](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
 
-More product demos:
+### WaterFlowKit
 
-- [WaterFlowKit](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
-- [CeilSense](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
-- [UltimateSensor Mini](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
+[![Watch the SmartHomeShop.io WaterFlowKit demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-waterflowkit-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
+
+### CeilSense
+
+[![Watch the SmartHomeShop.io CeilSense demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ceilsense-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
+
+### UltimateSensor and UltimateSensor Mini
+
+[![Watch the SmartHomeShop.io UltimateSensor demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ultimatesensor-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
 
 ### Manual Installation
 
@@ -105,6 +111,9 @@ prefixes remain supported.
 - A `top_or_side` radar reports a visible mismatch when its hardware mode does
   not suit the mounting profile. Changing that mode always requires explicit
   user confirmation.
+- Wall-mounted LD2460 devices expose their radar-stored mounting height and
+  downward angle directly in Room Designer. Values are written through Home
+  Assistant and only shown as saved after the radar reports them back.
 - Existing saved rooms keep their range, field of view, height and projection
   until the user chooses to adopt new firmware defaults.
 - Older firmware continues to work through a clearly identified legacy

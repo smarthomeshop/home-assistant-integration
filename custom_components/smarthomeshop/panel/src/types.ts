@@ -212,6 +212,10 @@ export interface RadarProfilePayload {
   current_hardware_mode?: 'top' | 'side' | null;
   installation_mode_entity_id?: string | null;
   installation_mode_options: string[];
+  installation_height_entity_id?: string | null;
+  installation_height_m?: number | null;
+  installation_angle_entity_id?: string | null;
+  installation_angle_deg?: number | null;
   missing_metadata_entities: string[];
   invalid_metadata_entities: string[];
   positioning_available: boolean;

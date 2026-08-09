@@ -10,6 +10,7 @@
     "copy": "cp dist/smarthomeshop-panel.js ../www/smarthomeshop-panel.js",
     "test:furniture": "node --test test/furniture-rotation.test.mjs",
     "test:quiet-hours": "node --test test/sps30-quiet-hours.test.mjs",
+    "test:radar-installation": "node --test test/radar-installation.test.mjs",
     "watch": "rollup -c -w"
   },
   "dependencies": {

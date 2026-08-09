@@ -1575,6 +1575,9 @@ export class SettingsPage extends LitElement {
     if (value.includes('humidity_offset') || value.includes('humidity offset')) return 'desc.humidity_offset';
     if (value.includes('occupancy_off_delay') || value.includes('occupancy off delay')) return 'desc.occupancy_delay';
     if (value.includes('tracking_presence_timeout') || value.includes('tracking presence timeout')) return 'desc.tracking_timeout';
+    if (value.includes('installation_height') || value.includes('installation height')) return 'desc.ld2460_installation_height';
+    if (value.includes('installation_angle') || value.includes('installation angle')) return 'desc.ld2460_installation_angle';
+    if (value.includes('installation_mode') || value.includes('installation mode')) return 'desc.ld2460_installation_mode';
     if (value.includes('engineering_mode') || value.includes('engineering mode')) return 'desc.engineering';
     if (value.includes('bluetooth')) return 'desc.radar_bluetooth';
     if (value.includes('distance_resolution') || value.includes('distance resolution')) return 'desc.distance_resolution';

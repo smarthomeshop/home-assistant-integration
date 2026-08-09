@@ -119,10 +119,20 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
     entries += [
         _entity("binary_sensor.mini_v2_ld2412_presence", "LD2412 Presence", "on"),
         _entity(
-            "select.mini_v2_tracking_installation_mode",
-            "Tracking Installation Mode",
+            "select.arbitrary_user_renamed_mode_entity",
+            "Tracking Radar Installation Mode",
             "top",
             options=("side", "top"),
+        ),
+        _entity(
+            "number.completely_custom_height_entity",
+            "Tracking Radar Installation Height",
+            "2.60",
+        ),
+        _entity(
+            "number.another_unrelated_prefix_for_angle",
+            "Tracking Radar Installation Angle",
+            "30.0",
         ),
     ]
     radar = _resolve("Mini V2 LD2460", "ultimatesensor_mini_v2", entries)
@@ -132,8 +142,40 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
     assert radar.profile.maximum_targets == 5
     assert radar.profile.required_installation_mode == "side"
     assert radar.profile.current_hardware_mode == "top"
+    assert radar.profile.installation_mode_entity_id == (
+        "select.arbitrary_user_renamed_mode_entity"
+    )
     assert radar.profile.installation_mode_options == ("side", "top")
+    assert radar.profile.installation_height_entity_id == (
+        "number.completely_custom_height_entity"
+    )
+    assert radar.profile.installation_height_m == 2.6
+    assert radar.profile.installation_angle_entity_id == (
+        "number.another_unrelated_prefix_for_angle"
+    )
+    assert radar.profile.installation_angle_deg == 30
     assert len(radar.targets) == 5
+
+
+def test_ld2460_partial_installation_controls_remain_explicit() -> None:
+    entries = _metadata("hall", mounting="wall", model="ld2460")
+    entries += _targets("hall", 5, tracking=True)
+    entries.append(
+        _entity(
+            "number.hall_calibration_height",
+            "Installation Height",
+            "unavailable",
+        )
+    )
+
+    radar = _resolve("Hall LD2460", "ultimatesensor_v2", entries)
+
+    assert radar.profile.installation_height_entity_id == (
+        "number.hall_calibration_height"
+    )
+    assert radar.profile.installation_height_m is None
+    assert radar.profile.installation_angle_entity_id is None
+    assert radar.profile.installation_angle_deg is None
 
 
 def test_ultimate_sensor_v1_is_a_supported_ld2450_product() -> None:
