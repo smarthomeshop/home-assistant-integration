@@ -83,8 +83,21 @@ class RadarProfile:
     detected_product: str | None
     supplementary_presence_sensors: tuple[str, ...]
     current_hardware_mode: str | None
+    reported_installation_mode_entity_id: str | None
     installation_mode_entity_id: str | None
     installation_mode_options: tuple[str, ...]
+    installation_height_entity_id: str | None
+    installation_height_m: float | None
+    installation_angle_entity_id: str | None
+    installation_angle_deg: float | None
+    detection_distance_entity_id: str | None
+    detection_distance_m: float | None
+    detection_start_angle_entity_id: str | None
+    detection_start_angle_deg: float | None
+    detection_end_angle_entity_id: str | None
+    detection_end_angle_deg: float | None
+    tracking_presence_entity_id: str | None
+    tracking_target_count_entity_id: str | None
     missing_metadata_entities: tuple[str, ...]
     invalid_metadata_entities: tuple[str, ...]
     positioning_available: bool
@@ -363,22 +376,54 @@ def _supplementary_presence_sensors(
     return tuple(sorted(set(found)))
 
 
-def _installation_mode(
+def _reported_installation_mode(
     entities: Iterable[RadarEntitySnapshot],
-) -> tuple[str | None, str | None, tuple[str, ...]]:
+) -> tuple[str | None, str | None]:
+    """Resolve the read-only mode reported by the radar itself."""
+    candidates: list[tuple[int, str, RadarEntitySnapshot]] = []
+    for entity in entities:
+        if entity.platform != "esphome" or not entity.entity_id.startswith("text_sensor."):
+            continue
+        original = _normalise(entity.original_name)
+        if original in {
+            "tracking radar installation mode",
+            "tracking installation mode",
+        }:
+            candidates.append((0, entity.entity_id, entity))
+        elif any(
+            _safe_suffix(entity.entity_id, suffix)
+            for suffix in ("tracking_installation_mode", "tracking_radar_installation_mode")
+        ):
+            candidates.append((1, entity.entity_id, entity))
+    if not candidates:
+        return None, None
+    entity = min(candidates, key=lambda item: (item[0], item[1]))[2]
+    state = _valid_state(entity.state)
+    return (state if state in {"top", "side"} else None), entity.entity_id
+
+
+def _installation_mode_control(
+    entities: Iterable[RadarEntitySnapshot],
+) -> tuple[str | None, tuple[str, ...]]:
     candidates: list[tuple[int, str, RadarEntitySnapshot]] = []
     for entity in entities:
         if entity.platform != "esphome" or not entity.entity_id.startswith("select."):
             continue
         original = _normalise(entity.original_name)
         body = _entity_body(entity.entity_id)
-        if original in {"radar installation mode", "tracking installation mode", "installation mode"}:
+        if original in {
+            "radar installation mode",
+            "tracking radar installation mode",
+            "tracking installation mode",
+            "installation mode",
+        }:
             candidates.append((0, entity.entity_id, entity))
         elif any(
             _safe_suffix(entity.entity_id, suffix)
             for suffix in (
                 "radar_installation_mode",
                 "tracking_installation_mode",
+                "tracking_installation_mode_select",
                 "ld2460_installation_mode",
                 "ld6002b_installation_mode",
                 "installation_mode",
@@ -386,16 +431,68 @@ def _installation_mode(
         ) and "required_installation_mode" not in body:
             candidates.append((1, entity.entity_id, entity))
     if not candidates:
-        return None, None, ()
+        return None, ()
     entity = min(candidates, key=lambda item: (item[0], item[1]))[2]
-    state = _valid_state(entity.state)
-    current = state if state in {"top", "side"} else None
     raw_options = entity.attributes.get("options", ())
     options = tuple(
         str(option) for option in raw_options
         if str(option).strip().lower() in {"top", "side"}
     ) if isinstance(raw_options, (list, tuple)) else ()
-    return current, entity.entity_id, options
+    return entity.entity_id, options
+
+
+def _tracking_entity(
+    entities: Iterable[RadarEntitySnapshot],
+    *,
+    domain: str,
+    original_names: tuple[str, ...],
+    suffixes: tuple[str, ...],
+) -> str | None:
+    """Resolve a live tracking entity through registry identity, never a prefix."""
+    expected = {_normalise(name) for name in original_names}
+    candidates: list[tuple[int, str]] = []
+    for entity in entities:
+        if entity.platform != "esphome" or not entity.entity_id.startswith(f"{domain}."):
+            continue
+        if _normalise(entity.original_name) in expected:
+            candidates.append((0, entity.entity_id))
+        elif any(_safe_suffix(entity.entity_id, suffix) for suffix in suffixes):
+            candidates.append((1, entity.entity_id))
+    return min(candidates)[1] if candidates else None
+
+
+def _installation_number(
+    entities: Iterable[RadarEntitySnapshot],
+    *,
+    original_names: tuple[str, ...],
+    suffixes: tuple[str, ...],
+    minimum: float,
+    maximum: float,
+) -> tuple[str | None, float | None]:
+    """Resolve one LD2460 config number without assuming an entity prefix."""
+    expected_names = {_normalise(name) for name in original_names}
+    candidates: list[tuple[int, str, RadarEntitySnapshot]] = []
+    for entity in entities:
+        if entity.platform != "esphome" or not entity.entity_id.startswith("number."):
+            continue
+        if _normalise(entity.original_name) in expected_names:
+            candidates.append((0, entity.entity_id, entity))
+        elif any(_safe_suffix(entity.entity_id, suffix) for suffix in suffixes):
+            candidates.append((1, entity.entity_id, entity))
+    if not candidates:
+        return None, None
+
+    entity = min(candidates, key=lambda item: (item[0], item[1]))[2]
+    state = _valid_state(entity.state)
+    if state is None:
+        return entity.entity_id, None
+    try:
+        value = float(state)
+    except (TypeError, ValueError):
+        return entity.entity_id, None
+    if not math.isfinite(value) or value < minimum or value > maximum:
+        return entity.entity_id, None
+    return entity.entity_id, value
 
 
 def _has_entity(
@@ -479,7 +576,82 @@ def resolve_radar_device_profile(
 
     maximum_targets = int(values.get("maximum_targets") or defaults.get("maximum_targets", target_pair_count))
     targets = _discover_targets(snapshots, maximum_targets)
-    current_mode, mode_entity, mode_options = _installation_mode(snapshots)
+    current_mode, reported_mode_entity = _reported_installation_mode(snapshots)
+    mode_entity, mode_options = _installation_mode_control(snapshots)
+    height_entity: str | None = None
+    height_m: float | None = None
+    angle_entity: str | None = None
+    angle_deg: float | None = None
+    detection_distance_entity: str | None = None
+    detection_distance_m: float | None = None
+    detection_start_entity: str | None = None
+    detection_start_deg: float | None = None
+    detection_end_entity: str | None = None
+    detection_end_deg: float | None = None
+    if radar_model == "ld2460":
+        height_entity, height_m = _installation_number(
+            snapshots,
+            original_names=(
+                "Tracking Radar Installation Height",
+                "LD2460 Installation Height",
+                "Installation Height",
+            ),
+            suffixes=(
+                "tracking_radar_installation_height",
+                "ld2460_installation_height",
+                "installation_height",
+            ),
+            minimum=0.1,
+            maximum=10.0,
+        )
+        angle_entity, angle_deg = _installation_number(
+            snapshots,
+            original_names=(
+                "Tracking Radar Installation Angle",
+                "LD2460 Installation Angle",
+                "Installation Angle",
+            ),
+            suffixes=(
+                "tracking_radar_installation_angle",
+                "ld2460_installation_angle",
+                "installation_angle",
+            ),
+            minimum=0.0,
+            maximum=90.0,
+        )
+        detection_distance_entity, detection_distance_m = _installation_number(
+            snapshots,
+            original_names=("Tracking Radar Detection Distance", "Tracking Detection Distance"),
+            suffixes=("tracking_detection_distance", "tracking_radar_detection_distance"),
+            minimum=0.1,
+            maximum=6.0,
+        )
+        detection_start_entity, detection_start_deg = _installation_number(
+            snapshots,
+            original_names=("Tracking Radar Detection Start Angle", "Tracking Detection Start Angle"),
+            suffixes=("tracking_detection_start_angle", "tracking_radar_detection_start_angle"),
+            minimum=-60.0,
+            maximum=60.0,
+        )
+        detection_end_entity, detection_end_deg = _installation_number(
+            snapshots,
+            original_names=("Tracking Radar Detection End Angle", "Tracking Detection End Angle"),
+            suffixes=("tracking_detection_end_angle", "tracking_radar_detection_end_angle"),
+            minimum=-60.0,
+            maximum=60.0,
+        )
+    tracking_presence_entity = _tracking_entity(
+        snapshots,
+        domain="binary_sensor",
+        original_names=("Tracking Presence",),
+        suffixes=("tracking_presence",),
+    )
+    tracking_target_count_entity = _tracking_entity(
+        snapshots,
+        domain="sensor",
+        original_names=("Tracking Target Count",),
+        suffixes=("tracking_target_count",),
+    )
     supplementary = _supplementary_presence_sensors(snapshots, radar_model)
 
     if targets:
@@ -505,8 +677,21 @@ def resolve_radar_device_profile(
         detected_product=product,
         supplementary_presence_sensors=supplementary,
         current_hardware_mode=current_mode,
+        reported_installation_mode_entity_id=reported_mode_entity,
         installation_mode_entity_id=mode_entity,
         installation_mode_options=mode_options,
+        installation_height_entity_id=height_entity,
+        installation_height_m=height_m,
+        installation_angle_entity_id=angle_entity,
+        installation_angle_deg=angle_deg,
+        detection_distance_entity_id=detection_distance_entity,
+        detection_distance_m=detection_distance_m,
+        detection_start_angle_entity_id=detection_start_entity,
+        detection_start_angle_deg=detection_start_deg,
+        detection_end_angle_entity_id=detection_end_entity,
+        detection_end_angle_deg=detection_end_deg,
+        tracking_presence_entity_id=tracking_presence_entity,
+        tracking_target_count_entity_id=tracking_target_count_entity,
         missing_metadata_entities=tuple(missing),
         invalid_metadata_entities=tuple(invalid),
         positioning_available=radar_model in POSITIONING_RADARS and bool(targets),

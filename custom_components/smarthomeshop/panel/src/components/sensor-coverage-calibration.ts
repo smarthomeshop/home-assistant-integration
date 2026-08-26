@@ -1,5 +1,8 @@
 import { LitElement, css, html, nothing, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
+import type { HomeAssistant } from '../types';
+import { evaluateRadarOrientationWalk } from '../utils/radar-installation';
+import { settingsText } from '../utils/settings-translations';
 
 export interface CalibrationPoint {
   x: number;
@@ -11,7 +14,9 @@ export interface CalibrationTarget extends CalibrationPoint {
 }
 
 const CAPTURE_DURATION_MS = 5000;
-const CORNER_LABELS = ['Front-left', 'Front-right', 'Back-right', 'Back-left'];
+const ORIENTATION_CAPTURE_DURATION_MS = 4000;
+const ORIENTATION_CAPTURE_TIMEOUT_MS = 12000;
+const CORNER_KEYS = ['near_left', 'near_right', 'far_right', 'far_left'] as const;
 
 @customElement('shs-sensor-coverage-calibration')
 export class SensorCoverageCalibration extends LitElement {
@@ -22,15 +27,23 @@ export class SensorCoverageCalibration extends LitElement {
   @property({ type: String }) sensorName = 'Selected sensor';
   @property({ type: String }) mountingMode: 'wall' | 'ceiling' = 'wall';
   @property({ type: String }) radarModel = 'positioning radar';
+  @property({ attribute: false }) hass?: HomeAssistant;
+  @property({ type: Boolean }) requiresOrientationCheck = false;
+  @property({ type: Boolean }) isRemeasurement = false;
 
   @state() private _activeCorner = 0;
   @state() private _corners: Array<CalibrationPoint | null> = [null, null, null, null];
   @state() private _capturing = false;
   @state() private _capturePaused = false;
   @state() private _captureProgress = 0;
+  @state() private _orientation: Record<'forward' | 'sideways', 'idle' | 'recording' | 'passed' | 'failed'> = {
+    forward: 'idle',
+    sideways: 'idle',
+  };
 
   private _captureFrame: number | null = null;
   private _captureCancelled = false;
+  private _orientationFrame: number | null = null;
   private _initialized = false;
   private _hasInteracted = false;
   private _initialCornersKey = '';
@@ -54,6 +67,10 @@ export class SensorCoverageCalibration extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('keydown', this._handleKeydown);
     this._cancelCapture();
+    if (this._orientationFrame !== null) {
+      cancelAnimationFrame(this._orientationFrame);
+      this._orientationFrame = null;
+    }
   }
 
   private _handleKeydown = (event: KeyboardEvent) => {
@@ -172,13 +189,55 @@ export class SensorCoverageCalibration extends LitElement {
     }));
   }
 
+  private _text(key: string): string {
+    return settingsText(this.hass, key);
+  }
+
+  private _cornerLabel(index: number): string {
+    return this._text(`radar.coverage.${CORNER_KEYS[index]}`);
+  }
+
+  private _startOrientationCheck(kind: 'forward' | 'sideways'): void {
+    if (Object.values(this._orientation).includes('recording') || this._activeTargets.length !== 1) return;
+    this._orientation = { ...this._orientation, [kind]: 'recording' };
+    const samples: CalibrationPoint[] = [];
+    let validElapsed = 0;
+    let previous = performance.now();
+    const started = previous;
+    const frame = (now: number) => {
+      const elapsed = Math.min(250, now - previous);
+      previous = now;
+      const targets = this._activeTargets;
+      if (targets.length === 1) {
+        validElapsed += elapsed;
+        samples.push({ x: targets[0].x, y: targets[0].y });
+      }
+      if (validElapsed < ORIENTATION_CAPTURE_DURATION_MS && now - started < ORIENTATION_CAPTURE_TIMEOUT_MS) {
+        this._orientationFrame = requestAnimationFrame(frame);
+        return;
+      }
+      this._orientationFrame = null;
+      this._orientation = {
+        ...this._orientation,
+        [kind]: validElapsed >= ORIENTATION_CAPTURE_DURATION_MS
+          && evaluateRadarOrientationWalk(kind, samples) ? 'passed' : 'failed',
+      };
+    };
+    this._orientationFrame = requestAnimationFrame(frame);
+  }
+
   private _save(): void {
-    if (!this._hasValidShape()) return;
+    if (!this._hasValidShape() || !this._orientationReady) return;
     this.dispatchEvent(new CustomEvent('calibration-save', {
       detail: { corners: this._corners.map(point => ({ ...point! })) },
       bubbles: true,
       composed: true,
     }));
+  }
+
+  private get _orientationReady(): boolean {
+    return !this.requiresOrientationCheck
+      || (this._orientation.forward === 'passed' && this._orientation.sideways === 'passed');
   }
 
   private _plotPoint(point: CalibrationPoint): { x: number; y: number } {
@@ -318,8 +377,57 @@ export class SensorCoverageCalibration extends LitElement {
             </div>
           </div>
 
+          <div class="axis-guide">
+            <ha-icon icon="mdi:axis-arrow"></ha-icon>
+            <div>
+              <strong>${this._text('radar.coverage.axes_title')}</strong>
+              <span>${this._text('radar.coverage.axes_description')}</span>
+            </div>
+          </div>
+
+          ${this.isRemeasurement ? html`
+            <div class="remeasure-notice" role="status">
+              <ha-icon icon="mdi:backup-restore"></ha-icon>
+              <span>${this._text('radar.coverage.remeasure_notice')}</span>
+            </div>
+          ` : nothing}
+
+          ${this.requiresOrientationCheck ? html`
+            <section class="orientation-check" aria-labelledby="orientation-title">
+              <div>
+                <strong id="orientation-title">${this._text('radar.orientation.title')}</strong>
+                <p>${this._text('radar.orientation.description')}</p>
+              </div>
+              <div class="orientation-actions">
+                ${(['forward', 'sideways'] as const).map(kind => html`
+                  <button class="orientation-action ${this._orientation[kind]}"
+                    @click="${() => this._startOrientationCheck(kind)}"
+                    ?disabled="${this._activeTargets.length !== 1 || Object.values(this._orientation).includes('recording')}">
+                    <ha-icon icon="${this._orientation[kind] === 'passed' ? 'mdi:check-circle' : kind === 'forward' ? 'mdi:arrow-up-bold' : 'mdi:arrow-left-right-bold'}"></ha-icon>
+                    <span>
+                      <strong>${this._text(`radar.orientation.${kind}`)}</strong>
+                      <small>${this._orientation[kind] === 'recording'
+                        ? this._text('radar.orientation.recording')
+                        : this._orientation[kind] === 'passed'
+                          ? this._text('radar.orientation.passed')
+                          : this._orientation[kind] === 'failed'
+                            ? this._text('radar.orientation.failed')
+                            : this._text('radar.orientation.start')}</small>
+                    </span>
+                  </button>
+                `)}
+              </div>
+              ${this._orientation.forward === 'failed' || this._orientation.sideways === 'failed' ? html`
+                <div class="orientation-warning" role="alert">
+                  <ha-icon icon="mdi:rotate-3d-variant"></ha-icon>
+                  <span>${this._text('radar.orientation.physical_warning')}</span>
+                </div>
+              ` : nothing}
+            </section>
+          ` : nothing}
+
           <div class="corner-progress" aria-label="Calibration points">
-            ${CORNER_LABELS.map((label, index) => html`
+            ${CORNER_KEYS.map((_key, index) => html`
               <button
                 class="corner-chip ${this._corners[index] ? 'done' : ''} ${this._activeCorner === index ? 'active' : ''}"
                 @click="${() => this._selectCorner(index)}"
@@ -327,7 +435,7 @@ export class SensorCoverageCalibration extends LitElement {
                 aria-current="${this._activeCorner === index ? 'step' : 'false'}"
               >
                 <span class="corner-number">${this._corners[index] ? '✓' : index + 1}</span>
-                ${label}
+                ${this._cornerLabel(index)}
               </button>
               ${index < 3 ? html`<ha-icon class="step-arrow" icon="mdi:chevron-right"></ha-icon>` : nothing}
             `)}
@@ -335,8 +443,8 @@ export class SensorCoverageCalibration extends LitElement {
 
           <p class="current-step">
             Point ${this._activeCorner + 1} of 4:
-            <strong>${CORNER_LABELS[this._activeCorner]}</strong>
-            <span>Names follow the direction shown in Room Designer.</span>
+            <strong>${this._cornerLabel(this._activeCorner)}</strong>
+            <span>${this._text('radar.coverage.axes_description')}</span>
           </p>
 
           ${this._renderCoveragePlot()}
@@ -353,7 +461,7 @@ export class SensorCoverageCalibration extends LitElement {
                 <span>
                   ${this._capturePaused
                     ? 'Exactly one visible target is needed. The timer will continue automatically.'
-                    : `Measuring ${CORNER_LABELS[this._activeCorner]}...`}
+                    : `Measuring ${this._cornerLabel(this._activeCorner)}...`}
                 </span>
               </div>
               <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"
@@ -375,14 +483,14 @@ export class SensorCoverageCalibration extends LitElement {
           <footer>
             <button class="button secondary" @click="${this._cancel}" ?disabled="${this._capturing}">Cancel</button>
             ${allMarked ? html`
-              <button class="button primary" @click="${this._save}" ?disabled="${!validShape}">
+              <button class="button primary" @click="${this._save}" ?disabled="${!validShape || !this._orientationReady}">
                 <ha-icon icon="mdi:content-save-outline"></ha-icon>
                 Save detection area
               </button>
             ` : html`
               <button class="button primary" @click="${this._startCapture}" ?disabled="${!canMark}">
                 <ha-icon icon="mdi:map-marker-radius"></ha-icon>
-                Mark ${CORNER_LABELS[this._activeCorner]}
+                Mark ${this._cornerLabel(this._activeCorner)}
               </button>
             `}
           </footer>
@@ -485,6 +593,57 @@ export class SensorCoverageCalibration extends LitElement {
       font-size: 12.5px;
       line-height: 1.5;
     }
+    .axis-guide,
+    .remeasure-notice {
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 11px;
+      align-items: start;
+      margin: -10px 0 24px;
+      padding: 13px 15px;
+      border: 1px solid var(--divider-color, #d9dee8);
+      border-radius: 11px;
+      background: var(--secondary-background-color, #eef1f6);
+    }
+    .axis-guide ha-icon,
+    .remeasure-notice ha-icon { --mdc-icon-size: 20px; color: var(--calibration-blue); }
+    .axis-guide strong,
+    .axis-guide span { display: block; }
+    .axis-guide strong { margin-bottom: 4px; font-size: 12.5px; }
+    .axis-guide span,
+    .remeasure-notice span {
+      color: var(--secondary-text-color, #5f6878);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .remeasure-notice {
+      margin-top: -12px;
+      border-color: color-mix(in srgb, var(--calibration-blue) 28%, var(--divider-color, #d9dee8));
+      background: color-mix(in srgb, var(--calibration-blue) 7%, var(--card-background-color, #fbfcfe));
+    }
+    .orientation-check {
+      margin: -8px 0 24px;
+      padding: 16px;
+      border: 1px solid var(--divider-color, #d9dee8);
+      border-radius: 12px;
+      background: var(--card-background-color, #fbfcfe);
+    }
+    .orientation-check > div > strong { display: block; font-size: 13px; }
+    .orientation-check p { margin: 5px 0 13px; color: var(--secondary-text-color, #5f6878); font-size: 12px; line-height: 1.5; }
+    .orientation-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .orientation-action { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; align-items: center; min-height: 58px; padding: 10px; border: 1px solid var(--divider-color, #d9dee8); border-radius: 9px; background: var(--secondary-background-color, #eef1f6); color: var(--primary-text-color, #172033); text-align: left; cursor: pointer; }
+    .orientation-action:hover:not(:disabled) { border-color: var(--calibration-blue); }
+    .orientation-action:focus-visible { outline: 2px solid var(--calibration-blue); outline-offset: 2px; }
+    .orientation-action:disabled { opacity: .62; cursor: not-allowed; }
+    .orientation-action.passed { border-color: color-mix(in srgb, var(--calibration-green) 45%, transparent); background: color-mix(in srgb, var(--calibration-green) 9%, var(--card-background-color, #fbfcfe)); }
+    .orientation-action.failed { border-color: color-mix(in srgb, var(--calibration-amber) 52%, transparent); }
+    .orientation-action ha-icon { --mdc-icon-size: 22px; color: var(--calibration-blue); }
+    .orientation-action.passed ha-icon { color: var(--calibration-green); }
+    .orientation-action span, .orientation-action strong, .orientation-action small { display: block; min-width: 0; }
+    .orientation-action strong { font-size: 12px; }
+    .orientation-action small { margin-top: 3px; color: var(--secondary-text-color, #5f6878); font-size: 10.5px; line-height: 1.3; }
+    .orientation-warning { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 9px; margin-top: 11px; padding: 10px; border-radius: 8px; background: color-mix(in srgb, var(--calibration-amber) 10%, var(--card-background-color, #fbfcfe)); color: #b45309; font-size: 11px; line-height: 1.45; }
+    .orientation-warning ha-icon { --mdc-icon-size: 19px; }
     .corner-progress {
       display: flex;
       align-items: center;
@@ -697,6 +856,7 @@ export class SensorCoverageCalibration extends LitElement {
         padding: 22px 16px 20px;
       }
       .range-notice { grid-template-columns: 28px minmax(0, 1fr); padding: 13px; }
+      .orientation-actions { grid-template-columns: 1fr; }
       .corner-progress { margin-inline: -2px; }
       .step-arrow { display: none; }
       .coverage-plot svg { height: 245px; }

@@ -8,11 +8,16 @@ import { LitElement, html, css, nothing, PropertyValues, svg } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
-import { Room3DRenderer, collectWorldTargets, Scene3D } from '../utils/room3d';
+import { Room3DRenderer, Scene3D } from '../utils/room3d';
 import { relativeTime } from '../utils/helpers';
 import { loadHistorySeries, type HistoryPoint } from '../utils/history';
 import { productLogo } from '../utils/product-logos';
 import { resolveFurnitureRotation } from '../utils/furniture-geometry';
+import {
+  normaliseRoomViewHeight,
+  resolveRoomForDevice,
+  roomSensorForDevice,
+} from '../utils/room-selection';
 import './sensor-settings';
 import { debugLog } from '../utils/debug';
 
@@ -49,6 +54,8 @@ interface RadarCardConfig {
   show_nox_trend?: boolean;
   view_mode?: 'radar' | 'room';
   room_view_mode?: '2d' | '3d';
+  room_id?: string;
+  room_height?: number;
 }
 
 type TrendMetric = 'temperature' | 'humidity' | 'co2' | 'illuminance' | 'voc' | 'nox';
@@ -172,6 +179,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   @state() private _showSettings: boolean = false;
   @state() private _rooms: any[] = [];
   @state() private _selectedRoomId: string | null = null;
+  @state() private _roomsError: string | null = null;
   @state() private _roomViewMode: '2d' | '3d' = '2d';
   @state() private _trends: Record<string, TrendSeries> = {};
 
@@ -776,7 +784,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     }
     .canvas-3d {
       width: 100%;
-      height: 300px;
+      height: var(--shs-room-view-height, 360px);
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
       border-radius: 12px;
       cursor: grab;
@@ -798,6 +806,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       margin-bottom: 16px;
       opacity: 0.5;
     }
+    .room-floorplan { width: 100%; height: var(--shs-room-view-height, 360px); }
     .radar-container {
       position: relative;
       width: 100%;
@@ -994,6 +1003,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       ...config,
     };
     this._roomViewMode = this._config.room_view_mode || '2d';
+    if (this._roomsLoaded) this._syncSelectedRoom();
     if (this._roomViewMode === '3d') {
       setTimeout(() => this._init3DView(), 100);
     }
@@ -1001,6 +1011,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
   public getCardSize(): number {
     return 6;
+  }
+
+  public getGridOptions(): { columns: number; min_columns: number; min_rows: number } {
+    return { columns: 12, min_columns: 4, min_rows: 4 };
   }
 
   private _roomsLoaded = false;
@@ -1034,10 +1048,8 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       const result = await this.hass.callWS<{ rooms?: any[] }>({ type: "smarthomeshop/rooms" });
       debugLog("SmartHomeShop: WebSocket result:", result);
       this._rooms = Array.isArray(result?.rooms) ? result.rooms : [];
-      if (this._rooms.length > 0 && !this._selectedRoomId) {
-        this._selectedRoomId = this._rooms[0]?.id || null;
-        debugLog("SmartHomeShop: Auto-selected room:", this._selectedRoomId);
-      }
+      this._roomsError = null;
+      this._syncSelectedRoom();
       this._roomsLoaded = true;
       debugLog("SmartHomeShop: Loaded", this._rooms.length, "rooms:", this._rooms.map(r => r.name).join(", "));
       if (this._roomViewMode === '3d') {
@@ -1046,7 +1058,22 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     } catch (e) {
       console.error("SmartHomeShop: Could not load rooms:", e);
       this._rooms = [];
+      this._roomsLoaded = true;
+      this._roomsError = 'Rooms could not be loaded. Reload the card or check the SmartHomeShop integration.';
     }
+  }
+
+  private _roomAliases(): Array<string | null | undefined> {
+    return [this._config.device_id, this._entityPrefix, this._radarPrefix];
+  }
+
+  private _syncSelectedRoom(): void {
+    const room = resolveRoomForDevice(this._rooms, this._roomAliases(), this._config.room_id);
+    this._selectedRoomId = room?.id || null;
+  }
+
+  private _roomSensor(room: any): any | null {
+    return roomSensorForDevice(room, this._roomAliases());
   }
 
   private _stopUpdates(): void {
@@ -1076,6 +1103,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     // Render 3D view when switching to 3D mode
     if (changedProps.has('_roomViewMode') && this._roomViewMode === '3d') {
       setTimeout(() => this._render3DView(), 50);
+    }
+    if (changedProps.has('_entityPrefix') || changedProps.has('_radarPrefix')) {
+      this._syncSelectedRoom();
     }
   }
 
@@ -1694,6 +1724,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     `;
 
     const room = this._rooms.find(r => r.id === this._selectedRoomId);
+    const roomSensor = this._roomSensor(room);
 
     // Walls are stored as line segments: { x1, y1, x2, y2 }
     // We need to extract corner points from these segments
@@ -1715,7 +1746,17 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     // Validate room has at least 3 corner points
     const hasValidWalls = cornerPoints.length >= 3;
 
-    if (!room || !hasValidWalls) {
+    if (this._roomsError) {
+      return html`
+        ${toggle}
+        <div class="no-room-message" role="alert">
+          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+          <div>${this._roomsError}</div>
+        </div>
+      `;
+    }
+
+    if (!room || !hasValidWalls || !roomSensor) {
       // Only log warning if rooms are loaded but validation still fails
       if (this._roomsLoaded && this._rooms.length > 0) {
         console.warn("SmartHomeShop: Room validation failed", {
@@ -1728,10 +1769,14 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
         ${toggle}
         <div class="no-room-message">
           <ha-icon icon="mdi:floor-plan"></ha-icon>
-          <div>${this._roomsLoaded ? 'No room configured' : 'Loading rooms...'}</div>
+          <div>${this._roomsLoaded
+            ? room && !roomSensor
+              ? 'This sensor is not linked to the selected room'
+              : 'No linked room configured for this sensor'
+            : 'Loading rooms...'}</div>
           ${this._roomsLoaded ? html`
             <div style="font-size: 0.8rem; margin-top: 8px;">
-              Create a room in the SmartHomeShop panel first
+              Link this exact device to a sensor placement in Room Designer, or select a room override in the card editor.
             </div>
           ` : nothing}
         </div>
@@ -1770,17 +1815,17 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       .join(' ') + ' Z';
 
     // Sensor position (convert from mm to meters if stored in mm)
-    const sensorX = room.sensor?.x ? room.sensor.x / 1000 : (minX + maxX) / 2;
-    const sensorY = room.sensor?.y ? room.sensor.y / 1000 : minY + 0.5;
-    const sensorRotation = room.sensor?.rotation ?? 270; // Default: pointing up (270°)
-    const sensorRange = (room.sensor?.range ?? 6000) / 1000; // Convert mm to meters
-    const sensorFov = room.sensor?.fov ?? 120; // Default FOV in degrees
+    const sensorX = Number.isFinite(Number(roomSensor.x)) ? Number(roomSensor.x) / 1000 : (minX + maxX) / 2;
+    const sensorY = Number.isFinite(Number(roomSensor.y)) ? Number(roomSensor.y) / 1000 : minY + 0.5;
+    const sensorRotation = Number.isFinite(Number(roomSensor.rotation)) ? Number(roomSensor.rotation) : 270;
+    const sensorRange = (Number.isFinite(Number(roomSensor.range)) ? Number(roomSensor.range) : 6000) / 1000;
+    const sensorFov = Number.isFinite(Number(roomSensor.fov)) ? Number(roomSensor.fov) : 120;
     const sensorPos = {
       x: isNaN(sensorX) ? (minX + maxX) / 2 : sensorX,
       y: isNaN(sensorY) ? minY + 0.5 : sensorY
     };
-    // Show targets that are either active OR have non-zero X/Y values
-    const activeTargets = this._targets.filter(t => t.active || (t.x !== 0 || t.y !== 0));
+    // Never revive coordinates from an inactive or unavailable target slot.
+    const activeTargets = this._targets.filter(t => t.active && Number.isFinite(t.x) && Number.isFinite(t.y));
     debugLog('SmartHomeShop: Room targets:', JSON.stringify(this._targets), 'Active/visible:', activeTargets.length);
 
     // Calculate FOV triangle points based on rotation
@@ -1817,8 +1862,8 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
     return html`
       ${toggle}
-      <svg viewBox="${viewMinX} ${viewMinY} ${viewWidth} ${viewHeight}"
-           style="width: 100%; height: 300px; background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); border-radius: 12px;">
+      <svg class="room-floorplan" viewBox="${viewMinX} ${viewMinY} ${viewWidth} ${viewHeight}"
+           style="background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); border-radius: 12px;">
         <defs>
           <pattern id="room-grid" width="1" height="1" patternUnits="userSpaceOnUse">
             <path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(71, 85, 105, 0.3)" stroke-width="0.01"/>
@@ -2035,17 +2080,30 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       rotation: resolveFurnitureRotation(f),
       name: f.name || f.typeId || 'Furniture',
     }));
-    const sensors = ((room.sensors && room.sensors.length > 0) ? room.sensors : (room.sensor ? [room.sensor] : []))
-      .filter((sn: any) => sn && typeof sn.x === 'number')
-      .map((sn: any) => ({
-        x: sn.x,
-        y: sn.y,
-        rotation: sn.rotation ?? 0,
-        range: sn.range ?? 6000,
-        fov: sn.fov ?? 120,
-        heightMm: sn.heightMm ?? 2000,
-        deviceId: sn.deviceId ?? null,
-      }));
+    // This card represents one exact Home Assistant device. Rendering every
+    // placement in the room would mix the live targets of neighbouring cards.
+    const placement = this._roomSensor(room);
+    const sensors = placement && Number.isFinite(Number(placement.x)) && Number.isFinite(Number(placement.y))
+      ? [{
+          x: Number(placement.x),
+          y: Number(placement.y),
+          rotation: Number.isFinite(Number(placement.rotation)) ? Number(placement.rotation) : 270,
+          range: Number.isFinite(Number(placement.range)) ? Number(placement.range) : 6000,
+          fov: Number.isFinite(Number(placement.fov)) ? Number(placement.fov) : 120,
+          heightMm: Number.isFinite(Number(placement.heightMm)) ? Number(placement.heightMm) : 2000,
+        }]
+      : [];
+    const targets = placement ? this._targets
+      .filter(target => target.active && Number.isFinite(target.x) && Number.isFinite(target.y))
+      .map(target => {
+        const rotation = ((Number.isFinite(Number(placement.rotation)) ? Number(placement.rotation) : 270) - 90)
+          * Math.PI / 180;
+        return {
+          x: Number(placement.x) + target.y * Math.cos(rotation) - target.x * Math.sin(rotation),
+          y: Number(placement.y) + target.y * Math.sin(rotation) + target.x * Math.cos(rotation),
+        };
+      })
+      : [];
     return {
       roomPoints,
       furniture,
@@ -2053,7 +2111,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       windows: room.windows || [],
       zones: room.zones || [],
       sensors,
-      targets: collectWorldTargets(sensors, (id) => this.hass?.states[id]?.state),
+      targets,
     };
   }
 
@@ -2616,7 +2674,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
           <div class="radar-section">
             ${this._config.view_mode === 'room' ? html`
-              <div class="room-view-container">
+              <div
+                class="room-view-container"
+                style=${`--shs-room-view-height: ${normaliseRoomViewHeight(this._config.room_height)}px`}
+              >
                 ${this._renderRoomView()}
               </div>
             ` : html`
@@ -2659,6 +2720,9 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   @state() private _config: RadarCardConfig = {};
   @state() private _devices: Array<{ id: string; name: string }> = [];
+  @state() private _rooms: any[] = [];
+  @state() private _roomsLoaded = false;
+  @state() private _roomsError: string | null = null;
 
   static styles = css`
     :host { display: block; container-type: inline-size; }
@@ -2870,7 +2934,27 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
   protected updated(changedProps: Map<string, unknown>): void {
     if (changedProps.has('hass') && this.hass) {
       this._findDevices();
+      this._loadRooms();
     }
+  }
+
+  private async _loadRooms(): Promise<void> {
+    if (!this.hass || this._roomsLoaded) return;
+    try {
+      const result = await this.hass.callWS<{ rooms?: any[] }>({ type: 'smarthomeshop/rooms' });
+      this._rooms = Array.isArray(result?.rooms) ? result.rooms : [];
+      this._roomsError = null;
+    } catch (error) {
+      console.error('SmartHomeShop: Could not load rooms in card editor:', error);
+      this._rooms = [];
+      this._roomsError = 'Rooms could not be loaded right now.';
+    } finally {
+      this._roomsLoaded = true;
+    }
+  }
+
+  private _automaticRoom(): any | null {
+    return resolveRoomForDevice(this._rooms, [this._config.device_id]);
   }
 
   private _findDevices(): void {
@@ -2902,7 +2986,10 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
 
   private _valueChanged(key: string, value: unknown): void {
     const newConfig = { ...this._config, [key]: value };
-    if (key === 'device_id') delete newConfig.entity_prefix;
+    if (key === 'device_id') {
+      delete newConfig.entity_prefix;
+      delete newConfig.room_id;
+    }
 
     this.dispatchEvent(
       new CustomEvent('config-changed', {
@@ -3115,12 +3202,56 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
 
         ${this._config.view_mode === 'room' ? html`
           <div class="form-row">
+            <label>Room</label>
+            <select
+              aria-label="Room shown for this UltimateSensor"
+              @change=${(e: Event) => this._valueChanged(
+                'room_id',
+                (e.target as HTMLSelectElement).value || undefined,
+              )}
+            >
+              <option value="" ?selected=${!this._config.room_id}>
+                Automatic${this._automaticRoom()?.name ? ` — ${this._automaticRoom()?.name}` : ''}
+              </option>
+              ${this._rooms.map(room => html`
+                <option value=${room.id} ?selected=${this._config.room_id === room.id}>
+                  ${room.name || 'Unnamed room'}
+                </option>
+              `)}
+            </select>
+            <div class="info">
+              ${this._roomsError
+                ? this._roomsError
+                : !this._roomsLoaded
+                  ? 'Loading rooms…'
+                  : 'Automatic uses the Room Designer room linked to this exact Home Assistant device.'}
+            </div>
+          </div>
+
+          <div class="form-row">
             <label>Default room view</label>
             <select @change=${(e: Event) => this._valueChanged('room_view_mode', (e.target as HTMLSelectElement).value)}>
               <option value="2d" ?selected=${this._config.room_view_mode !== '3d'}>2D floor plan</option>
               <option value="3d" ?selected=${this._config.room_view_mode === '3d'}>3D view</option>
             </select>
             <div class="info">The view the card starts in. You can still switch views on the card.</div>
+          </div>
+
+          <div class="form-row">
+            <label>Room view height</label>
+            <select
+              aria-label="Height of the room visual"
+              @change=${(e: Event) => this._valueChanged(
+                'room_height',
+                Number((e.target as HTMLSelectElement).value),
+              )}
+            >
+              <option value="300" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 300}>Compact — 300 px</option>
+              <option value="360" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 360}>Standard — 360 px</option>
+              <option value="480" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 480}>Large — 480 px</option>
+              <option value="600" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 600}>Extra large — 600 px</option>
+            </select>
+            <div class="info">In a Sections dashboard you can also drag the card wider. The card requests the full row by default.</div>
           </div>
         ` : nothing}
 

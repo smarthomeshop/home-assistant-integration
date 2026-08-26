@@ -5,13 +5,33 @@ import '../components/sensor-coverage-calibration';
 import type { CalibrationPoint } from '../components/sensor-coverage-calibration';
 import {
   normalizeRadarCoordinate,
+  projectRoomPointToRadar,
   projectRadarTargetToRoom,
+  reprojectRadarCoverage,
+  serializeRadarPolygon,
   type RadarCoordinateProjection,
 } from '../utils/radar-coordinates';
 import {
   resolveFurnitureRotation,
   rotatedFurnitureCorners,
 } from '../utils/furniture-geometry';
+import {
+  LD2460_ANGLE_RANGE,
+  LD2460_DETECTION_ANGLE_RANGE,
+  LD2460_DETECTION_DISTANCE_RANGE,
+  LD2460_HEIGHT_RANGE,
+  RadarInstallationUpdateError,
+  parseRadarInstallationNumber,
+  performConfirmedRadarUpdate,
+  radarInstallationAvailability,
+  radarInstallationEntityStatus,
+  validateRadarDetectionSector,
+} from '../utils/radar-installation';
+import { settingsText } from '../utils/settings-translations';
+import {
+  findDeviceEntity,
+  resolveESPHomeDeviceService,
+} from '../utils/device-entity-resolution';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -81,8 +101,21 @@ interface RadarDevice {
     detectedProduct: string | null;
     supplementaryPresenceSensors: string[];
     currentHardwareMode: 'top' | 'side' | null;
+    reportedInstallationModeEntityId: string | null;
     installationModeEntityId: string | null;
     installationModeOptions: string[];
+    installationHeightEntityId: string | null;
+    installationHeightM: number | null;
+    installationAngleEntityId: string | null;
+    installationAngleDeg: number | null;
+    detectionDistanceEntityId: string | null;
+    detectionDistanceM: number | null;
+    detectionStartAngleEntityId: string | null;
+    detectionStartAngleDeg: number | null;
+    detectionEndAngleEntityId: string | null;
+    detectionEndAngleDeg: number | null;
+    trackingPresenceEntityId: string | null;
+    trackingTargetCountEntityId: string | null;
     missingMetadataEntities: string[];
     invalidMetadataEntities: string[];
     positioningAvailable: boolean;
@@ -194,6 +227,14 @@ export class ZonesPage extends LitElement {
   @state() private _radarProfilesLoading = true;
   @state() private _radarProfilesError: string | null = null;
   @state() private _changingHardwareMode = false;
+  @state() private _installationDrafts: Record<string, string> = {};
+  @state() private _installationUpdateEntityId: string | null = null;
+  @state() private _installationFeedback: Record<string, { tone: 'success' | 'error'; text: string }> = {};
+  @state() private _sectorDrafts: Record<string, string> = {};
+  @state() private _sectorUpdateEntityId: string | null = null;
+  @state() private _sectorFeedback: { tone: 'success' | 'error'; text: string } | null = null;
+  private _sectorDebounceTimer: number | null = null;
+  private _queuedSectorChange: { radar: RadarDevice; entityId: string; value: number } | null = null;
 
   // Zone state
   @state() private _zones: ZoneData[] = [];
@@ -202,6 +243,7 @@ export class ZonesPage extends LitElement {
   @state() private _appendToZoneIndex: number | null = null;
   @state() private _calibration: RoomCalibration = { ...DEFAULT_CALIBRATION, corners: [] };
   @state() private _showCoverageCalibration = false;
+  @state() private _coverageCalibrationStartsFresh = false;
   @state() private _tracking: TrackingSettings = { ...DEFAULT_TRACKING };
   @state() private _drawingZone: Point[] = [];
   @state() private _newZoneType: ZoneType = 'detection';
@@ -401,6 +443,38 @@ export class ZonesPage extends LitElement {
     .firmware-status-note.good { color: #22a35a; }
     .profile-lock { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 10px; border: 1px solid var(--rd-line); border-radius: 7px; color: var(--rd-text); background: var(--rd-deep); font-size: 12px; }
     .profile-lock ha-icon { --mdc-icon-size: 17px; color: #4361ee; }
+    .radar-installation { margin: 12px 0; padding-block: 12px; border-block: 1px solid var(--rd-line); }
+    .radar-installation-header { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; align-items: start; }
+    .radar-installation-header ha-icon { --mdc-icon-size: 18px; color: #4361ee; }
+    .radar-installation-header strong, .radar-installation-header span { display: block; overflow-wrap: anywhere; }
+    .radar-installation-header strong { color: var(--rd-text); font-size: 12px; }
+    .radar-installation-header span { margin-top: 3px; color: var(--rd-dim); font-size: 10.5px; line-height: 1.45; }
+    .radar-installation-controls { display: grid; gap: 10px; margin-top: 11px; }
+    .radar-installation-control { min-width: 0; }
+    .radar-installation-control label { display: flex; justify-content: space-between; gap: 8px; color: var(--rd-dim2); font-size: 11px; }
+    .radar-installation-control label span { color: var(--rd-text); font-weight: 700; }
+    .radar-installation-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; margin-top: 5px; }
+    .radar-installation-input input { min-width: 0; width: 100%; box-sizing: border-box; padding: 8px 9px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-panel); color: var(--rd-text); font: inherit; font-size: 12px; }
+    .radar-installation-input input:focus-visible { outline: 2px solid #4361ee; outline-offset: 1px; }
+    .radar-installation-input button { min-width: 58px; padding: 7px 9px; border: 1px solid #4361ee; border-radius: 7px; background: transparent; color: #4361ee; font: inherit; font-size: 10.5px; font-weight: 700; cursor: pointer; }
+    .radar-installation-input button:hover:not(:disabled) { background: color-mix(in srgb, #4361ee 10%, transparent); }
+    .radar-installation-input button:focus-visible { outline: 2px solid #4361ee; outline-offset: 2px; }
+    .radar-installation-input button:disabled, .radar-installation-input input:disabled { opacity: 0.5; cursor: not-allowed; }
+    .radar-installation-feedback { display: flex; align-items: flex-start; gap: 5px; margin-top: 5px; color: var(--rd-dim); font-size: 10px; line-height: 1.35; overflow-wrap: anywhere; }
+    .radar-installation-feedback.success { color: #16844a; }
+    .radar-installation-feedback.error { color: #dc2626; }
+    .radar-installation-feedback ha-icon { --mdc-icon-size: 13px; flex: 0 0 auto; }
+    .radar-installation-note { margin: 9px 0 0; padding: 8px 9px; border-radius: 7px; background: color-mix(in srgb, #4361ee 7%, var(--rd-panel)); color: var(--rd-dim2); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+    .radar-installation-note.warning { background: color-mix(in srgb, #d97706 9%, var(--rd-panel)); color: #d97706; }
+    .radar-sector { margin: 12px 0; padding: 12px; border: 1px solid color-mix(in srgb, #f59e0b 34%, var(--rd-line)); border-radius: 9px; background: color-mix(in srgb, #f59e0b 4%, var(--rd-panel)); }
+    .radar-sector .radar-installation-header ha-icon { color: #d97706; }
+    .radar-sector-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+    .radar-sector-control { min-width: 0; }
+    .radar-sector-control label { display: block; min-height: 28px; color: var(--rd-dim2); font-size: 10px; line-height: 1.3; }
+    .radar-sector-control input { width: 100%; min-width: 0; box-sizing: border-box; margin-top: 5px; padding: 8px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-panel); color: var(--rd-text); font: inherit; }
+    .radar-sector-control input:focus-visible { outline: 2px solid #f59e0b; outline-offset: 1px; }
+    .radar-sector-control input:disabled { opacity: .55; cursor: wait; }
+    @media (max-width: 760px) { .radar-sector-grid { grid-template-columns: 1fr; } .radar-sector-control label { min-height: 0; } }
     .supplementary-sources { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--rd-line); }
     .supplementary-sources strong, .supplementary-sources span, .supplementary-sources small { display: block; }
     .supplementary-sources strong { color: var(--rd-text); font-size: 11px; }
@@ -577,6 +651,7 @@ export class ZonesPage extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopTargetUpdates();
+    if (this._sectorDebounceTimer !== null) window.clearTimeout(this._sectorDebounceTimer);
     window.removeEventListener('keydown', this._handleKeyDown);
   }
 
@@ -627,7 +702,28 @@ export class ZonesPage extends LitElement {
   }
 
   private _updateSensor(index: number, patch: Partial<SensorInstance>) {
-    this._sensors = this._sensors.map((sensor, i) => i === index ? { ...sensor, ...patch } : sensor);
+    const previous = this._sensors[index];
+    if (!previous) return;
+    const next = { ...previous, ...patch };
+    const placementChanged = previous.x !== next.x
+      || previous.y !== next.y
+      || previous.rotation !== next.rotation;
+    if (
+      placementChanged
+      && this._calibration.sensorId === previous.id
+      && this._calibration.corners.length === 4
+    ) {
+      this._calibration = {
+        ...this._calibration,
+        corners: reprojectRadarCoverage(
+          this._calibration.corners,
+          previous,
+          next,
+          this._coordinateProjection(previous),
+        ),
+      };
+    }
+    this._sensors = this._sensors.map((sensor, i) => i === index ? next : sensor);
     this._markDirty();
   }
 
@@ -680,6 +776,42 @@ export class ZonesPage extends LitElement {
     return Math.min(sensor.range, Math.max(500, projectedRadius));
   }
 
+  private _effectiveSensorHeightMm(sensor: SensorInstance): number {
+    const radar = this._findRadarDevice(sensor.deviceId);
+    const entityId = radar?.profile.installationHeightEntityId ?? null;
+    const live = entityId
+      ? parseRadarInstallationNumber(
+        this.hass.states[entityId]?.state,
+        LD2460_HEIGHT_RANGE.minimum,
+        LD2460_HEIGHT_RANGE.maximum,
+      )
+      : null;
+    return live !== null ? Math.round(live * 1000) : sensor.heightMm;
+  }
+
+  private _radarDetectionSector(radar: RadarDevice | undefined): {
+    distanceM: number;
+    startAngleDeg: number;
+    endAngleDeg: number;
+  } | null {
+    if (!radar || radar.profile.radarModel !== 'ld2460') return null;
+    const distanceM = this._sectorValue(
+      radar.profile.detectionDistanceEntityId,
+      radar.profile.detectionDistanceM,
+    );
+    const startAngleDeg = this._sectorValue(
+      radar.profile.detectionStartAngleEntityId,
+      radar.profile.detectionStartAngleDeg,
+    );
+    const endAngleDeg = this._sectorValue(
+      radar.profile.detectionEndAngleEntityId,
+      radar.profile.detectionEndAngleDeg,
+    );
+    if (distanceM === null || startAngleDeg === null || endAngleDeg === null) return null;
+    const sector = { distanceM, startAngleDeg, endAngleDeg };
+    return validateRadarDetectionSector(sector) === 'ready' ? sector : null;
+  }
+
   private _selectRadarDevice(index: number, deviceId: string | null) {
     const sensor = this._sensors[index];
     if (!sensor) return;
@@ -694,7 +826,9 @@ export class ZonesPage extends LitElement {
     this._updateSensor(index, {
       deviceId: radar.id,
       mountingMode: radar.profile.mountingMode,
-      heightMm: radar.profile.mountingHeightMm ?? sensor.heightMm,
+      heightMm: radar.profile.installationHeightM !== null
+        ? Math.round(radar.profile.installationHeightM * 1000)
+        : radar.profile.mountingHeightMm ?? sensor.heightMm,
       range: radar.profile.maximumRangeMm ?? sensor.range,
       fov: radar.profile.fieldOfViewDeg ?? sensor.fov,
     });
@@ -714,8 +848,31 @@ export class ZonesPage extends LitElement {
   private _hardwareModeMismatch(radar: RadarDevice | undefined): boolean {
     if (!radar || radar.profile.hardwareModeCapability !== 'top_or_side') return false;
     const required = radar.profile.requiredInstallationMode;
-    const current = radar.profile.currentHardwareMode;
+    const current = this._currentHardwareMode(radar);
     return Boolean(required && current && required !== current);
+  }
+
+  private _currentHardwareMode(radar: RadarDevice): 'top' | 'side' | null {
+    const reportedEntityId = radar.profile.reportedInstallationModeEntityId;
+    const state = reportedEntityId
+      ? String(this.hass.states[reportedEntityId]?.state || '').trim().toLowerCase()
+      : '';
+    if (reportedEntityId) return state === 'top' || state === 'side' ? state : null;
+    return radar.profile.currentHardwareMode;
+  }
+
+  private _ld2460InstallationReady(radar: RadarDevice | undefined): boolean {
+    if (!radar || radar.profile.radarModel !== 'ld2460') return true;
+    if (radar.profile.requiredInstallationMode !== 'side') return false;
+    if (this._currentHardwareMode(radar) !== 'side') return false;
+    const height = radar.profile.installationHeightEntityId;
+    const angle = radar.profile.installationAngleEntityId;
+    return Boolean(
+      radar.profile.reportedInstallationModeEntityId
+      && height && angle
+      && radarInstallationEntityStatus(this.hass.states[height]) === 'ready'
+      && radarInstallationEntityStatus(this.hass.states[angle]) === 'ready',
+    );
   }
 
   private async _applyRequiredHardwareMode(radar: RadarDevice): Promise<void> {
@@ -723,7 +880,7 @@ export class ZonesPage extends LitElement {
     const required = radar.profile.requiredInstallationMode;
     if (!entityId || !required || this._changingHardwareMode) return;
     const accepted = confirm(
-      `${radar.name} is currently set to ${radar.profile.currentHardwareMode || 'an unknown mode'}. `
+      `${radar.name} is currently set to ${this._currentHardwareMode(radar) || 'an unknown mode'}. `
       + `Change the radar hardware to ${required} mode for this ${radar.profile.mountingMode} mounting?`,
     );
     if (!accepted) return;
@@ -733,18 +890,255 @@ export class ZonesPage extends LitElement {
     ) || required;
     this._changingHardwareMode = true;
     try {
-      await this.hass.callService('select', 'select_option', {
-        entity_id: entityId,
-        option,
-      });
+      await performConfirmedRadarUpdate(
+        () => this.hass.callService('select', 'select_option', {
+          entity_id: entityId,
+          option,
+        }),
+        () => this.hass.states[radar.profile.reportedInstallationModeEntityId || entityId],
+        state => state.trim().toLowerCase() === required,
+      );
       this._radarDevices = this._radarDevices.map(device => device.id === radar.id
         ? { ...device, profile: { ...device.profile, currentHardwareMode: required } }
         : device);
-      window.setTimeout(() => this._loadRadarProfiles(), 1200);
+      await this._loadRadarProfiles();
     } catch (error: any) {
-      alert(error?.message || `Could not set ${radar.name} to ${required} mode.`);
+      const detail = error instanceof RadarInstallationUpdateError
+        ? error.message
+        : error?.message;
+      alert(detail || `Could not set ${radar.name} to ${required} mode.`);
     } finally {
       this._changingHardwareMode = false;
+    }
+  }
+
+  private _text(key: string, variables: Record<string, string | number> = {}): string {
+    return settingsText(this.hass, key, variables);
+  }
+
+  private _installationDraft(entityId: string, fallback: number | null): string {
+    return Object.prototype.hasOwnProperty.call(this._installationDrafts, entityId)
+      ? this._installationDrafts[entityId]
+      : fallback === null ? '' : String(fallback);
+  }
+
+  private _setInstallationDraft(entityId: string, value: string): void {
+    this._installationDrafts = { ...this._installationDrafts, [entityId]: value };
+    const feedback = { ...this._installationFeedback };
+    delete feedback[entityId];
+    this._installationFeedback = feedback;
+  }
+
+  private _setInstallationFeedback(entityId: string, tone: 'success' | 'error', text: string): void {
+    this._installationFeedback = {
+      ...this._installationFeedback,
+      [entityId]: { tone, text },
+    };
+  }
+
+  private _liveInstallationValue(
+    entityId: string | null,
+    minimum: number,
+    maximum: number,
+    fallback: number | null,
+  ): number | null {
+    if (!entityId) return fallback;
+    return parseRadarInstallationNumber(
+      this.hass.states[entityId]?.state,
+      minimum,
+      maximum,
+    ) ?? fallback;
+  }
+
+  private async _applyRadarInstallationValue(
+    radar: RadarDevice,
+    sensorIndex: number,
+    kind: 'height' | 'angle',
+  ): Promise<void> {
+    const isHeight = kind === 'height';
+    const entityId = isHeight
+      ? radar.profile.installationHeightEntityId
+      : radar.profile.installationAngleEntityId;
+    if (!entityId || this._installationUpdateEntityId) return;
+
+    const range = isHeight ? LD2460_HEIGHT_RANGE : LD2460_ANGLE_RANGE;
+    const fallback = isHeight
+      ? radar.profile.installationHeightM
+      : radar.profile.installationAngleDeg;
+    const requested = parseRadarInstallationNumber(
+      this._installationDraft(entityId, fallback),
+      range.minimum,
+      range.maximum,
+    );
+    if (requested === null) {
+      this._setInstallationFeedback(
+        entityId,
+        'error',
+        this._text(isHeight
+          ? 'radar.installation.error.height_range'
+          : 'radar.installation.error.angle_range'),
+      );
+      return;
+    }
+
+    const state = this.hass.states[entityId];
+    if (radarInstallationEntityStatus(state) !== 'ready') {
+      this._setInstallationFeedback(
+        entityId,
+        'error',
+        this._text('radar.installation.error.unavailable'),
+      );
+      return;
+    }
+
+    const current = parseRadarInstallationNumber(state.state, range.minimum, range.maximum);
+    if (current !== null && Math.abs(current - requested) < range.step / 2) {
+      if (isHeight) this._updateSensor(sensorIndex, { heightMm: Math.round(requested * 1000) });
+      this._setInstallationFeedback(entityId, 'success', this._text('radar.installation.saved'));
+      return;
+    }
+
+    this._installationUpdateEntityId = entityId;
+    const feedback = { ...this._installationFeedback };
+    delete feedback[entityId];
+    this._installationFeedback = feedback;
+    try {
+      await performConfirmedRadarUpdate(
+        () => this.hass.callService('number', 'set_value', {
+          entity_id: entityId,
+          value: requested,
+        }),
+        () => this.hass.states[entityId],
+        nextState => {
+          const confirmed = parseRadarInstallationNumber(nextState, range.minimum, range.maximum);
+          return confirmed !== null && Math.abs(confirmed - requested) < range.step / 2;
+        },
+      );
+      if (isHeight) this._updateSensor(sensorIndex, { heightMm: Math.round(requested * 1000) });
+      this._radarDevices = this._radarDevices.map(device => device.id === radar.id
+        ? {
+          ...device,
+          profile: {
+            ...device.profile,
+            ...(isHeight
+              ? { installationHeightM: requested }
+              : { installationAngleDeg: requested }),
+          },
+        }
+        : device);
+      const drafts = { ...this._installationDrafts };
+      delete drafts[entityId];
+      this._installationDrafts = drafts;
+      this._setInstallationFeedback(entityId, 'success', this._text('radar.installation.saved'));
+      await this._loadRadarProfiles();
+    } catch (error: any) {
+      const message = error instanceof RadarInstallationUpdateError && error.kind === 'timeout'
+        ? this._text('radar.installation.error.timeout')
+        : this._text('radar.installation.error.service');
+      this._setInstallationFeedback(entityId, 'error', message);
+    } finally {
+      this._installationUpdateEntityId = null;
+    }
+  }
+
+  private _sectorValue(entityId: string | null, fallback: number | null): number | null {
+    if (!entityId) return fallback;
+    const draft = this._sectorDrafts[entityId];
+    if (draft !== undefined) {
+      const value = Number(draft);
+      return Number.isFinite(value) ? value : null;
+    }
+    const entity = this.hass.states[entityId];
+    if (!entity) return fallback;
+    if (radarInstallationEntityStatus(entity) !== 'ready') return null;
+    const value = Number(entity.state);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  private _setSectorDraft(radar: RadarDevice, entityId: string, value: string): void {
+    this._sectorDrafts = { ...this._sectorDrafts, [entityId]: value };
+    this._sectorFeedback = null;
+    if (this._sectorDebounceTimer !== null) window.clearTimeout(this._sectorDebounceTimer);
+    this._sectorDebounceTimer = window.setTimeout(() => {
+      this._sectorDebounceTimer = null;
+      const numericValue = Number(this._sectorDrafts[entityId]);
+      if (Number.isFinite(numericValue)) void this._applySectorValue(radar, entityId, numericValue);
+    }, 650);
+  }
+
+  private async _applySectorValue(
+    radar: RadarDevice,
+    entityId: string,
+    value: number,
+  ): Promise<void> {
+    if (this._sectorUpdateEntityId) {
+      this._queuedSectorChange = { radar, entityId, value };
+      return;
+    }
+    const distance = entityId === radar.profile.detectionDistanceEntityId
+      ? value
+      : this._sectorValue(radar.profile.detectionDistanceEntityId, radar.profile.detectionDistanceM);
+    const start = entityId === radar.profile.detectionStartAngleEntityId
+      ? value
+      : this._sectorValue(radar.profile.detectionStartAngleEntityId, radar.profile.detectionStartAngleDeg);
+    const end = entityId === radar.profile.detectionEndAngleEntityId
+      ? value
+      : this._sectorValue(radar.profile.detectionEndAngleEntityId, radar.profile.detectionEndAngleDeg);
+    if (distance === null || start === null || end === null) {
+      this._sectorFeedback = { tone: 'error', text: this._text('radar.sector.error.unavailable') };
+      return;
+    }
+    const validation = validateRadarDetectionSector({
+      distanceM: distance,
+      startAngleDeg: start,
+      endAngleDeg: end,
+    });
+    if (validation !== 'ready') {
+      this._sectorFeedback = {
+        tone: 'error',
+        text: this._text(validation === 'angle_order'
+          ? 'radar.sector.error.angle_order'
+          : 'radar.sector.error.range'),
+      };
+      return;
+    }
+    const entity = this.hass.states[entityId];
+    if (radarInstallationEntityStatus(entity) !== 'ready') {
+      this._sectorFeedback = { tone: 'error', text: this._text('radar.sector.error.unavailable') };
+      return;
+    }
+    if (Math.abs(Number(entity.state) - value) < 0.05) {
+      const drafts = { ...this._sectorDrafts };
+      delete drafts[entityId];
+      this._sectorDrafts = drafts;
+      return;
+    }
+
+    this._sectorUpdateEntityId = entityId;
+    try {
+      await performConfirmedRadarUpdate(
+        () => this.hass.callService('number', 'set_value', { entity_id: entityId, value }),
+        () => this.hass.states[entityId],
+        state => Math.abs(Number(state) - value) < 0.05,
+        12_000,
+      );
+      const drafts = { ...this._sectorDrafts };
+      delete drafts[entityId];
+      this._sectorDrafts = drafts;
+      this._sectorFeedback = { tone: 'success', text: this._text('radar.sector.saved') };
+      await this._loadRadarProfiles();
+    } catch (error) {
+      this._sectorFeedback = {
+        tone: 'error',
+        text: this._text(error instanceof RadarInstallationUpdateError && error.kind === 'timeout'
+          ? 'radar.sector.error.timeout'
+          : 'radar.sector.error.service'),
+      };
+    } finally {
+      this._sectorUpdateEntityId = null;
+      const queued = this._queuedSectorChange;
+      this._queuedSectorChange = null;
+      if (queued) void this._applySectorValue(queued.radar, queued.entityId, queued.value);
     }
   }
 
@@ -1186,14 +1580,37 @@ export class ZonesPage extends LitElement {
         this._targetTrails[sensor.id] = trails;
       }
 
+      const globalPresenceState = radar?.profile.trackingPresenceEntityId
+        ? String(this.hass.states[radar.profile.trackingPresenceEntityId]?.state || '').toLowerCase()
+        : null;
+      const countState = radar?.profile.trackingTargetCountEntityId
+        ? normalizeRadarCoordinate(this.hass.states[radar.profile.trackingTargetCountEntityId]?.state, 1)
+        : null;
+      const reportedTargetCount = countState !== null
+        ? Math.max(0, Math.min(maximumTargets, Math.trunc(countState)))
+        : null;
+      if (globalPresenceState === 'off' || globalPresenceState === 'unknown' || globalPresenceState === 'unavailable') {
+        for (let index = 0; index < trails.length; index++) trails[index] = [];
+        next[sensor.id] = [];
+        if ((this._liveTargets[sensor.id] || []).length) changed = true;
+        continue;
+      }
+
       for (const targetMap of targetMaps) {
+        const trailIndex = targetMap.index - 1;
+        if (reportedTargetCount !== null && targetMap.index > reportedTargetCount) {
+          if (trails[trailIndex]?.length) trails[trailIndex] = [];
+          continue;
+        }
         const xEntity = this.hass.states[targetMap.x_entity_id];
         const yEntity = this.hass.states[targetMap.y_entity_id];
-        if (!xEntity || !yEntity) continue;
+        if (!xEntity || !yEntity) {
+          if (trails[trailIndex]?.length) trails[trailIndex] = [];
+          continue;
+        }
         const scale = radar?.profile.coordinateScaleToMm ?? 1;
         const x = this._targetCoordinateMm(xEntity, scale);
         const y = this._targetCoordinateMm(yEntity, scale);
-        const trailIndex = targetMap.index - 1;
         if (x === null || y === null) {
           if (trails[trailIndex]?.length) trails[trailIndex] = [];
           continue;
@@ -1366,8 +1783,21 @@ export class ZonesPage extends LitElement {
               detectedProduct: productFamily === 'ceilsense' ? 'ceilsense' : null,
               supplementaryPresenceSensors: [],
               currentHardwareMode: null,
+              reportedInstallationModeEntityId: null,
               installationModeEntityId: null,
               installationModeOptions: [],
+              installationHeightEntityId: null,
+              installationHeightM: null,
+              installationAngleEntityId: null,
+              installationAngleDeg: null,
+              detectionDistanceEntityId: null,
+              detectionDistanceM: null,
+              detectionStartAngleEntityId: null,
+              detectionStartAngleDeg: null,
+              detectionEndAngleEntityId: null,
+              detectionEndAngleDeg: null,
+              trackingPresenceEntityId: null,
+              trackingTargetCountEntityId: null,
               missingMetadataEntities: ['Radar Mounting Mode', 'Radar Model'],
               invalidMetadataEntities: [],
               positioningAvailable: true,
@@ -1421,8 +1851,21 @@ export class ZonesPage extends LitElement {
         detectedProduct: device.profile.detected_product ?? null,
         supplementaryPresenceSensors: device.profile.supplementary_presence_sensors || [],
         currentHardwareMode: device.profile.current_hardware_mode ?? null,
+        reportedInstallationModeEntityId: device.profile.reported_installation_mode_entity_id ?? null,
         installationModeEntityId: device.profile.installation_mode_entity_id ?? null,
         installationModeOptions: device.profile.installation_mode_options || [],
+        installationHeightEntityId: device.profile.installation_height_entity_id ?? null,
+        installationHeightM: device.profile.installation_height_m ?? null,
+        installationAngleEntityId: device.profile.installation_angle_entity_id ?? null,
+        installationAngleDeg: device.profile.installation_angle_deg ?? null,
+        detectionDistanceEntityId: device.profile.detection_distance_entity_id ?? null,
+        detectionDistanceM: device.profile.detection_distance_m ?? null,
+        detectionStartAngleEntityId: device.profile.detection_start_angle_entity_id ?? null,
+        detectionStartAngleDeg: device.profile.detection_start_angle_deg ?? null,
+        detectionEndAngleEntityId: device.profile.detection_end_angle_entity_id ?? null,
+        detectionEndAngleDeg: device.profile.detection_end_angle_deg ?? null,
+        trackingPresenceEntityId: device.profile.tracking_presence_entity_id ?? null,
+        trackingTargetCountEntityId: device.profile.tracking_target_count_entity_id ?? null,
         missingMetadataEntities: device.profile.missing_metadata_entities || [],
         invalidMetadataEntities: device.profile.invalid_metadata_entities || [],
         positioningAvailable: device.profile.positioning_available,
@@ -1618,6 +2061,15 @@ export class ZonesPage extends LitElement {
     return !!this.hass?.states?.[entityId];
   }
 
+  private _deviceEntity(
+    deviceId: string,
+    domain: string,
+    suffixes: string[],
+    originalNames: string[] = [],
+  ): string | null {
+    return findDeviceEntity(this.hass?.entities, deviceId, domain, suffixes, originalNames);
+  }
+
   private async _setTextEntityIfPresent(entityId: string, value: string): Promise<boolean> {
     if (!this._entityExists(entityId)) return false;
     if (value.length > 255) {
@@ -1658,6 +2110,21 @@ export class ZonesPage extends LitElement {
       alert(`Correct the radar hardware mode for ${mismatched.map(radar => radar.name).join(', ')} before pushing coordinate zones.`);
       return;
     }
+    const unreadyLd2460 = linkedSensors
+      .map(sensor => this._findRadarDevice(sensor.deviceId))
+      .filter((radar): radar is RadarDevice => radar?.profile.radarModel === 'ld2460' && !this._ld2460InstallationReady(radar));
+    if (unreadyLd2460.length) {
+      alert(`Wait for side mode, mounting height and downward angle to be reported by ${unreadyLd2460.map(radar => radar.name).join(', ')} before pushing zones.`);
+      return;
+    }
+    const oversizedPolygon = this._zones
+      .filter(zone => zone.type !== 'entry')
+      .flatMap(zone => getZoneParts(zone).map(points => ({ zone, points })))
+      .find(item => item.points.length > 20);
+    if (oversizedPolygon) {
+      alert(`${oversizedPolygon.zone.name} has ${oversizedPolygon.points.length} vertices. LD2450 and LD2460 polygons support at most 20.`);
+      return;
+    }
     this._pushingToESPHome = true;
 
     const detectionZones = this._zones.filter(z => z.type === 'detection');
@@ -1673,6 +2140,7 @@ export class ZonesPage extends LitElement {
       for (const sensor of linkedSensors) {
         const radar = this._findRadarDevice(sensor.deviceId);
         const deviceName = radar?.entityPrefix || sensor.deviceId!;
+        const registryDeviceId = radar?.id || sensor.deviceId!;
         const maximumTargets = Math.max(1, radar?.profile.maximumTargets || 3);
         // The firmware evaluates targets in sensor-local coordinates, so convert
         // room coordinates to this sensor's frame (inverse of the live-target
@@ -1687,7 +2155,7 @@ export class ZonesPage extends LitElement {
           };
         };
         const toPolygonStr = (points: Point[]): string =>
-          points.map(pt => { const sp = toSensor(pt); return `${Math.round(sp.x)}:${Math.round(sp.y)}`; }).join(';');
+          serializeRadarPolygon(points.map(toSensor));
         const toZoneSlots = (zones: ZoneData[], maxSlots: number, label: string): Array<{ zone: ZoneData, polygon: string }> => {
           const slots = zones.flatMap(zone =>
             getZoneParts(zone).map(points => ({ zone, polygon: toPolygonStr(points) }))
@@ -1704,43 +2172,57 @@ export class ZonesPage extends LitElement {
           return `${profile.enterDelayMs},${profile.leaveDelayMs},${profile.minDwellMs},${Math.min(profile.minTargets, maximumTargets)}`;
         };
 
+        const deviceEntity = (domain: string, suffix: string, originalName?: string): string | null =>
+          this._deviceEntity(
+            registryDeviceId,
+            domain,
+            [suffix],
+            originalName ? [originalName] : [],
+          );
         const hasNativeZoneTextApi = [
-          'polygon_zone_1',
-          'polygon_exclusion_1',
-          'entry_line_1',
-        ].some(suffix => this._entityExists(`text.${deviceName}_${suffix}`));
+          deviceEntity('text', 'polygon_zone_1', 'Polygon Zone 1'),
+          deviceEntity('text', 'polygon_exclusion_1', 'Polygon Exclusion 1'),
+          deviceEntity('text', 'entry_line_1', 'Entry Line 1'),
+        ].some(entityId => Boolean(entityId && this._entityExists(entityId)));
 
         if (hasNativeZoneTextApi) {
-          await this._turnOnSwitchIfPresent(`switch.${deviceName}_polygon_zones_enabled`);
+          const polygonEnabled = deviceEntity('switch', 'polygon_zones_enabled', 'Polygon Zones Enabled');
+          if (polygonEnabled) await this._turnOnSwitchIfPresent(polygonEnabled);
 
           for (let i = 0; i < 4; i++) {
             const slot = detectionSlots[i];
-            const entityId = `text.${deviceName}_polygon_zone_${i + 1}`;
-            const pushed = await this._setTextEntityIfPresent(entityId, slot?.polygon || '');
-            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
-            await this._setTextEntityIfPresent(`text.${deviceName}_zone_profile_${i + 1}`, toProfileStr(slot?.zone));
+            const entityId = deviceEntity('text', `polygon_zone_${i + 1}`, `Polygon Zone ${i + 1}`);
+            const pushed = entityId ? await this._setTextEntityIfPresent(entityId, slot?.polygon || '') : false;
+            if (!pushed) errors.push(`${radar?.name || deviceName}: missing polygon zone ${i + 1} entity`);
+            const profileEntity = deviceEntity('text', `zone_profile_${i + 1}`, `Zone Profile ${i + 1}`);
+            if (profileEntity) await this._setTextEntityIfPresent(profileEntity, toProfileStr(slot?.zone));
           }
 
           for (let i = 0; i < 2; i++) {
             const slot = exclusionSlots[i];
-            const entityId = `text.${deviceName}_polygon_exclusion_${i + 1}`;
-            const pushed = await this._setTextEntityIfPresent(entityId, slot?.polygon || '');
-            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+            const entityId = deviceEntity('text', `polygon_exclusion_${i + 1}`, `Polygon Exclusion ${i + 1}`);
+            const pushed = entityId ? await this._setTextEntityIfPresent(entityId, slot?.polygon || '') : false;
+            if (!pushed) errors.push(`${radar?.name || deviceName}: missing polygon exclusion ${i + 1} entity`);
           }
 
           for (let i = 0; i < 2; i++) {
             const zone = interferenceZones[i];
-            const entityId = `text.${deviceName}_interference_zone_${i + 1}`;
+            const entityId = deviceEntity('text', `interference_zone_${i + 1}`, `Interference Zone ${i + 1}`);
             const polygon = zone ? toPolygonStr(getZoneParts(zone)[0] || []) : '';
-            const pushed = await this._setTextEntityIfPresent(entityId, polygon);
+            const pushed = entityId ? await this._setTextEntityIfPresent(entityId, polygon) : false;
             if (zone && !pushed) errors.push(`${deviceName}: update firmware to use interference zones`);
           }
 
-          await this._setSwitchIfPresent(`switch.${deviceName}_target_smoothing_enabled`, this._tracking.smoothingEnabled);
-          await this._setSwitchIfPresent(`switch.${deviceName}_cross_zone_tracking`, this._tracking.crossZoneTracking);
-          await this._setNumberIfPresent(`number.${deviceName}_target_smoothing`, this._tracking.smoothingAlpha);
-          await this._setNumberIfPresent(`number.${deviceName}_tracking_max_jump`, this._tracking.maxJumpMm);
-          await this._setNumberIfPresent(`number.${deviceName}_tracking_hold_time`, this._tracking.trackHoldMs / 1000);
+          const smoothingEnabled = deviceEntity('switch', 'target_smoothing_enabled', 'Target Smoothing Enabled');
+          const crossZoneTracking = deviceEntity('switch', 'cross_zone_tracking', 'Cross Zone Tracking');
+          const smoothing = deviceEntity('number', 'target_smoothing', 'Target Smoothing');
+          const maxJump = deviceEntity('number', 'tracking_max_jump', 'Tracking Max Jump');
+          const holdTime = deviceEntity('number', 'tracking_hold_time', 'Tracking Hold Time');
+          if (smoothingEnabled) await this._setSwitchIfPresent(smoothingEnabled, this._tracking.smoothingEnabled);
+          if (crossZoneTracking) await this._setSwitchIfPresent(crossZoneTracking, this._tracking.crossZoneTracking);
+          if (smoothing) await this._setNumberIfPresent(smoothing, this._tracking.smoothingAlpha);
+          if (maxJump) await this._setNumberIfPresent(maxJump, this._tracking.maxJumpMm);
+          if (holdTime) await this._setNumberIfPresent(holdTime, this._tracking.trackHoldMs / 1000);
 
           const ownedLines = entryLines.filter(l => (l.sensorId || defaultLineOwner) === sensor.id);
           for (let i = 0; i < 2; i++) {
@@ -1752,22 +2234,47 @@ export class ZonesPage extends LitElement {
               const p2 = toSensor(line.points[1]);
               lineStr = `${Math.round(p1.x)}:${Math.round(p1.y)};${Math.round(p2.x)}:${Math.round(p2.y)};${dir}`;
             }
-            const entityId = `text.${deviceName}_entry_line_${i + 1}`;
-            const pushed = await this._setTextEntityIfPresent(entityId, lineStr);
-            if (!pushed) errors.push(`${deviceName}: missing ${entityId}`);
+            const entityId = deviceEntity('text', `entry_line_${i + 1}`, `Entry Line ${i + 1}`);
+            const pushed = entityId ? await this._setTextEntityIfPresent(entityId, lineStr) : false;
+            if (!pushed) errors.push(`${radar?.name || deviceName}: missing entry line ${i + 1} entity`);
           }
 
           nativePushCount += 1;
           continue;
         }
 
-        errors.push(`${deviceName}: native LD2450 text entities not found; used legacy services`);
+        const fallbackPrefixes = Array.from(new Set([
+          deviceName,
+          ...(radar?.aliases || []),
+        ].filter(Boolean)));
+        const polygonZoneService = resolveESPHomeDeviceService(
+          this.hass.services,
+          this.hass.entities,
+          registryDeviceId,
+          'set_polygon_zone',
+          fallbackPrefixes,
+        );
+        const polygonExclusionService = resolveESPHomeDeviceService(
+          this.hass.services,
+          this.hass.entities,
+          registryDeviceId,
+          'set_polygon_exclusion',
+          fallbackPrefixes,
+        );
+        const entryLineService = resolveESPHomeDeviceService(
+          this.hass.services,
+          this.hass.entities,
+          registryDeviceId,
+          'set_entry_line',
+          fallbackPrefixes,
+        );
+        errors.push(`${radar?.name || deviceName}: native polygon text entities not found; used device-matched ESPHome services`);
 
         // Detection zones: every sensor watches the same room zones
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; polygonZoneService && i < 4; i++) {
           const slot = detectionSlots[i];
           try {
-            await this.hass.callService('esphome', `${deviceName}_set_polygon_zone`, {
+            await this.hass.callService('esphome', polygonZoneService, {
               zone_id: i + 1,
               polygon: slot?.polygon || '',
             });
@@ -1776,12 +2283,13 @@ export class ZonesPage extends LitElement {
             break;
           }
         }
+        if (!polygonZoneService) errors.push(`${radar?.name || deviceName}: set_polygon_zone service for this device not available`);
 
         // Exclusion zones
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; polygonExclusionService && i < 2; i++) {
           const slot = exclusionSlots[i];
           try {
-            await this.hass.callService('esphome', `${deviceName}_set_polygon_exclusion`, {
+            await this.hass.callService('esphome', polygonExclusionService, {
               zone_id: i + 1,
               polygon: slot?.polygon || '',
             });
@@ -1790,11 +2298,12 @@ export class ZonesPage extends LitElement {
             break;
           }
         }
+        if (!polygonExclusionService) errors.push(`${radar?.name || deviceName}: set_polygon_exclusion service for this device not available`);
 
         // Entry lines: each line is counted by exactly ONE sensor so people
         // walking through a doorway are not counted twice.
         const ownedLines = entryLines.filter(l => (l.sensorId || defaultLineOwner) === sensor.id);
-        for (let i = 0; i < 2; i++) {
+        for (let i = 0; entryLineService && i < 2; i++) {
           const line = ownedLines[i];
           let lineStr = '';
           if (line && line.points.length === 2) {
@@ -1804,7 +2313,7 @@ export class ZonesPage extends LitElement {
             lineStr = `${Math.round(p1.x)}:${Math.round(p1.y)};${Math.round(p2.x)}:${Math.round(p2.y)};${dir}`;
           }
           try {
-            await this.hass.callService('esphome', `${deviceName}_set_entry_line`, {
+            await this.hass.callService('esphome', entryLineService, {
               line_id: i + 1,
               line_data: lineStr,
             });
@@ -1813,6 +2322,7 @@ export class ZonesPage extends LitElement {
             break;
           }
         }
+        if (!entryLineService) errors.push(`${radar?.name || deviceName}: set_entry_line service for this device not available`);
         legacyPushCount += 1;
       }
 
@@ -2628,19 +3138,15 @@ export class ZonesPage extends LitElement {
   }
 
   private _worldToSensorLocal(sensor: SensorInstance, point: Point): Point {
-    const rotation = (sensor.rotation - 90) * Math.PI / 180;
-    const dx = point.x - sensor.x;
-    const dy = point.y - sensor.y;
-    return {
-      x: -dx * Math.sin(rotation) + dy * Math.cos(rotation),
-      y: dx * Math.cos(rotation) + dy * Math.sin(rotation),
-    };
+    return projectRoomPointToRadar(point, sensor);
   }
 
   private _openCoverageCalibration() {
     if (!this._selectedSensor?.deviceId) return;
     const radar = this._findRadarDevice(this._selectedSensor.deviceId);
-    if (!radar?.profile.positioningAvailable) return;
+    if (!radar?.profile.positioningAvailable || !this._ld2460InstallationReady(radar)) return;
+    this._coverageCalibrationStartsFresh = this._calibration.sensorId === this._selectedSensor.id
+      && this._calibration.corners.length === 4;
     this._showCoverageCalibration = true;
   }
 
@@ -2653,6 +3159,7 @@ export class ZonesPage extends LitElement {
       corners,
       sensorId: sensor.id,
     });
+    this._coverageCalibrationStartsFresh = false;
     this._showCoverageCalibration = false;
   }
 
@@ -3324,7 +3831,7 @@ private _draw3DZones(ctx: CanvasRenderingContext2D): void {
 
   private _draw3DSensor(ctx: CanvasRenderingContext2D): void {
     for (const sn of this._sensors) {
-      const sensorZ = sn.heightMm ?? 2000;
+      const sensorZ = this._effectiveSensorHeightMm(sn) ?? 2000;
       const pos = this._project3D({ x: sn.x, y: sn.y, z: sensorZ });
       const origin = this._project3D({ x: sn.x, y: sn.y, z: 0 });
 
@@ -4265,6 +4772,33 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       const fovPath = `M ${cp.x} ${cp.y} L ${arcPts.map(pt => `${pt.x} ${pt.y}`).join(' L ')} Z`;
       wedges.push(svg`<path d="${fovPath}" fill="rgba(34, 197, 94, ${0.12 * alpha})" stroke="#22c55e" stroke-opacity="${alpha}" stroke-width="1.5" style="pointer-events: none;"/>`);
 
+      // LD2460's physical detection sector is configured in the radar and is
+      // intentionally separate from Room Builder polygons.
+      const radar = this._findRadarDevice(sn.deviceId);
+      const hardwareSector = isSelected ? this._radarDetectionSector(radar) : null;
+      if (hardwareSector) {
+        const sectorRadius = hardwareSector.distanceM * 1000 * scale;
+        const start = rotRad + hardwareSector.startAngleDeg * Math.PI / 180;
+        const end = rotRad + hardwareSector.endAngleDeg * Math.PI / 180;
+        const points: Point[] = [];
+        for (let step = 0; step <= 32; step++) {
+          const angle = start + (end - start) * (step / 32);
+          points.push({
+            x: cp.x + Math.cos(angle) * sectorRadius,
+            y: cp.y + Math.sin(angle) * sectorRadius,
+          });
+        }
+        const path = `M ${cp.x} ${cp.y} L ${points.map(point => `${point.x} ${point.y}`).join(' L ')} Z`;
+        wedges.push(svg`
+          <path d="${path}" fill="rgba(245, 158, 11, 0.10)" stroke="#f59e0b"
+            stroke-width="2" stroke-dasharray="7 4" style="pointer-events: none;"/>
+          <text x="${cp.x + Math.cos(rotRad) * sectorRadius * 0.72}"
+            y="${cp.y + Math.sin(rotRad) * sectorRadius * 0.72 - 5}"
+            fill="#b45309" font-size="9" font-weight="700" text-anchor="middle"
+            style="pointer-events: none;">HARDWARE SECTOR</text>
+        `);
+      }
+
       // Distance rings + angle guides for the selected sensor only (keeps the view calm)
       if (isSelected) {
         for (let r = 1000; r <= sn.range; r += 1000) {
@@ -4560,9 +5094,57 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       || radarDevices.find(device => device.aliases.includes(this._selectedSensor?.deviceId || ''));
     const selectedRadarCapabilities = this._getRadarCapabilities(this._selectedSensor?.deviceId ?? null);
     const hardwareModeMismatch = this._hardwareModeMismatch(selectedRadar);
-    const canCalibrate = Boolean(this._selectedSensor?.deviceId && selectedRadar?.profile.positioningAvailable);
+    const currentHardwareMode = selectedRadar ? this._currentHardwareMode(selectedRadar) : null;
+    const installationAvailability = selectedRadar
+      ? radarInstallationAvailability(
+        selectedRadar.profile.radarModel,
+        selectedRadar.profile.requiredInstallationMode,
+        selectedRadar.profile.installationHeightEntityId,
+        selectedRadar.profile.installationAngleEntityId,
+      )
+      : 'not_applicable';
+    const installationHeightEntityId = selectedRadar?.profile.installationHeightEntityId ?? null;
+    const installationAngleEntityId = selectedRadar?.profile.installationAngleEntityId ?? null;
+    const installationHeightM = selectedRadar
+      ? this._liveInstallationValue(
+        installationHeightEntityId,
+        LD2460_HEIGHT_RANGE.minimum,
+        LD2460_HEIGHT_RANGE.maximum,
+        selectedRadar.profile.installationHeightM,
+      )
+      : null;
+    const installationAngleDeg = selectedRadar
+      ? this._liveInstallationValue(
+        installationAngleEntityId,
+        LD2460_ANGLE_RANGE.minimum,
+        LD2460_ANGLE_RANGE.maximum,
+        selectedRadar.profile.installationAngleDeg,
+      )
+      : null;
+    const installationHeightStatus = radarInstallationEntityStatus(
+      installationHeightEntityId ? this.hass.states[installationHeightEntityId] : undefined,
+    );
+    const installationAngleStatus = radarInstallationEntityStatus(
+      installationAngleEntityId ? this.hass.states[installationAngleEntityId] : undefined,
+    );
+    const sectorEntityIds = selectedRadar ? [
+      selectedRadar.profile.detectionDistanceEntityId,
+      selectedRadar.profile.detectionStartAngleEntityId,
+      selectedRadar.profile.detectionEndAngleEntityId,
+    ] : [];
+    const completeSectorControls = sectorEntityIds.length === 3 && sectorEntityIds.every(Boolean);
+    const partialSectorControls = sectorEntityIds.some(Boolean) && !completeSectorControls;
+    const canCalibrate = Boolean(
+      this._selectedSensor?.deviceId
+      && selectedRadar?.profile.positioningAvailable
+      && this._ld2460InstallationReady(selectedRadar),
+    );
     const hasLinkedHardwareModeMismatch = this._sensors.some(sensor =>
       this._hardwareModeMismatch(this._findRadarDevice(sensor.deviceId)));
+    const hasUnreadyLinkedLd2460 = this._sensors.some(sensor => {
+      const radar = this._findRadarDevice(sensor.deviceId);
+      return radar?.profile.radarModel === 'ld2460' && !this._ld2460InstallationReady(radar);
+    });
     const activeTargets = Object.values(this._liveTargets).reduce((sum, targets) => sum + targets.filter(t => t.active).length, 0);
     const sensorsWithSupplementaryPresence = new Set(
       this._sensors
@@ -4678,8 +5260,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 </button>
               </div>
               ${this._designMode === 'sensors' ? html`
-                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch}"
-                        title="${hasLinkedHardwareModeMismatch ? 'Correct the radar hardware mode before pushing zones' : 'Push zones and entry lines to the linked sensors'}">
+                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460}"
+                        title="${hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460 ? 'Wait for the LD2460 installation settings before pushing zones' : 'Push zones and entry lines to the linked sensors'}">
                   <ha-icon icon="mdi:upload"></ha-icon>
                   ${this._pushingToESPHome ? 'Pushing...' : 'Push'}
                 </button>
@@ -4862,16 +5444,29 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                         <div>
                           <strong>Radar hardware mode does not match</strong>
                           <span>
-                            ${selectedRadar.profile.currentHardwareMode} is active; ${selectedRadar.profile.requiredInstallationMode} is required for ${selectedRadar.profile.mountingMode} mounting.
+                            ${currentHardwareMode || 'unknown'} is active; ${selectedRadar.profile.requiredInstallationMode} is required for ${selectedRadar.profile.mountingMode} mounting.
                           </span>
                           <button @click="${() => this._applyRequiredHardwareMode(selectedRadar)}" ?disabled="${this._changingHardwareMode}">
                             ${this._changingHardwareMode ? 'Applying...' : `Switch to ${selectedRadar.profile.requiredInstallationMode}`}
                           </button>
                         </div>
                       </div>
+                    ` : selectedRadar?.profile.hardwareModeCapability === 'top_or_side' && !currentHardwareMode ? html`
+                      <div class="mode-warning" role="status">
+                        <ha-icon icon="mdi:clock-outline"></ha-icon>
+                        <div>
+                          <strong>${this._text('radar.readiness.waiting_mode')}</strong>
+                          <span>${this._text('radar.readiness.waiting_mode_help')}</span>
+                          ${selectedRadar.profile.installationModeEntityId ? html`
+                            <button @click="${() => this._applyRequiredHardwareMode(selectedRadar)}" ?disabled="${this._changingHardwareMode}">
+                              ${this._changingHardwareMode ? this._text('radar.installation.saving') : this._text('radar.readiness.set_side')}
+                            </button>
+                          ` : nothing}
+                        </div>
+                      </div>
                     ` : selectedRadar?.profile.hardwareModeCapability === 'top_or_side' ? html`
                       <p class="firmware-status-note good">
-                        Hardware mode ${selectedRadar.profile.currentHardwareMode || 'not reported'}${selectedRadar.profile.currentHardwareMode === selectedRadar.profile.requiredInstallationMode ? ' matches this mounting.' : '.'}
+                        Hardware mode ${currentHardwareMode || 'not reported'}${currentHardwareMode === selectedRadar.profile.requiredInstallationMode ? ' matches this mounting.' : '.'}
                       </p>
                     ` : selectedRadar?.profile.hardwareModeCapability === 'fixed' ? html`
                       <p class="firmware-status-note">This radar uses fixed coordinates and needs no top/side hardware setting.</p>
@@ -4907,7 +5502,11 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                           <div><dt>Mounting</dt><dd>${selectedRadar.profile.mountingMode} · ${selectedRadar.profile.coordinateProjection}</dd></div>
                           <div><dt>Coordinate frame</dt><dd>${selectedRadar.profile.coordinateFrame || 'not reported'}</dd></div>
                           <div><dt>Coordinate scale</dt><dd>${selectedRadar.profile.coordinateScaleToMm} to mm</dd></div>
-                          <div><dt>Hardware mode</dt><dd>${selectedRadar.profile.currentHardwareMode || 'not reported'} / required ${selectedRadar.profile.requiredInstallationMode || 'none'}</dd></div>
+                          <div><dt>Hardware mode</dt><dd>${currentHardwareMode || 'not reported'} / required ${selectedRadar.profile.requiredInstallationMode || 'none'}</dd></div>
+                          ${selectedRadar.profile.radarModel === 'ld2460' ? html`
+                            <div><dt>Radar height</dt><dd>${installationHeightM === null ? 'not reported' : `${installationHeightM.toFixed(2)} m`}</dd></div>
+                            <div><dt>Radar angle</dt><dd>${installationAngleDeg === null ? 'not reported' : `${installationAngleDeg.toFixed(1)}°`}</dd></div>
+                          ` : nothing}
                         </dl>
                         ${selectedRadar.profile.missingMetadataEntities.length ? html`
                           <p>Missing: ${selectedRadar.profile.missingMetadataEntities.join(', ')}</p>
@@ -4942,6 +5541,177 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                   <p class="firmware-status-note">Manual choice for legacy firmware. Saved room values are preserved.</p>
                 `}
               </div>
+              ${installationAvailability === 'complete' && selectedRadar && installationHeightEntityId && installationAngleEntityId ? html`
+                <section class="radar-installation" aria-labelledby="ld2460-installation-title">
+                  <div class="radar-installation-header">
+                    <ha-icon icon="mdi:angle-acute"></ha-icon>
+                    <div>
+                      <strong id="ld2460-installation-title">${this._text('radar.installation.title')}</strong>
+                      <span>${this._text('radar.installation.description')}</span>
+                    </div>
+                  </div>
+                  <div class="radar-installation-controls">
+                    <div class="radar-installation-control">
+                      <label for="ld2460-height">
+                        ${this._text('radar.installation.height')}
+                        <span>${installationHeightM === null ? '—' : `${installationHeightM.toFixed(2)} m`}</span>
+                      </label>
+                      <div class="radar-installation-input">
+                        <input id="ld2460-height" type="number" inputmode="decimal"
+                          min="${LD2460_HEIGHT_RANGE.minimum}" max="${LD2460_HEIGHT_RANGE.maximum}" step="${LD2460_HEIGHT_RANGE.step}"
+                          aria-describedby="ld2460-installation-help"
+                          .value="${this._installationDraft(installationHeightEntityId, installationHeightM)}"
+                          ?disabled="${hardwareModeMismatch || installationHeightStatus !== 'ready' || this._installationUpdateEntityId !== null}"
+                          @input="${(event: Event) => this._setInstallationDraft(installationHeightEntityId, (event.target as HTMLInputElement).value)}"
+                          @keydown="${(event: KeyboardEvent) => {
+                            if (event.key === 'Enter') void this._applyRadarInstallationValue(selectedRadar, this._selectedSensorIndex!, 'height');
+                          }}" />
+                        <button
+                          ?disabled="${hardwareModeMismatch || installationHeightStatus !== 'ready' || this._installationUpdateEntityId !== null}"
+                          @click="${() => this._applyRadarInstallationValue(selectedRadar, this._selectedSensorIndex!, 'height')}">
+                          ${this._installationUpdateEntityId === installationHeightEntityId
+                            ? this._text('radar.installation.saving')
+                            : this._text('radar.installation.apply')}
+                        </button>
+                      </div>
+                      ${this._installationFeedback[installationHeightEntityId] ? html`
+                        <div class="radar-installation-feedback ${this._installationFeedback[installationHeightEntityId].tone}" role="status">
+                          <ha-icon icon="${this._installationFeedback[installationHeightEntityId].tone === 'success' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}"></ha-icon>
+                          <span>${this._installationFeedback[installationHeightEntityId].text}</span>
+                        </div>
+                      ` : installationHeightStatus !== 'ready' ? html`
+                        <div class="radar-installation-feedback error" role="status">
+                          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+                          <span>${this._text('radar.installation.error.unavailable')}</span>
+                        </div>
+                      ` : nothing}
+                    </div>
+                    <div class="radar-installation-control">
+                      <label for="ld2460-angle">
+                        ${this._text('radar.installation.angle')}
+                        <span>${installationAngleDeg === null ? '—' : `${installationAngleDeg.toFixed(1)}°`}</span>
+                      </label>
+                      <div class="radar-installation-input">
+                        <input id="ld2460-angle" type="number" inputmode="decimal"
+                          min="${LD2460_ANGLE_RANGE.minimum}" max="${LD2460_ANGLE_RANGE.maximum}" step="${LD2460_ANGLE_RANGE.step}"
+                          aria-describedby="ld2460-installation-help"
+                          .value="${this._installationDraft(installationAngleEntityId, installationAngleDeg)}"
+                          ?disabled="${hardwareModeMismatch || installationAngleStatus !== 'ready' || this._installationUpdateEntityId !== null}"
+                          @input="${(event: Event) => this._setInstallationDraft(installationAngleEntityId, (event.target as HTMLInputElement).value)}"
+                          @keydown="${(event: KeyboardEvent) => {
+                            if (event.key === 'Enter') void this._applyRadarInstallationValue(selectedRadar, this._selectedSensorIndex!, 'angle');
+                          }}" />
+                        <button
+                          ?disabled="${hardwareModeMismatch || installationAngleStatus !== 'ready' || this._installationUpdateEntityId !== null}"
+                          @click="${() => this._applyRadarInstallationValue(selectedRadar, this._selectedSensorIndex!, 'angle')}">
+                          ${this._installationUpdateEntityId === installationAngleEntityId
+                            ? this._text('radar.installation.saving')
+                            : this._text('radar.installation.apply')}
+                        </button>
+                      </div>
+                      ${this._installationFeedback[installationAngleEntityId] ? html`
+                        <div class="radar-installation-feedback ${this._installationFeedback[installationAngleEntityId].tone}" role="status">
+                          <ha-icon icon="${this._installationFeedback[installationAngleEntityId].tone === 'success' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}"></ha-icon>
+                          <span>${this._installationFeedback[installationAngleEntityId].text}</span>
+                        </div>
+                      ` : installationAngleStatus !== 'ready' ? html`
+                        <div class="radar-installation-feedback error" role="status">
+                          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+                          <span>${this._text('radar.installation.error.unavailable')}</span>
+                        </div>
+                      ` : nothing}
+                    </div>
+                  </div>
+                  <p id="ld2460-installation-help" class="radar-installation-note">
+                    ${this._text('radar.installation.recommendation')}
+                  </p>
+                  ${hardwareModeMismatch ? html`
+                    <p class="radar-installation-note warning">${this._text('radar.installation.mode_first')}</p>
+                  ` : nothing}
+                  ${installationHeightM !== null && Math.abs((this._selectedSensor.heightMm / 1000) - installationHeightM) >= 0.005 ? html`
+                    <button class="secondary-action" @click="${() => this._updateSensor(this._selectedSensorIndex!, { heightMm: Math.round(installationHeightM * 1000) })}">
+                      <ha-icon icon="mdi:sync"></ha-icon>${this._text('radar.installation.use_radar_height')}
+                    </button>
+                  ` : nothing}
+                </section>
+              ` : installationAvailability === 'partial' || installationAvailability === 'firmware_update' ? html`
+                <section class="radar-installation" aria-labelledby="ld2460-installation-title">
+                  <div class="radar-installation-header">
+                    <ha-icon icon="mdi:update"></ha-icon>
+                    <div>
+                      <strong id="ld2460-installation-title">${this._text('radar.installation.title')}</strong>
+                      <span>${this._text('radar.installation.firmware_update')}</span>
+                    </div>
+                  </div>
+                </section>
+              ` : nothing}
+              ${selectedRadar?.profile.radarModel === 'ld2460' && completeSectorControls ? html`
+                <section class="radar-sector" aria-labelledby="ld2460-sector-title">
+                  <div class="radar-installation-header">
+                    <ha-icon icon="mdi:radar"></ha-icon>
+                    <div>
+                      <strong id="ld2460-sector-title">${this._text('radar.sector.title')}</strong>
+                      <span>${this._text('radar.sector.description')}</span>
+                    </div>
+                  </div>
+                  <div class="radar-sector-grid">
+                    ${([
+                      {
+                        id: selectedRadar.profile.detectionDistanceEntityId!,
+                        label: this._text('radar.sector.distance'),
+                        fallback: selectedRadar.profile.detectionDistanceM,
+                        min: LD2460_DETECTION_DISTANCE_RANGE.minimum,
+                        max: LD2460_DETECTION_DISTANCE_RANGE.maximum,
+                        step: LD2460_DETECTION_DISTANCE_RANGE.step,
+                      },
+                      {
+                        id: selectedRadar.profile.detectionStartAngleEntityId!,
+                        label: this._text('radar.sector.start_angle'),
+                        fallback: selectedRadar.profile.detectionStartAngleDeg,
+                        min: LD2460_DETECTION_ANGLE_RANGE.minimum,
+                        max: LD2460_DETECTION_ANGLE_RANGE.maximum,
+                        step: LD2460_DETECTION_ANGLE_RANGE.step,
+                      },
+                      {
+                        id: selectedRadar.profile.detectionEndAngleEntityId!,
+                        label: this._text('radar.sector.end_angle'),
+                        fallback: selectedRadar.profile.detectionEndAngleDeg,
+                        min: LD2460_DETECTION_ANGLE_RANGE.minimum,
+                        max: LD2460_DETECTION_ANGLE_RANGE.maximum,
+                        step: LD2460_DETECTION_ANGLE_RANGE.step,
+                      },
+                    ]).map(control => html`
+                      <div class="radar-sector-control">
+                        <label for="sector-${control.id.replace(/[^a-z0-9_-]/gi, '-')}">${control.label}</label>
+                        <input id="sector-${control.id.replace(/[^a-z0-9_-]/gi, '-')}" type="number" inputmode="decimal"
+                          min="${control.min}" max="${control.max}" step="${control.step}"
+                          .value="${this._sectorDrafts[control.id] ?? String(this._sectorValue(control.id, control.fallback) ?? '')}"
+                          ?disabled="${this._sectorUpdateEntityId !== null || radarInstallationEntityStatus(this.hass.states[control.id]) !== 'ready'}"
+                          @input="${(event: Event) => this._setSectorDraft(selectedRadar, control.id, (event.target as HTMLInputElement).value)}" />
+                      </div>
+                    `)}
+                  </div>
+                  <p class="radar-installation-note">${this._text('radar.sector.directions')}</p>
+                  <p class="radar-installation-note warning">${this._text('radar.sector.pause_notice')}</p>
+                  <p class="radar-installation-note">${this._text('radar.sector.reflections')}</p>
+                  ${this._sectorFeedback ? html`
+                    <div class="radar-installation-feedback ${this._sectorFeedback.tone}" role="status" aria-live="polite">
+                      <ha-icon icon="${this._sectorFeedback.tone === 'success' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}"></ha-icon>
+                      <span>${this._sectorFeedback.text}</span>
+                    </div>
+                  ` : nothing}
+                </section>
+              ` : selectedRadar?.profile.radarModel === 'ld2460' && (partialSectorControls || !sectorEntityIds.some(Boolean)) ? html`
+                <section class="radar-sector">
+                  <div class="radar-installation-header">
+                    <ha-icon icon="mdi:update"></ha-icon>
+                    <div>
+                      <strong>${this._text('radar.sector.title')}</strong>
+                      <span>${this._text('radar.sector.firmware_update')}</span>
+                    </div>
+                  </div>
+                </section>
+              ` : nothing}
               <div class="setting-item">
                 <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Tracking orientation' : 'Rotation'}: ${this._selectedSensor.rotation}°</label>
                 <input type="range" min="0" max="359" .value="${String(this._selectedSensor.rotation)}"
@@ -4957,14 +5727,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 <input type="range" min="30" max="180" .value="${String(this._selectedSensor.fov)}"
                        @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { fov: parseInt((e.target as HTMLInputElement).value) })}"/>
               </div>
-              <div class="setting-item">
-                <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Ceiling height' : 'Mounting height'}: ${((this._selectedSensor.heightMm ?? 2000) / 1000).toFixed(1)}m</label>
-                <input type="range" min="${this._selectedSensor.mountingMode === 'ceiling' ? '2' : '0.2'}" max="${this._selectedSensor.mountingMode === 'ceiling' ? '5' : '3'}" step="0.1" .value="${String((this._selectedSensor.heightMm ?? 2000) / 1000)}"
-                       @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { heightMm: Math.round(parseFloat((e.target as HTMLInputElement).value) * 1000) })}"/>
-                ${this._selectedSensor.mountingMode === 'ceiling' ? html`
-                  <p class="firmware-status-note">Effective floor radius: ${(this._coverageRadius(this._selectedSensor) / 1000).toFixed(1)}m.</p>
-                ` : nothing}
-              </div>
+              ${installationAvailability !== 'complete' ? html`
+                <div class="setting-item">
+                  <label>${this._selectedSensor.mountingMode === 'ceiling' ? 'Ceiling height' : 'Mounting height'}: ${((this._selectedSensor.heightMm ?? 2000) / 1000).toFixed(1)}m</label>
+                  <input type="range" min="${this._selectedSensor.mountingMode === 'ceiling' ? '2' : '0.2'}" max="${this._selectedSensor.mountingMode === 'ceiling' ? '5' : '3'}" step="0.1" .value="${String((this._selectedSensor.heightMm ?? 2000) / 1000)}"
+                         @input="${(e: Event) => this._updateSensor(this._selectedSensorIndex!, { heightMm: Math.round(parseFloat((e.target as HTMLInputElement).value) * 1000) })}"/>
+                  ${this._selectedSensor.mountingMode === 'ceiling' ? html`
+                    <p class="firmware-status-note">Effective floor radius: ${(this._coverageRadius(this._selectedSensor) / 1000).toFixed(1)}m.</p>
+                  ` : nothing}
+                </div>
+              ` : nothing}
               ${radarDevices.some(device => !device.profile.positioningAvailable) ? html`
                 <p class="firmware-status-note">
                   Presence-only radars such as LD2412 are shown for clarity but cannot be selected because they do not expose X/Y positions.
@@ -5015,7 +5787,11 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             ${this._calibration.corners.length === 4 ? 'Measure again' : 'Start live measurement'}
           </button>
           ${!canCalibrate ? html`
-            <p class="firmware-status-note warning">Select an LD2450, LD2460 or LD6002B positioning radar before starting.</p>
+            <p class="firmware-status-note warning">
+              ${selectedRadar?.profile.radarModel === 'ld2460'
+                ? this._text('radar.readiness.calibration_blocked')
+                : 'Select an LD2450, LD2460 or LD6002B positioning radar before starting.'}
+            </p>
           ` : html`
             <p class="firmware-status-note">
               Uses normalized live X/Y positions from ${this._sensorLabel(this._selectedSensor!, this._selectedSensorIndex!)} (${selectedRadar?.profile.radarModel.toUpperCase()}).
@@ -5477,8 +6253,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
       ${this._showCoverageCalibration && this._selectedSensor ? html`
         <shs-sensor-coverage-calibration
+          .hass="${this.hass}"
           .targets="${this._liveTargets[this._selectedSensor.id] || []}"
-          .initialCorners="${this._calibration.sensorId === this._selectedSensor.id
+          .initialCorners="${!this._coverageCalibrationStartsFresh && this._calibration.sensorId === this._selectedSensor.id
             ? this._calibration.corners.map(point => this._worldToSensorLocal(this._selectedSensor!, point))
             : []}"
           .range="${this._selectedSensor.range}"
@@ -5486,7 +6263,12 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           .mountingMode="${this._selectedSensor.mountingMode}"
           .radarModel="${this._findRadarDevice(this._selectedSensor.deviceId)?.profile.radarModel || 'positioning radar'}"
           .sensorName="${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}"
-          @calibration-cancel="${() => this._showCoverageCalibration = false}"
+          .requiresOrientationCheck="${this._findRadarDevice(this._selectedSensor.deviceId)?.profile.radarModel === 'ld2460'}"
+          .isRemeasurement="${this._coverageCalibrationStartsFresh}"
+          @calibration-cancel="${() => {
+            this._coverageCalibrationStartsFresh = false;
+            this._showCoverageCalibration = false;
+          }}"
           @calibration-save="${this._saveCoverageCalibration}"
         ></shs-sensor-coverage-calibration>
       ` : nothing}

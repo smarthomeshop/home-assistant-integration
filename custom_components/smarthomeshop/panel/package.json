@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-panel",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "description": "SmartHomeShop Configurator Panel for Home Assistant",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -9,7 +9,10 @@
     "build:prod": "npm run build && npm run copy",
     "copy": "cp dist/smarthomeshop-panel.js ../www/smarthomeshop-panel.js",
     "test:furniture": "node --test test/furniture-rotation.test.mjs",
+    "test:device-resolution": "node --test test/device-entity-resolution.test.mjs",
     "test:quiet-hours": "node --test test/sps30-quiet-hours.test.mjs",
+    "test:radar-installation": "node --test test/radar-installation.test.mjs",
+    "test:radar-coordinates": "node --test test/radar-coordinates.test.mjs",
     "watch": "rollup -c -w"
   },
   "dependencies": {

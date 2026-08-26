@@ -78,6 +78,27 @@ options default to visible, so existing dashboards keep their current layout.
 | **Smart Savings Card** | Header, battery/schedule breakdown and measurement explanation |
 | **Smart Automations Card** | Header, compact/expanded density, deadline schedules, quick controls and last-triggered information |
 
+### UltimateSensor room view
+
+In `view_mode: room`, the card automatically opens the Room Designer room
+linked to the configured `device_id`. Each card therefore follows its own
+UltimateSensor, even when a dashboard contains several sensors. The visual
+editor also offers a room override and a 300, 360, 480 or 600-pixel room-view
+height. Sections dashboards can resize the card horizontally and the card asks
+for a full row by default.
+
+```yaml
+type: custom:smarthomeshop-ultimatesensor-card
+device_id: your_home_assistant_device_id
+view_mode: room
+room_view_mode: 2d
+room_height: 480
+```
+
+If the card cannot find a room automatically, open Room Designer and link that
+exact Home Assistant device to a sensor placement. A room can also be selected
+explicitly in the visual card editor.
+
 The compact `Total meter reading` row stays available on firmware without a
 calibration entity. Firmware that supports meter calibration also shows a
 `Set` action in the same row.

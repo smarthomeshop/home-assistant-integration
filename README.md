@@ -111,8 +111,28 @@ prefixes remain supported.
 - A `top_or_side` radar reports a visible mismatch when its hardware mode does
   not suit the mounting profile. Changing that mode always requires explicit
   user confirmation.
+- Wall-mounted LD2460 devices expose their radar-stored mounting height and
+  downward angle directly in Room Designer. Values are written through Home
+  Assistant and only shown as saved after the radar reports them back.
+- The LD2460 hardware detection sector is drawn separately from room polygons.
+  Distance and left/right angles are debounced and confirmed by the radar
+  before another change is sent.
+- LD2460 calibration checks the reported side mode, live height and angle, then
+  verifies a forward-Y and sideways-X walk. A physically rotated module is
+  never hidden with a software X/Y swap.
+- Missing or unavailable target slots are removed immediately, so a previous
+  coordinate cannot remain visible while the radar applies a setting.
+- Detection and exclusion polygons use integer millimetres and enforce the
+  firmware limit of 20 vertices per polygon.
 - Existing saved rooms keep their range, field of view, height and projection
   until the user chooses to adopt new firmware defaults.
+- Coverage measurement uses near/far and left/right from the radar's own
+  viewpoint. “Measure again” starts with four fresh points without deleting the
+  saved area until Save is pressed. Moving or rotating the sensor placement
+  keeps that measured coverage attached to the sensor.
+- Polygon services are matched through the Home Assistant device registry, so
+  ESPHome node suffixes such as `_a2799c` are retained and zones cannot be sent
+  to another similarly named sensor.
 - Older firmware continues to work through a clearly identified legacy
   profile; diagnostics list the metadata needed for a firmware upgrade.
 

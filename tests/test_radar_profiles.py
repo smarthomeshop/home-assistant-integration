@@ -34,7 +34,11 @@ def _metadata(prefix: str, *, mounting: str, model: str) -> list[RadarEntitySnap
         _entity(f"text_sensor.{prefix}_radar_mounting_mode", "Radar Mounting Mode", mounting),
         _entity(f"text_sensor.{prefix}_radar_coordinate_projection", "Radar Coordinate Projection", "floor_xy" if ceiling else "forward_xy"),
         _entity(f"text_sensor.{prefix}_radar_required_installation_mode", "Radar Required Installation Mode", "top" if ceiling else "side"),
-        _entity(f"sensor.{prefix}_radar_default_mounting_height", "Radar Default Mounting Height", "2500" if ceiling else "1500"),
+        _entity(
+            f"sensor.{prefix}_radar_default_mounting_height",
+            "Radar Default Mounting Height",
+            "2500" if ceiling else "2600" if model == "ld2460" else "1500",
+        ),
         _entity(f"sensor.{prefix}_radar_default_range", "Radar Default Range", "6000"),
         _entity(f"sensor.{prefix}_radar_default_field_of_view", "Radar Default Field Of View", "120"),
         _entity(f"text_sensor.{prefix}_radar_model", "Radar Model", model),
@@ -119,11 +123,31 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
     entries += [
         _entity("binary_sensor.mini_v2_ld2412_presence", "LD2412 Presence", "on"),
         _entity(
-            "select.mini_v2_tracking_installation_mode",
-            "Tracking Installation Mode",
-            "top",
+            "select.arbitrary_user_renamed_mode_entity",
+            "Tracking Radar Installation Mode",
+            "side",
             options=("side", "top"),
         ),
+        _entity(
+            "text_sensor.another_arbitrary_reported_mode",
+            "Tracking Radar Installation Mode",
+            "top",
+        ),
+        _entity(
+            "number.completely_custom_height_entity",
+            "Tracking Radar Installation Height",
+            "2.60",
+        ),
+        _entity(
+            "number.another_unrelated_prefix_for_angle",
+            "Tracking Radar Installation Angle",
+            "30.0",
+        ),
+        _entity("number.custom_sector_distance", "Tracking Radar Detection Distance", "5.5"),
+        _entity("number.custom_sector_left", "Tracking Radar Detection Start Angle", "-45"),
+        _entity("number.custom_sector_right", "Tracking Radar Detection End Angle", "50"),
+        _entity("binary_sensor.custom_presence", "Tracking Presence", "on"),
+        _entity("sensor.custom_count", "Tracking Target Count", "2"),
     ]
     radar = _resolve("Mini V2 LD2460", "ultimatesensor_mini_v2", entries)
 
@@ -132,8 +156,71 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
     assert radar.profile.maximum_targets == 5
     assert radar.profile.required_installation_mode == "side"
     assert radar.profile.current_hardware_mode == "top"
+    assert radar.profile.reported_installation_mode_entity_id == (
+        "text_sensor.another_arbitrary_reported_mode"
+    )
+    assert radar.profile.installation_mode_entity_id == (
+        "select.arbitrary_user_renamed_mode_entity"
+    )
     assert radar.profile.installation_mode_options == ("side", "top")
+    assert radar.profile.installation_height_entity_id == (
+        "number.completely_custom_height_entity"
+    )
+    assert radar.profile.installation_height_m == 2.6
+    assert radar.profile.installation_angle_entity_id == (
+        "number.another_unrelated_prefix_for_angle"
+    )
+    assert radar.profile.installation_angle_deg == 30
+    assert radar.profile.detection_distance_entity_id == "number.custom_sector_distance"
+    assert radar.profile.detection_distance_m == 5.5
+    assert radar.profile.detection_start_angle_entity_id == "number.custom_sector_left"
+    assert radar.profile.detection_start_angle_deg == -45
+    assert radar.profile.detection_end_angle_entity_id == "number.custom_sector_right"
+    assert radar.profile.detection_end_angle_deg == 50
+    assert radar.profile.tracking_presence_entity_id == "binary_sensor.custom_presence"
+    assert radar.profile.tracking_target_count_entity_id == "sensor.custom_count"
+    assert radar.profile.mounting_height_mm == 2600
     assert len(radar.targets) == 5
+
+
+def test_ld2460_partial_installation_controls_remain_explicit() -> None:
+    entries = _metadata("hall", mounting="wall", model="ld2460")
+    entries += _targets("hall", 5, tracking=True)
+    entries.append(
+        _entity(
+            "number.hall_calibration_height",
+            "Installation Height",
+            "unavailable",
+        )
+    )
+
+    radar = _resolve("Hall LD2460", "ultimatesensor_v2", entries)
+
+    assert radar.profile.installation_height_entity_id == (
+        "number.hall_calibration_height"
+    )
+    assert radar.profile.installation_height_m is None
+    assert radar.profile.installation_angle_entity_id is None
+    assert radar.profile.installation_angle_deg is None
+
+
+def test_ld2460_rejects_sector_values_outside_the_side_mode_contract() -> None:
+    entries = _metadata("office", mounting="wall", model="ld2460")
+    entries += _targets("office", 5, tracking=True)
+    entries += [
+        _entity("number.any_distance", "Tracking Radar Detection Distance", "6.1"),
+        _entity("number.any_start", "Tracking Radar Detection Start Angle", "-61"),
+        _entity("number.any_end", "Tracking Radar Detection End Angle", "unavailable"),
+    ]
+
+    radar = _resolve("Office LD2460", "ultimatesensor_v2", entries)
+
+    assert radar.profile.detection_distance_entity_id == "number.any_distance"
+    assert radar.profile.detection_distance_m is None
+    assert radar.profile.detection_start_angle_entity_id == "number.any_start"
+    assert radar.profile.detection_start_angle_deg is None
+    assert radar.profile.detection_end_angle_entity_id == "number.any_end"
+    assert radar.profile.detection_end_angle_deg is None
 
 
 def test_ultimate_sensor_v1_is_a_supported_ld2450_product() -> None:

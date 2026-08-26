@@ -1,6 +1,6 @@
 {
   "name": "smarthomeshop-cards",
-  "version": "1.11.1",
+  "version": "1.12.0",
   "description": "SmartHomeShop.io Lovelace Cards for Home Assistant",
   "main": "dist/smarthomeshop-cards.js",
   "type": "module",
@@ -10,6 +10,7 @@
     "dev": "npm run build && npm run watch",
     "clean": "rm -rf dist",
     "test:furniture": "node --test test/furniture-rotation.test.mjs",
+    "test:rooms": "node --test test/room-selection.test.mjs",
     "type-check": "tsc --noEmit",
     "copy": "cp dist/smarthomeshop-cards.js ../www/",
     "build:prod": "npm run build && npm run copy"
