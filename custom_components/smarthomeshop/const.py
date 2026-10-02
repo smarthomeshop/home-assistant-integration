@@ -9,7 +9,7 @@ from typing import Final
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN: Final = "smarthomeshop"
-VERSION: Final = "1.12.0"
+VERSION: Final = "1.13.0"
 MANUFACTURER: Final = "SmartHomeShop.io"
 
 # Cloud API endpoint. Production/HACS installations use the public API by
