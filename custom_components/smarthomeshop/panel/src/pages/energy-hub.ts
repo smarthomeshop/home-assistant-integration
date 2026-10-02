@@ -1756,6 +1756,12 @@ export class EnergyHub extends LitElement {
         config: { energy_dashboard_enabled: enabled },
       }, EnergyHub.INITIAL_LOAD_TIMEOUT);
       this._sources = response.sources || this._sources;
+      if (enabled) {
+        window.setTimeout(() => {
+          this._startAccountLoad('smarthomeshop/account');
+          void this._load();
+        }, 500);
+      }
     } catch (error) {
       this._sources = { ...this._sources, energy_dashboard_enabled: previous };
       console.error('Could not save the Energy dashboard visibility preference', error);
@@ -2845,12 +2851,12 @@ export class EnergyHub extends LitElement {
       <div class="dashboard-disabled" role="status">
         <div class="dashboard-disabled-icon"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon></div>
         <div class="dashboard-disabled-copy">
-          <div class="dashboard-disabled-title">Energy dashboard is currently disabled</div>
-          <div class="dashboard-disabled-text">Enable it again to show live energy, prices, costs, trends and smart control.</div>
+          <div class="dashboard-disabled-title">Smart Energy is currently disabled</div>
+          <div class="dashboard-disabled-text">No SmartHomeShop price, savings or battery-planner entities are created while it is off. Your saved setup remains available.</div>
         </div>
         ${this.hass.user?.is_admin ? html`
           <button class="cta-btn" @click=${() => this._setEnergyDashboardEnabled(true)}>
-            Enable Energy dashboard
+            Enable Smart Energy
           </button>
         ` : html`
           <div class="dashboard-disabled-text">Ask a Home Assistant administrator to enable it.</div>
@@ -3254,13 +3260,13 @@ export class EnergyHub extends LitElement {
           <div class="display-card">
             <div class="display-icon"><ha-icon icon="mdi:lightning-bolt-outline"></ha-icon></div>
             <div class="display-copy">
-              <div class="display-title">Enable Energy dashboard</div>
-              <div class="display-sub">Show live energy, prices, costs, trends and smart control in the Energy tab.</div>
+              <div class="display-title">Enable Smart Energy</div>
+              <div class="display-sub">Create the price, savings and battery-planner entities and show live energy, costs, trends and smart control. Turn this off if you use only Home Assistant's own Energy dashboard.</div>
             </div>
             <ha-switch
               .checked=${this._sources.energy_dashboard_enabled !== false}
               ?disabled=${this._displaySaving || !this.hass.user?.is_admin}
-              aria-label="Enable the Energy dashboard"
+              aria-label="Enable Smart Energy"
               @change=${(event: Event) => this._setEnergyDashboardEnabled(
                 (event.currentTarget as HTMLElement & { checked: boolean }).checked,
               )}

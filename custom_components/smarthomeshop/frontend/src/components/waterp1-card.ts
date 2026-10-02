@@ -4,7 +4,7 @@
  */
 
 import { html, css, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import { SmartHomeShopBaseCard, CardConfig } from './base-card';
 import { baseStyles } from '../utils/styles';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
@@ -47,7 +47,6 @@ interface WaterP1Config extends CardConfig {
   micro_leak_entity?: string;
 }
 
-@customElement('smarthomeshop-waterp1-card')
 export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
   @state() private _energyTodayFromStats: number | null = null;
   @state() private _lastStatsUpdate: number = 0;

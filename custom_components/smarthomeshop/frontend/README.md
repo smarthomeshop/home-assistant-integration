@@ -32,7 +32,9 @@ frontend/
 │   ├── utils/              # Helper functions
 │   │   ├── helpers.ts      # Entity helpers, formatting, sparklines
 │   │   ├── styles.ts       # Shared CSS styles (HA theming)
-│   │   └── translations.ts # i18n translations (8 languages)
+│   │   ├── translations.ts # Shared i18n and HA language detection
+│   │   ├── energy-translations.ts # Smart Energy translations
+│   │   └── runtime-translations.ts # Complete card/editor translations
 │   └── types/              # TypeScript definitions
 │       └── home-assistant.ts # HA types (entities, devices, etc.)
 ├── dist/                   # Compiled output
@@ -171,10 +173,11 @@ every available series reaches the current time.
   - Card layouts and animations
   - Status badges and icons
 
-- **translations.ts** - Internationalization:
-  - English (default), Dutch, German, French
-  - Spanish, Italian, Portuguese, Polish
-  - Automatic language detection via HA
+- **translations.ts**, **energy-translations.ts** and **runtime-translations.ts** - Internationalization:
+  - Complete English, Dutch, German, French and Spanish card/editor coverage
+  - Automatic per-user language detection through Home Assistant
+  - Regional language variants such as `nl-NL`, `de-DE` and `fr-FR`
+  - Safe English fallback for unsupported languages
 
 ### Types (`src/types/`)
 

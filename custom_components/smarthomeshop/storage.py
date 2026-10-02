@@ -38,6 +38,7 @@ class SmartHomeShopStore:
         self._data.setdefault("water_anchors", {})
         self._data.setdefault("schedule_runtime", {})
         self._data.setdefault("savings", {})
+        self._data.setdefault("hidden_devices", {})
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -181,3 +182,33 @@ class SmartHomeShopStore:
         """Persist the accumulated smart-energy savings."""
         self._data["savings"] = savings
         await self.async_save()
+
+    # ---- Devices hidden from the SmartHomeShop panel ----
+
+    def get_hidden_devices(self) -> dict[str, dict[str, Any]]:
+        """Return devices hidden from the panel, keyed by stable source identity."""
+        return {
+            str(key): dict(value)
+            for key, value in self._data.get("hidden_devices", {}).items()
+            if isinstance(value, dict)
+        }
+
+    def is_device_hidden(self, device_key: str) -> bool:
+        """Return whether a source device is hidden from the panel."""
+        return device_key in self._data.get("hidden_devices", {})
+
+    async def async_hide_device(
+        self, device_key: str, device: dict[str, Any]
+    ) -> None:
+        """Hide a source device without touching ESPHome or its entities."""
+        self._data.setdefault("hidden_devices", {})[device_key] = dict(device)
+        await self.async_save()
+
+    async def async_unhide_device(self, device_key: str) -> bool:
+        """Make a previously hidden source device visible again."""
+        hidden = self._data.setdefault("hidden_devices", {})
+        if device_key not in hidden:
+            return False
+        del hidden[device_key]
+        await self.async_save()
+        return True

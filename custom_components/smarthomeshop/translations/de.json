@@ -1,0 +1,220 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartHomeShop.io",
+        "description": "Fügen Sie ein SmartHomeShop Produkt zu Home Assistant hinzu.\n\nWählen Sie das Produkt aus, das zu Ihrem physischen Gerät passt. Das Gerät muss bereits in Home Assistant durch die ESPHome-Integration online sein.",
+        "data": {
+          "product_type": "Produkt"
+        },
+        "data_description": {
+          "product_type": "Wählen Sie das SmartHomeShop-Produkt, das Sie konfigurieren möchten."
+        }
+      },
+      "device": {
+        "title": "Wählen Sie {product_name}",
+        "description": "{product_description}\n\nWählen Sie das ESPHome-Gerät aus, das zu diesem Produkt gehört.",
+        "data": {
+          "device_id": "ESPHome-Gerät"
+        }
+      },
+      "water_options": {
+        "title": "Leckageerkennung",
+        "description": "Diese Sensoren wurden auf Ihrem Gerät gefunden:\n- Wasserverbrauch: `{water_sensor}`\n- Durchflussrate: `{flow_sensor}`\n\nDie Leckerkennung überwacht diese Sensoren und fügt Warnentitäten zu Home Assistant hinzu. Wählen Sie Einstellungen, die zu Ihrem Haushalt passen. Sie können alles später über **Konfigurieren** ändern.",
+        "data": {
+          "continuous_flow_minutes": "Dauerstromalarm nach",
+          "night_start": "Nachtüberwachung beginnt",
+          "night_end": "Nachtüberwachung endet",
+          "vacation_mode_entity": "Umschalter im Urlaubsmodus (fakultativ)"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alarmieren Sie, wenn das Wasser so lange ununterbrochen fließt. Dies fängt ein geplatztes Rohr, einen vergessenen Gartenschlauch oder eine laufende Toilette. 30 Minuten sind ein guter Standard; Wählen Sie länger, wenn Sie oft ein Bad oder einen Pool füllen.",
+          "night_start": "Ab diesem Zeitpunkt verwendet Ihr Haus normalerweise wenig bis gar kein Wasser. Unerwartete Nutzung während des Nachtfensters wird als mögliches Leck behandelt.",
+          "night_end": "Ende des Nachtfensters. Nach dieser Zeit gilt die normale Tagesnutzung wieder.",
+          "vacation_mode_entity": "Optional: Wählen Sie einen Toggle-Helfer (input_boolean), den Sie einschalten, wenn Sie weg sind. Während es eingeschaltet ist, löst jeder Wasserverbrauch sofort einen Leckalarm aus."
+        }
+      },
+      "summary": {
+        "title": "Bereit zum Hinzufügen",
+        "description": "**{product_name}** auf **{device_name}** ist bereit.\n\nFolgende Entitäten werden zu Home Assistant hinzugefügt:\n\n{entities}\n\nAlle Entitätsnamen enden in * (CC)*, so dass Sie sie von den eingebauten ESPHome-Entitäten unterscheiden können."
+      }
+    },
+    "error": {
+      "no_water_sensor": "Kein Wassersensor auf diesem Gerät gefunden",
+      "device_not_found": "Produkt nicht gefunden"
+    },
+    "abort": {
+      "already_configured": "Dieses Gerät ist bereits konfiguriert",
+      "no_devices_found": "Es wurden keine derartigen Vorrichtungen gefunden.\n\nStellen Sie sicher, dass Ihr SmartHomeShop-Gerät über die ESPHome-Integration zu Home Assistant hinzugefügt wird und online ist.\n\nFür Einrichtungsanweisungen besuchen Sie: docs.smarthomeshop.io",
+      "invalid_link_request": "Diese Linkanforderung ist nicht gültig",
+      "device_not_found": "Produkt nicht gefunden",
+      "no_water_sensor": "Auf diesem Gerät wurde kein Wassersensor gefunden. Stellen Sie sicher, dass das Gerät online ist und seine Wassersensoren in Home Assistant aktiviert sind, und versuchen Sie es erneut."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Geräteeinstellungen",
+        "data": {
+          "continuous_flow_minutes": "Dauerstromalarm nach",
+          "night_start": "Nachtüberwachung beginnt",
+          "night_end": "Nachtüberwachung endet",
+          "vacation_mode_entity": "Umschalter im Urlaubsmodus (fakultativ)",
+          "price_electricity_t1": "Strompreistarif 1",
+          "price_electricity_t2": "Strompreistarif 2",
+          "price_feed_in": "Einspeiseausgleich",
+          "price_gas": "Gaspreis",
+          "price_water": "Wasserpreis",
+          "main_fuse_amps": "Hauptsicherung pro Phase"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alarmieren Sie, wenn das Wasser so lange ununterbrochen fließt. Dies fängt ein geplatztes Rohr, einen vergessenen Gartenschlauch oder eine laufende Toilette. 30 Minuten sind ein guter Standard; Wählen Sie länger, wenn Sie oft ein Bad oder einen Pool füllen.",
+          "night_start": "Ab diesem Zeitpunkt verwendet Ihr Haus normalerweise wenig bis gar kein Wasser. Unerwartete Nutzung während des Nachtfensters wird als mögliches Leck behandelt.",
+          "night_end": "Ende des Nachtfensters. Nach dieser Zeit gilt die normale Tagesnutzung wieder.",
+          "vacation_mode_entity": "Optional: Wählen Sie einen Toggle-Helfer (input_boolean), den Sie einschalten, wenn Sie weg sind. Während es eingeschaltet ist, löst jeder Wasserverbrauch sofort einen Leckalarm aus.",
+          "price_electricity_t1": "Was Sie pro kWh zum normalen / Tagestarif bezahlen. Wird für die Kostensensoren verwendet.",
+          "price_electricity_t2": "Was Sie pro kWh zum niedrigen / Nachttarif bezahlen.",
+          "price_feed_in": "Was Sie pro kWh erhalten, das Ihre Solarmodule in das Netz zurückführen.",
+          "price_gas": "Was Sie pro m³ von Gas bezahlen.",
+          "price_water": "Was Sie pro m³ (1000 Liter) Wasser bezahlen. Wird für den Wasserkostensensor verwendet.",
+          "main_fuse_amps": "Die Größe Ihrer Hauptsicherung pro Phase (siehe Ihren Zählerschrank, z. B. 25A oder 35A). Wird für den Phasenlastsensor verwendet."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "water_cost_today": {
+        "name": "Wasserkosten heute (CC)"
+      },
+      "usage_vs_average": {
+        "name": "Nutzung vs. 7-Tage-Durchschnitt (CC)"
+      },
+      "last_session": {
+        "name": "Letzte Wassersitzung (CC)"
+      },
+      "current_flow_rate": {
+        "name": "Aktueller Wasserverbrauch (CC)"
+      },
+      "today_usage": {
+        "name": "Nutzung heute (CC)"
+      },
+      "week_usage": {
+        "name": "Nutzung diese Woche (CC)"
+      },
+      "month_usage": {
+        "name": "Nutzung in diesem Monat (CC)"
+      },
+      "year_usage": {
+        "name": "Nutzung in diesem Jahr (CC)"
+      },
+      "leak_score": {
+        "name": "Leckpunktzahl (CC)"
+      },
+      "leak_confidence": {
+        "name": "Zuverlässigkeit der Leckerkennung (CC)"
+      },
+      "baseline_learning_days": {
+        "name": "Grundlegende Lerntage (CC)"
+      },
+      "continuous_flow_duration": {
+        "name": "Dauer des kontinuierlichen Flusses (CC)"
+      },
+      "grid_import_energy": {
+        "name": "Netzimportenergie (CC)"
+      },
+      "grid_export_energy": {
+        "name": "Netzexportenergie (CC)"
+      },
+      "grid_import_power": {
+        "name": "Netzimportstrom (CC)"
+      },
+      "grid_export_power": {
+        "name": "Netzexportstrom (CC)"
+      },
+      "net_power": {
+        "name": "Netzstrom (CC)"
+      },
+      "available_grid_power": {
+        "name": "Verfügbare Netzleistung (CC)"
+      },
+      "phase_max_load": {
+        "name": "Höchste Phasenlast (CC)"
+      },
+      "phase_imbalance": {
+        "name": "Phasenungleichgewicht (CC)"
+      },
+      "standby_power": {
+        "name": "Standby-Leistung (CC)"
+      },
+      "standby_cost_year": {
+        "name": "Standby Kosten pro Jahr (CC)"
+      },
+      "month_peak": {
+        "name": "Monatsspitze (CC)"
+      },
+      "energy_used_today": {
+        "name": "Heute verbrauchte Energie (CC)"
+      },
+      "energy_cost_today": {
+        "name": "Energiekosten heute (CC)"
+      },
+      "energy_cost_month": {
+        "name": "Energiekosten in diesem Monat (CC)"
+      },
+      "room_quality": {
+        "name": "Zimmerqualität (CC)"
+      },
+      "room_quality_label": {
+        "name": "Zimmerqualitätslabel (CC)"
+      },
+      "room_quality_percentage": {
+        "name": "Zimmerqualität Prozentsatz (CC)"
+      }
+    },
+    "binary_sensor": {
+      "smart_leak_detected": {
+        "name": "Intelligente Leckerkennung (CC)"
+      },
+      "continuous_flow_leak": {
+        "name": "Dauerstromleckage (CC)"
+      },
+      "night_usage_detected": {
+        "name": "Nachtnutzung (CC)"
+      },
+      "micro_leak_detected": {
+        "name": "Mikroleck (CC)"
+      },
+      "vacation_mode_leak": {
+        "name": "Urlaubsleck (CC)"
+      },
+      "water_flowing": {
+        "name": "Fließendes Wasser (CC)"
+      },
+      "any_leak_alert": {
+        "name": "Leckmelder (CC)"
+      },
+      "baseline_ready": {
+        "name": "Baseline gelernt (CC)"
+      }
+    }
+  },
+  "services": {
+    "apply_battery_recommendation": {
+      "name": "Batterieempfehlung anwenden",
+      "description": "Wendet den aktuellen SmartHomeShop-Batterieplan auf die konfigurierte Steuerungseinheit an.",
+      "fields": {
+        "action": {
+          "name": "Handlungsüberschreibung",
+          "description": "Lassen Sie leer, um die aktuelle Planerempfehlung zu verwenden."
+        }
+      }
+    }
+  },
+  "issues": {
+    "leak_detected": {
+      "title": "Mögliches Wasserleck auf {device}",
+      "description": "Die Leckerkennung von **{device}** meldet ein mögliches Leck (Typ: {leak_type}).\n\nÜberprüfen Sie Ihre Wasserhähne, Toiletten und Geräte. Dieses Problem verschwindet automatisch, sobald der Wasserverbrauch wieder normal ist."
+    }
+  }
+}

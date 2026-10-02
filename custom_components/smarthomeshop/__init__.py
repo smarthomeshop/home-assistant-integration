@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from homeassistant.const import Platform
@@ -29,7 +28,15 @@ from .const import (
 )
 from .load_plugins import load_plugins
 from .websocket_api import async_register_websocket_api
-from .device_linking import prepare_config_entry_source_device
+from .device_linking import (
+    prepare_config_entry_source_device,
+    source_device_storage_key,
+)
+from .energy_runtime import (
+    async_ensure_energy_preference,
+    async_setup_energy_runtime,
+    remove_account_energy_registry_entries,
+)
 
 # Import product-specific coordinators
 from .products.waterp1meterkit import WaterP1MeterKitCoordinator
@@ -48,38 +55,6 @@ PANEL_NAME = "smarthomeshop-panel"
 _PANEL_STATIC_PATH_REGISTERED = "panel_static_path_registered"
 
 type SmartHomeShopConfigEntry = ConfigEntry
-
-_INITIAL_PRICE_REFRESH_TIMEOUT = 35
-_INITIAL_BATTERY_REFRESH_TIMEOUT = 10
-
-
-async def _async_initial_energy_refresh(prices, battery_plan) -> None:
-    """Warm the energy coordinators without delaying integration setup."""
-    try:
-        await asyncio.wait_for(
-            prices.async_refresh(), timeout=_INITIAL_PRICE_REFRESH_TIMEOUT
-        )
-    except TimeoutError:
-        LOGGER.warning(
-            "Initial energy price refresh timed out after %s seconds; "
-            "the integration will retry in the background",
-            _INITIAL_PRICE_REFRESH_TIMEOUT,
-        )
-    except Exception as err:
-        LOGGER.warning("Initial energy price refresh failed: %s", err)
-
-    try:
-        await asyncio.wait_for(
-            battery_plan.async_refresh(), timeout=_INITIAL_BATTERY_REFRESH_TIMEOUT
-        )
-    except TimeoutError:
-        LOGGER.warning(
-            "Initial battery plan refresh timed out after %s seconds",
-            _INITIAL_BATTERY_REFRESH_TIMEOUT,
-        )
-    except Exception as err:
-        LOGGER.warning("Initial battery plan refresh failed: %s", err)
-
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up SmartHomeShop.io integration."""
@@ -109,37 +84,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     except Exception as err:
         LOGGER.error("Failed to register panel: %s", err)
 
-    # Account-wide dynamic energy price coordinator
+    # Smart Energy is a real opt-in module. Existing installations with an
+    # account, P1 product or source mappings are migrated as enabled; a fresh
+    # sensor-only setup stays clean and receives no unrelated service devices.
     try:
-        from .price_coordinator import PriceCoordinator
-
-        prices = PriceCoordinator(hass)
-        hass.data[DOMAIN]["prices"] = prices
-
-        from .savings_tracker import async_setup_savings
-
-        async_setup_savings(hass, prices)
-
-        from .battery_control import async_register_battery_services
-        from .battery_coordinator import BatteryPlanCoordinator
-
-        battery_plan = BatteryPlanCoordinator(hass, prices)
-        hass.data[DOMAIN]["battery_plan"] = battery_plan
-        previous_unsubscribe = hass.data[DOMAIN].pop(
-            "battery_price_unsubscribe", None
-        )
-        if previous_unsubscribe:
-            previous_unsubscribe()
-        hass.data[DOMAIN]["battery_price_unsubscribe"] = prices.async_add_listener(
-            lambda: hass.async_create_task(battery_plan.async_request_refresh())
-        )
-        await async_register_battery_services(hass)
-        hass.data[DOMAIN]["initial_energy_refresh_task"] = hass.async_create_task(
-            _async_initial_energy_refresh(prices, battery_plan),
-            f"{DOMAIN}_initial_energy_refresh",
-        )
+        energy_enabled = await async_ensure_energy_preference(hass)
+        if energy_enabled:
+            await async_setup_energy_runtime(hass)
+        else:
+            remove_account_energy_registry_entries(hass)
     except Exception as err:
-        LOGGER.error("Failed to set up energy coordinators: %s", err)
+        LOGGER.error("Failed to apply the Smart Energy preference: %s", err)
 
     return True
 
@@ -193,7 +148,12 @@ async def async_setup_entry(
     # HA 2026.8 split formerly shared devices into one registry device per
     # integration.  Always canonicalise to the physical ESPHome split and
     # remove our obsolete duplicate before entities are created.
-    prepare_config_entry_source_device(hass, entry)
+    source_device = prepare_config_entry_source_device(hass, entry)
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if source_device is not None and store is not None:
+        await store.async_unhide_device(
+            source_device_storage_key(hass, source_device)
+        )
 
     product_type = entry.data.get(CONF_PRODUCT_TYPE)
 

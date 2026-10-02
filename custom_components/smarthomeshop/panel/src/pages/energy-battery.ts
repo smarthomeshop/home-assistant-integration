@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
+import { panelText } from '../utils/panel-translations';
 
 type ControlKind = 'switch' | 'number' | 'select';
 
@@ -395,7 +396,8 @@ export class EnergyBattery extends LitElement {
   }
 
   private async _remove(): Promise<void> {
-    if (!this.hass.user?.is_admin || !window.confirm('Remove the battery planner and its automation?')) return;
+    if (!this.hass.user?.is_admin
+      || !window.confirm(panelText(this.hass, 'Remove the battery planner and its automation?'))) return;
     try {
       await this._stopBatteryControl();
       await this.hass.callWS({ type: 'smarthomeshop/battery/set', config: {} });

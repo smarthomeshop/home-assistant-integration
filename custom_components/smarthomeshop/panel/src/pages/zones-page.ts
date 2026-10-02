@@ -3,6 +3,7 @@ import { customElement, property, state, query } from 'lit/decorators.js';
 import type { HomeAssistant, RadarDeviceProfilePayload, RadarTargetEntityMap, Room } from '../types';
 import '../components/sensor-coverage-calibration';
 import type { CalibrationPoint } from '../components/sensor-coverage-calibration';
+import { panelText } from '../utils/panel-translations';
 import {
   normalizeRadarCoordinate,
   projectRoomPointToRadar,
@@ -879,10 +880,16 @@ export class ZonesPage extends LitElement {
     const entityId = radar.profile.installationModeEntityId;
     const required = radar.profile.requiredInstallationMode;
     if (!entityId || !required || this._changingHardwareMode) return;
-    const accepted = confirm(
-      `${radar.name} is currently set to ${this._currentHardwareMode(radar) || 'an unknown mode'}. `
-      + `Change the radar hardware to ${required} mode for this ${radar.profile.mountingMode} mounting?`,
-    );
+    const accepted = confirm(panelText(
+      this.hass,
+      '{name} is currently set to {current}. Change the radar hardware to {required} mode for this {mounting} mounting?',
+      {
+        name: radar.name,
+        current: this._currentHardwareMode(radar) || panelText(this.hass, 'an unknown mode'),
+        required: panelText(this.hass, required),
+        mounting: panelText(this.hass, radar.profile.mountingMode),
+      },
+    ));
     if (!accepted) return;
 
     const option = radar.profile.installationModeOptions.find(
@@ -906,7 +913,10 @@ export class ZonesPage extends LitElement {
       const detail = error instanceof RadarInstallationUpdateError
         ? error.message
         : error?.message;
-      alert(detail || `Could not set ${radar.name} to ${required} mode.`);
+      alert(detail || panelText(this.hass, 'Could not set {name} to {mode} mode.', {
+        name: radar.name,
+        mode: panelText(this.hass, required),
+      }));
     } finally {
       this._changingHardwareMode = false;
     }
@@ -1213,7 +1223,7 @@ export class ZonesPage extends LitElement {
   }
 
   private _clearWalls() {
-    if (!confirm('Clear all walls of this room?')) return;
+    if (!confirm(panelText(this.hass, 'Clear all walls of this room?'))) return;
     this._roomPoints = [];
     this._pendingStart = null;
     this._previewPoint = null;
@@ -1429,7 +1439,7 @@ export class ZonesPage extends LitElement {
       this._showNewRoomDialog = false;
     } catch (err) {
       console.error('Failed to create room:', err);
-      window.alert('Could not create the room. Administrator rights are required and the name must be filled in.');
+      window.alert(panelText(this.hass, 'Could not create the room. Administrator rights are required and the name must be filled in.'));
     }
   }
 
@@ -1912,7 +1922,7 @@ export class ZonesPage extends LitElement {
 
   private _selectRoom(roomId: string) {
     if (this._dirty && this._selectedRoomId && roomId !== this._selectedRoomId) {
-      if (!confirm('You have unsaved changes. Discard them?')) return;
+      if (!confirm(panelText(this.hass, 'You have unsaved changes. Discard them?'))) return;
     }
     this._dirty = false;
     this._targetTrails = {};
@@ -2050,7 +2060,7 @@ export class ZonesPage extends LitElement {
       this._dirty = false;
     } catch (err) {
       console.error('Failed to save room:', err);
-      window.alert('Could not save the room. Check that you are an administrator and try again.');
+      window.alert(panelText(this.hass, 'Could not save the room. Check that you are an administrator and try again.'));
     }
     finally { this._saving = false; }
   }
@@ -2122,7 +2132,11 @@ export class ZonesPage extends LitElement {
       .flatMap(zone => getZoneParts(zone).map(points => ({ zone, points })))
       .find(item => item.points.length > 20);
     if (oversizedPolygon) {
-      alert(`${oversizedPolygon.zone.name} has ${oversizedPolygon.points.length} vertices. LD2450 and LD2460 polygons support at most 20.`);
+      alert(panelText(
+        this.hass,
+        '{name} has {count} vertices. LD2450 and LD2460 polygons support at most 20.',
+        { name: oversizedPolygon.zone.name, count: oversizedPolygon.points.length },
+      ));
       return;
     }
     this._pushingToESPHome = true;
@@ -5171,17 +5185,17 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               ` : this.rooms.map(room => html`
                 <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}">
                   <button class="room-select" @click=${() => this._selectRoom(room.id)}
-                    aria-label="Open ${room.name}" aria-current=${room.id === this._selectedRoomId ? 'true' : 'false'}>
+                    aria-label=${panelText(this.hass, 'Open {name}', { name: room.name })} aria-current=${room.id === this._selectedRoomId ? 'true' : 'false'}>
                     <span class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></span>
-                    <span class="room-name">${room.name}</span>
+                    <span class="room-name" data-i18n-ignore>${room.name}</span>
                   </button>
                   <div class="room-actions" aria-label="Room actions">
                     <button class="room-action" @click=${() => this._openRenameRoom(room.id)}
-                      title="Rename room" aria-label="Rename ${room.name}">
+                      title="Rename room" aria-label=${panelText(this.hass, 'Rename {name}', { name: room.name })}>
                       <ha-icon icon="mdi:pencil-outline"></ha-icon>
                     </button>
                     <button class="room-action delete" @click=${() => this._openDeleteRoom(room.id)}
-                      title="Delete room" aria-label="Delete ${room.name}">
+                      title="Delete room" aria-label=${panelText(this.hass, 'Delete {name}', { name: room.name })}>
                       <ha-icon icon="mdi:trash-can-outline"></ha-icon>
                     </button>
                   </div>
@@ -6164,7 +6178,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       ${this._showFurnitureDialog && this._selectedFurnitureType ? html`
         <div class="dialog-overlay" @click="${() => this._showFurnitureDialog = false}">
           <div class="dialog" @click="${(e: Event) => e.stopPropagation()}">
-            <h3>Place ${this._selectedFurnitureType.name}</h3>
+            <h3>${panelText(this.hass, 'Place {name}', { name: panelText(this.hass, this._selectedFurnitureType.name) })}</h3>
             <p class="help-text">Enter the dimensions (top view)</p>
             <div class="input-row">
               <div>

@@ -39,6 +39,17 @@ class _ConfigEntries:
         return {"require_restart": False}
 
 
+class _Store:
+    def __init__(self) -> None:
+        self.hidden: dict[str, dict] = {}
+
+    async def async_hide_device(self, key, device) -> None:
+        self.hidden[key] = device
+
+    async def async_unhide_device(self, key) -> bool:
+        return self.hidden.pop(key, None) is not None
+
+
 def _entry(entry_id: str, domain: str, device_id: str | None = None):
     return SimpleNamespace(
         entry_id=entry_id,
@@ -75,7 +86,11 @@ def _hass(monkeypatch, *, linked: bool = True, esphome: bool = True):
         "_product_for_registry_device",
         lambda _hass, _device: "ceilsense",
     )
-    return SimpleNamespace(config_entries=_ConfigEntries(entries)), device_id
+    store = _Store()
+    return SimpleNamespace(
+        config_entries=_ConfigEntries(entries),
+        data={websocket_api.DOMAIN: {"store": store}},
+    ), device_id
 
 
 def test_unlink_removes_only_smarthomeshop(monkeypatch) -> None:
@@ -112,6 +127,32 @@ def test_full_removal_unlinks_before_removing_esphome(monkeypatch) -> None:
     assert connection.result["removed_smarthomeshop"] is True
     assert connection.result["removed_esphome"] is True
     assert hass.config_entries.removed == ["shs-entry", "esphome-entry"]
+
+
+def test_hide_unlinks_but_keeps_esphome_and_remembers_device(monkeypatch) -> None:
+    hass, device_id = _hass(monkeypatch)
+    connection = _Connection()
+
+    asyncio.run(
+        _remove_device(
+            hass,
+            connection,
+            {"id": 4, "device_id": device_id, "mode": "hide"},
+        )
+    )
+
+    assert connection.error is None
+    assert connection.result["hidden"] is True
+    assert connection.result["removed_smarthomeshop"] is True
+    assert connection.result["removed_esphome"] is False
+    assert hass.config_entries.removed == ["shs-entry"]
+    assert hass.data[websocket_api.DOMAIN]["store"].hidden == {
+        "device:device-1": {
+            "name": "Unknown",
+            "model": None,
+            "product_type": "ceilsense",
+        }
+    }
 
 
 def test_non_admin_cannot_remove_any_entry(monkeypatch) -> None:

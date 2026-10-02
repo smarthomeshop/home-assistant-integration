@@ -54,12 +54,16 @@ def _entity(entity_id: str, device_id: str, platform: str, config_entry_id: str)
 
 class _DeviceRegistry:
     def __init__(self, devices, composite=None):
-        self.devices = {device.id: device for device in devices}
+        self._devices = {device.id: device for device in devices}
         self._composite = composite or {}
 
+    @property
+    def devices(self):
+        raise AssertionError("deprecated device_registry.devices was accessed")
+
     def async_get(self, device_id):
-        if device_id in self.devices:
-            return self.devices[device_id]
+        if device_id in self._devices:
+            return self._devices[device_id]
         splits = self._composite.get(device_id, [])
         if not splits:
             return None
@@ -73,6 +77,16 @@ class _DeviceRegistry:
 
     def async_get_devices_for_composite_device_id(self, device_id):
         return list(self._composite.get(device_id, []))
+
+    def async_get_devices(self):
+        return list(self._devices.values())
+
+    def async_is_composite_device_id(self, device_id):
+        if device_id in self._devices:
+            return False
+        if self._composite.get(device_id):
+            return True
+        return None
 
 
 class _EntityRegistry:
@@ -302,6 +316,18 @@ def test_dashboard_returns_one_card_for_three_2026_8_splits(monkeypatch) -> None
 
     assert [device["id"] for device in connection.result["devices"]] == [esphome.id]
     assert connection.result["devices"][0]["integration_linked"] is True
+
+    hass.data = {
+        websocket_api.DOMAIN: {
+            "store": SimpleNamespace(is_device_hidden=lambda _key: True)
+        }
+    }
+    inspect.unwrap(websocket_api.ws_get_devices)(hass, connection, {"id": 2})
+
+    assert connection.result["devices"] == []
+    assert [device["id"] for device in connection.result["hidden_devices"]] == [
+        esphome.id
+    ]
 
 
 def test_config_entry_schema_migration_prepares_source_and_updates_version(

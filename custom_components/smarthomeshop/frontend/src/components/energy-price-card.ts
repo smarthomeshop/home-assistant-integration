@@ -1,5 +1,5 @@
 import { css, html, nothing, svg } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import {
   EnergyCardBase,
   energyCardStyles,
@@ -28,7 +28,6 @@ const DEFAULTS: Required<Omit<EnergyPriceCardConfig, 'type' | 'title'>> = {
   show_cheapest_block: true,
 };
 
-@customElement('smarthomeshop-energy-price-card')
 export class SmartHomeShopEnergyPriceCard extends EnergyCardBase<EnergyPriceCardConfig> {
   protected config: EnergyPriceCardConfig = { ...DEFAULTS };
   @state() private selectedDay: 'today' | 'tomorrow' = 'today';

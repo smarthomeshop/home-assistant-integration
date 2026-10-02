@@ -1,12 +1,13 @@
 import { css, html, LitElement, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 type EnergyCardType = 'live' | 'price' | 'power' | 'costs' | 'savings' | 'automations';
 
-@customElement('smarthomeshop-energy-card-editor')
 export class SmartHomeShopEnergyCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @property({ attribute: false }) public cardType: EnergyCardType = 'live';
   @state() private config: Record<string, any> = {};
 

@@ -10,6 +10,11 @@
  * - smarthomeshop-energy-*-card: Live energy, prices, history and savings
  */
 
+import {
+  CUSTOM_ELEMENTS_HEALED_EVENT,
+  defineCustomElement,
+} from './utils/custom-element-registry';
+
 // Import cards and editors
 import { SmartHomeShopWaterCard } from './components/water-card';
 import { SmartHomeShopWaterP1Card } from './components/waterp1-card';
@@ -132,20 +137,9 @@ function refreshSmartHomeShopIcons(): void {
   window.setTimeout(refreshSmartHomeShopIcons, delay);
 });
 
-/**
- * Lit's @customElement decorator normally performs this registration for us.
- * Home Assistant can load decorator/polyfill runtimes that take a different
- * path, so keep an explicit idempotent fallback at the bundle boundary.
- */
-function registerCustomElement(
-  tagName: string,
-  elementClass: CustomElementConstructor,
-): void {
-  if (!customElements.get(tagName)) {
-    customElements.define(tagName, elementClass);
-  }
-}
-
+// Keep registration in one guarded location. Home Assistant 2026.8 can
+// replace window.customElements while extra modules are loading; the guard
+// restores every card and editor in the active registry after that swap.
 const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
   ['smarthomeshop-water-card', SmartHomeShopWaterCard],
   ['smarthomeshop-waterp1-card', SmartHomeShopWaterP1Card],
@@ -158,6 +152,7 @@ const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
   ['smarthomeshop-energy-power-card', SmartHomeShopEnergyPowerCard],
   ['smarthomeshop-energy-cost-card', SmartHomeShopEnergyCostCard],
   ['smarthomeshop-energy-savings-card', SmartHomeShopEnergySavingsCard],
+  ['smarthomeshop-energy-automations-card', SmartHomeShopEnergyAutomationsCard],
   ['smarthomeshop-water-card-editor', SmartHomeShopWaterCardEditor],
   ['smarthomeshop-waterp1-card-editor', SmartHomeShopWaterP1CardEditor],
   ['smarthomeshop-waterflowkit-card-editor', SmartHomeShopWaterFlowKitCardEditor],
@@ -170,7 +165,7 @@ const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
 ];
 
 customElementRegistrations.forEach(([tagName, elementClass]) => {
-  registerCustomElement(tagName, elementClass);
+  defineCustomElement(tagName, elementClass);
 });
 
 /**
@@ -201,6 +196,11 @@ function rebuildPendingLovelaceCards(): void {
     });
   }
 }
+
+// A card may already have become a hui-error-card while Home Assistant was
+// swapping registries. Rebuild it immediately after the guard restores the
+// missing element definitions; users no longer need to refresh the page.
+window.addEventListener(CUSTOM_ELEMENTS_HEALED_EVENT, rebuildPendingLovelaceCards);
 
 // The picker can be inserted a frame after the module is evaluated. A few
 // short passes cover both the initial render and dialogs opened immediately.

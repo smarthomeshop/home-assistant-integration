@@ -1,5 +1,4 @@
 import { css, html, nothing } from 'lit';
-import { customElement } from 'lit/decorators.js';
 import {
   EnergyCardBase,
   energyCardStyles,
@@ -20,7 +19,6 @@ const DEFAULTS: Required<Omit<EnergySavingsCardConfig, 'type' | 'title'>> = {
   show_explanation: true,
 };
 
-@customElement('smarthomeshop-energy-savings-card')
 export class SmartHomeShopEnergySavingsCard extends EnergyCardBase<EnergySavingsCardConfig> {
   protected config: EnergySavingsCardConfig = { ...DEFAULTS };
 

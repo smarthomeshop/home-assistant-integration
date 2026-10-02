@@ -62,6 +62,22 @@ management experience.
 3. Search for "SmartHomeShop.io"
 4. Follow the configuration steps
 
+## Languages
+
+SmartHomeShop.io automatically follows the language selected by the current
+Home Assistant user, including regional variants such as `nl-NL`, `de-DE` and
+`fr-FR`. The integration setup, entity and service descriptions, SmartHomeShop
+panel, Room Designer, Smart Energy pages, Lovelace cards and card editors are
+fully available in:
+
+- English
+- Dutch
+- German
+- French
+- Spanish
+
+If Home Assistant uses another language, the interface falls back to English.
+
 ## Dynamic energy and battery planning
 
 The Energy page combines live contract prices with an hourly outlook. Stored

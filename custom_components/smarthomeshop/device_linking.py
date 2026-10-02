@@ -39,12 +39,76 @@ def _entries_for_device(
         return list(er.async_entries_for_device(entity_registry, device_id))
 
 
+def _registry_devices(device_registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
+    """Return concrete registry devices without deprecated mapping access.
+
+    Home Assistant 2026.9 warns when integrations enumerate
+    ``device_registry.devices`` directly and removes that compatibility path in
+    2027.9.  The public helper only returns real stored devices, never the
+    synthetic entry produced for an old composite id.  Keep a narrow fallback
+    for Home Assistant versions predating the helper.
+    """
+    get_devices = getattr(device_registry, "async_get_devices", None)
+    if callable(get_devices):
+        return list(get_devices())
+    return list(getattr(device_registry, "devices", {}).values())
+
+
+def _is_concrete_device_id(
+    device_registry: dr.DeviceRegistry, device_id: str
+) -> bool:
+    """Return whether an id belongs to a stored device, not a composite alias."""
+    is_composite = getattr(device_registry, "async_is_composite_device_id", None)
+    if callable(is_composite):
+        return is_composite(device_id) is False
+    return any(device.id == device_id for device in _registry_devices(device_registry))
+
+
 def device_config_entry_ids(device: dr.DeviceEntry) -> set[str]:
     """Return the config entries associated with either registry generation."""
     config_entry_id = getattr(device, "config_entry_id", None)
     if config_entry_id:
         return {config_entry_id}
     return set(getattr(device, "config_entries", ()) or ())
+
+
+def source_device_storage_key(hass: HomeAssistant, device: dr.DeviceEntry) -> str:
+    """Return a stable key for panel preferences tied to an ESPHome device.
+
+    Registry device ids can change when Home Assistant splits or recreates a
+    device.  Prefer the ESPHome config-entry unique id, then registry identity
+    metadata, and use the concrete device id only as a last-resort fallback.
+    """
+    entry_unique_ids = sorted(
+        str(entry.unique_id)
+        for entry_id in device_config_entry_ids(device)
+        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        and entry.domain == "esphome"
+        and getattr(entry, "unique_id", None)
+    )
+    if entry_unique_ids:
+        return f"esphome-entry:{entry_unique_ids[0]}"
+
+    identifiers = sorted(
+        (str(domain), str(value))
+        for domain, value in (getattr(device, "identifiers", ()) or ())
+    )
+    esphome_identifiers = [item for item in identifiers if item[0] == "esphome"]
+    if esphome_identifiers:
+        domain, value = esphome_identifiers[0]
+        return f"identifier:{domain}:{value}"
+    if identifiers:
+        domain, value = identifiers[0]
+        return f"identifier:{domain}:{value}"
+
+    connections = sorted(
+        (str(kind), str(value))
+        for kind, value in (getattr(device, "connections", ()) or ())
+    )
+    if connections:
+        kind, value = connections[0]
+        return f"connection:{kind}:{value}"
+    return f"device:{device.id}"
 
 
 def _config_entry_domain(hass: HomeAssistant, config_entry_id: str) -> str | None:
@@ -79,7 +143,7 @@ def iter_esphome_source_devices(hass: HomeAssistant) -> Iterable[dr.DeviceEntry]
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
     seen: set[str] = set()
-    for device in device_registry.devices.values():
+    for device in _registry_devices(device_registry):
         if device.id in seen or not _is_esphome_source_device(
             hass, device, entity_registry
         ):
@@ -121,7 +185,9 @@ def resolve_source_device(
         candidate = device_registry.async_get(candidate_id)
         # A composite id can synthesize a read-only entry.  Only return live,
         # concrete devices from the registry mapping.
-        if candidate is None or candidate_id not in device_registry.devices:
+        if candidate is None or not _is_concrete_device_id(
+            device_registry, candidate_id
+        ):
             return
         candidates[candidate.id] = candidate
         if preferred:
@@ -166,7 +232,7 @@ def resolve_source_device(
         identifiers = set(getattr(requested_device, "identifiers", ()) or ())
         connections = set(getattr(requested_device, "connections", ()) or ())
         if identifiers or connections:
-            for candidate in device_registry.devices.values():
+            for candidate in _registry_devices(device_registry):
                 if (
                     identifiers
                     and identifiers

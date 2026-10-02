@@ -56,10 +56,21 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # API poll. Hourly contracts only change on the first item in the list.
         from homeassistant.helpers.event import async_track_time_change
 
-        async_track_time_change(
+        self._period_unsubscribe = async_track_time_change(
             hass, self._handle_period_tick, minute=[0, 15, 30, 45], second=5
         )
         self.async_refresh_tariff_source()
+
+    @callback
+    def async_shutdown(self) -> None:
+        """Release event listeners when Smart Energy is disabled."""
+        if self._tariff_unsubscribe is not None:
+            self._tariff_unsubscribe()
+            self._tariff_unsubscribe = None
+        if self._period_unsubscribe is not None:
+            self._period_unsubscribe()
+            self._period_unsubscribe = None
+        super().async_shutdown()
 
     @callback
     def _handle_period_tick(self, _now) -> None:

@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
+import { panelText } from '../utils/panel-translations';
 import './settings-page';
 import './automations-page';
 import '../components/ha-energy-sync';
@@ -9,7 +10,7 @@ interface DeviceWithEntities extends SmartHomeShopDevice {
   entities?: DeviceEntity[];
 }
 
-type DeviceRemovalMode = 'unlink' | 'full';
+type DeviceRemovalMode = 'hide' | 'unlink' | 'full';
 
 interface DeviceRemovalResult {
   ok: boolean;
@@ -17,6 +18,7 @@ interface DeviceRemovalResult {
   removed_smarthomeshop: boolean;
   removed_esphome: boolean;
   require_restart: boolean;
+  hidden?: boolean;
 }
 
 interface ProductConfig {
@@ -44,6 +46,7 @@ export class DashboardPage extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public selectedDeviceId?: string;
   @state() private _devices: DeviceWithEntities[] = [];
+  @state() private _hiddenDevices: SmartHomeShopDevice[] = [];
   @state() private _loading = true;
   @state() private _detailDevice: DeviceWithEntities | null = null;
   @state() private _insights: any | null = null;
@@ -53,7 +56,7 @@ export class DashboardPage extends LitElement {
   @state() private _linking = false;
   @state() private _linkError = '';
   @state() private _removeDevice: DeviceWithEntities | null = null;
-  @state() private _removeMode: DeviceRemovalMode = 'unlink';
+  @state() private _removeMode: DeviceRemovalMode = 'hide';
   @state() private _removeConfirm = '';
   @state() private _removeBusy = false;
   @state() private _removeError = '';
@@ -564,6 +567,53 @@ export class DashboardPage extends LitElement {
     .notice-close { display: grid; place-items: center; padding: 1px; border: 0; background: transparent; color: var(--secondary-text-color); cursor: pointer; }
     .notice-close ha-icon { --mdc-icon-size: 17px; color: inherit; }
 
+    .hidden-devices {
+      margin: -12px 0 32px;
+      border: 1px solid var(--divider-color);
+      border-radius: var(--ha-card-border-radius, 12px);
+      background: var(--card-background-color);
+      overflow: hidden;
+    }
+    .hidden-devices summary {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 12px 14px;
+      color: var(--secondary-text-color);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      list-style: none;
+    }
+    .hidden-devices summary::-webkit-details-marker { display: none; }
+    .hidden-devices summary ha-icon { --mdc-icon-size: 18px; }
+    .hidden-device-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border-top: 1px solid var(--divider-color);
+    }
+    .hidden-device-copy { flex: 1; min-width: 0; }
+    .hidden-device-name { color: var(--primary-text-color); font-size: 13.5px; font-weight: 600; }
+    .hidden-device-detail { margin-top: 2px; color: var(--secondary-text-color); font-size: 11.5px; }
+    .restore-device {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border: 1px solid var(--divider-color);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .restore-device:hover, .restore-device:focus-visible { border-color: var(--shs-primary); outline: none; }
+    .restore-device ha-icon { --mdc-icon-size: 16px; }
+
     .remove-backdrop {
       position: fixed;
       inset: 0;
@@ -745,7 +795,10 @@ export class DashboardPage extends LitElement {
   private async _loadDevices(): Promise<void> {
     this._loading = true;
     try {
-      const result = await this.hass.callWS<{ devices: SmartHomeShopDevice[] }>({ type: 'smarthomeshop/devices' });
+      const result = await this.hass.callWS<{
+        devices: SmartHomeShopDevice[];
+        hidden_devices?: SmartHomeShopDevice[];
+      }>({ type: 'smarthomeshop/devices' });
 
       // Load entities for each device
       const devicesWithEntities: DeviceWithEntities[] = await Promise.all(
@@ -763,6 +816,7 @@ export class DashboardPage extends LitElement {
       );
 
       this._devices = devicesWithEntities;
+      this._hiddenDevices = result.hidden_devices || [];
     } catch (err) {
       console.error('Failed to load devices:', err);
     }
@@ -842,7 +896,7 @@ export class DashboardPage extends LitElement {
     event.stopPropagation();
     if (!this.hass.user?.is_admin) return;
     this._removeDevice = device;
-    this._removeMode = device.integration_linked === false ? 'full' : 'unlink';
+    this._removeMode = 'hide';
     this._removeConfirm = '';
     this._removeError = '';
     this._removeBusy = false;
@@ -867,6 +921,7 @@ export class DashboardPage extends LitElement {
   private _setRemoveMode(mode: DeviceRemovalMode): void {
     const device = this._removeDevice;
     if (!device || this._removeBusy) return;
+    if (mode === 'hide' && device.esphome_configured === false) return;
     if (mode === 'unlink' && device.integration_linked === false) return;
     if (mode === 'full' && device.esphome_configured === false) return;
     this._removeMode = mode;
@@ -877,6 +932,7 @@ export class DashboardPage extends LitElement {
   private _canConfirmRemoval(): boolean {
     const device = this._removeDevice;
     if (!device || this._removeBusy) return false;
+    if (this._removeMode === 'hide') return device.esphome_configured !== false;
     if (this._removeMode === 'unlink') return device.integration_linked !== false;
     return device.esphome_configured !== false
       && this._removeConfirm.trim() === device.name;
@@ -903,15 +959,32 @@ export class DashboardPage extends LitElement {
       this._removeDevice = null;
       this._removeConfirm = '';
       await this._loadDevices();
-      this._removalNotice = mode === 'full'
-        ? `${deviceName} was removed from SmartHomeShop and ESPHome in Home Assistant.${result.require_restart ? ' Restart Home Assistant to finish unloading it.' : ''}`
-        : `${deviceName} was unlinked from SmartHomeShop. Its ESPHome device and original entities are still available in Home Assistant.`;
+      this._removalNotice = mode === 'hide'
+        ? `${deviceName} is now hidden from SmartHomeShop. ESPHome and all original Home Assistant entities are unchanged.`
+        : mode === 'full'
+          ? `${deviceName} was removed from SmartHomeShop and ESPHome in Home Assistant.${result.require_restart ? ' Restart Home Assistant to finish unloading it.' : ''}`
+          : `${deviceName} was unlinked from SmartHomeShop. Its ESPHome device and original entities are still available in Home Assistant.`;
     } catch (err: any) {
       if (this._removeDevice?.id === deviceId) {
         this._removeError = err?.message || 'Could not remove this device. Check the Home Assistant logs and try again.';
       }
     } finally {
       if (this._removeDevice?.id === deviceId) this._removeBusy = false;
+    }
+  }
+
+  private async _restoreHiddenDevice(device: SmartHomeShopDevice): Promise<void> {
+    if (!this.hass.user?.is_admin) return;
+    try {
+      await this.hass.callWS({
+        type: 'smarthomeshop/device/unhide',
+        device_id: device.id,
+      });
+      await this._loadDevices();
+      this._removalNotice = panelText(this.hass, '{name} is visible in SmartHomeShop again.', { name: device.name });
+    } catch (err: any) {
+      this._removalNotice = err?.message
+        || panelText(this.hass, 'Could not restore {name}.', { name: device.name });
     }
   }
 
@@ -953,12 +1026,20 @@ export class DashboardPage extends LitElement {
     if (!iso) return '';
     const diffMs = Date.now() - new Date(iso).getTime();
     const mins = Math.floor(diffMs / 60000);
-    if (mins < 1) return 'just now';
-    if (mins < 60) return `${mins} min ago`;
+    if (mins < 1) return panelText(this.hass, 'just now');
+    if (mins < 60) return panelText(this.hass, '{count} min ago', { count: mins });
     const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+    if (hours < 24) return panelText(
+      this.hass,
+      hours === 1 ? '{count} hour ago' : '{count} hours ago',
+      { count: hours },
+    );
     const days = Math.floor(hours / 24);
-    return `${days} day${days === 1 ? '' : 's'} ago`;
+    return panelText(
+      this.hass,
+      days === 1 ? '{count} day ago' : '{count} days ago',
+      { count: days },
+    );
   }
 
   private _statusClass(status?: string): string {
@@ -1071,7 +1152,7 @@ export class DashboardPage extends LitElement {
         </button>
         <div class="detail-title">
           <div class="detail-name">
-            ${device.name}
+            <span data-i18n-ignore>${device.name}</span>
             ${offline ? html`<span class="offline-badge" style="vertical-align: 2px; margin-left: 6px;">Offline</span>` : nothing}
           </div>
           <div class="detail-sub">
@@ -1895,6 +1976,7 @@ export class DashboardPage extends LitElement {
     if (!device) return nothing;
     const linked = device.integration_linked !== false;
     const hasEsphome = device.esphome_configured !== false;
+    const hideRemoval = this._removeMode === 'hide';
     const fullRemoval = this._removeMode === 'full';
 
     return html`
@@ -1914,8 +1996,8 @@ export class DashboardPage extends LitElement {
           <div class="remove-head">
             <span class="remove-head-icon"><ha-icon icon="mdi:delete-outline"></ha-icon></span>
             <div class="remove-head-copy">
-              <h2 class="remove-title" id="remove-dialog-title">Remove ${device.name}?</h2>
-              <div class="remove-subtitle">Choose what Home Assistant should remove.</div>
+              <h2 class="remove-title" id="remove-dialog-title">${panelText(this.hass, 'Remove {name}?', { name: device.name })}</h2>
+              <div class="remove-subtitle">Choose whether to hide, unlink or fully remove this device.</div>
             </div>
             <button
               class="remove-close"
@@ -1928,9 +2010,27 @@ export class DashboardPage extends LitElement {
 
           <div class="remove-body">
             <p class="remove-intro" id="remove-dialog-description">
-              The safe option only disconnects SmartHomeShop. Complete removal also removes this device's ESPHome configuration from Home Assistant.
+              Hiding is the safest option: it only removes the device from this dashboard. Complete removal also deletes its ESPHome configuration from Home Assistant.
             </p>
             <div class="remove-options" role="radiogroup" aria-label="Removal scope">
+              <label class="remove-option ${hideRemoval ? 'selected' : ''} ${!hasEsphome ? 'disabled' : ''}">
+                <input
+                  type="radio"
+                  name="device-removal-mode"
+                  value="hide"
+                  .checked=${hideRemoval}
+                  ?disabled=${!hasEsphome || this._removeBusy}
+                  @change=${() => this._setRemoveMode('hide')}
+                >
+                <span class="remove-option-icon"><ha-icon icon="mdi:eye-off-outline"></ha-icon></span>
+                <span class="remove-option-copy">
+                  <span class="remove-option-title">Hide from SmartHomeShop</span>
+                  <span class="remove-option-desc">
+                    Remove the SmartHomeShop link and hide this card. ESPHome, original entities, automations and recorder history stay unchanged. You can restore it later.
+                  </span>
+                </span>
+              </label>
+
               <label class="remove-option ${this._removeMode === 'unlink' ? 'selected' : ''} ${!linked ? 'disabled' : ''}">
                 <input
                   type="radio"
@@ -1981,7 +2081,7 @@ export class DashboardPage extends LitElement {
               </div>
               <div class="remove-confirm">
                 <label for="remove-device-confirm">
-                  Type <code>${device.name}</code> to confirm permanent removal
+                  ${panelText(this.hass, 'Type')} <code>${device.name}</code> ${panelText(this.hass, 'to confirm permanent removal')}
                 </label>
                 <input
                   id="remove-device-confirm"
@@ -1992,6 +2092,13 @@ export class DashboardPage extends LitElement {
                   ?disabled=${this._removeBusy}
                   @input=${(event: Event) => { this._removeConfirm = (event.target as HTMLInputElement).value; }}
                 >
+              </div>
+            ` : hideRemoval ? html`
+              <div class="remove-warning">
+                <ha-icon icon="mdi:information-outline"></ha-icon>
+                <span>
+                  This is reversible. Use “Hidden devices” below the device list to show it again. Nothing is removed from ESPHome.
+                </span>
               </div>
             ` : html`
               <div class="remove-warning">
@@ -2017,7 +2124,9 @@ export class DashboardPage extends LitElement {
                 ? 'Removing…'
                 : fullRemoval
                   ? 'Remove from Home Assistant'
-                  : 'Unlink SmartHomeShop'}
+                  : hideRemoval
+                    ? 'Hide from SmartHomeShop'
+                    : 'Unlink SmartHomeShop'}
             </button>
           </div>
         </section>
@@ -2040,7 +2149,7 @@ export class DashboardPage extends LitElement {
     }
 
     return html`
-      ${this._devices.length === 0 ? html`
+      ${this._devices.length === 0 && this._hiddenDevices.length === 0 ? html`
         <div class="empty-state">
           <ha-icon icon="mdi:package-variant"></ha-icon>
           <h3>No SmartHomeShop devices found</h3>
@@ -2082,7 +2191,7 @@ export class DashboardPage extends LitElement {
                     ${this._renderProductIcon(config)}
                   </div>
                   <div class="device-info">
-                    <h3 class="device-name">${device.name}</h3>
+                    <h3 class="device-name" data-i18n-ignore>${device.name}</h3>
                     <div class="device-type">
                       <span class="device-type-badge ${config.category}">${config.category}</span>
                       ${device.product_type === 'waterp1meterkit' ? html`
@@ -2111,7 +2220,7 @@ export class DashboardPage extends LitElement {
                     class="device-remove"
                     type="button"
                     title="Remove device"
-                    aria-label="Remove ${device.name}"
+                    aria-label=${panelText(this.hass, 'Remove {name}', { name: device.name })}
                     @click=${(event: Event) => this._openRemoveDialog(event, device)}
                   ><ha-icon icon="mdi:delete-outline"></ha-icon></button>
                 ` : nothing}
@@ -2119,6 +2228,32 @@ export class DashboardPage extends LitElement {
             `;
           })}
         </div>
+
+        ${this.hass.user?.is_admin && this._hiddenDevices.length ? html`
+          <details class="hidden-devices">
+            <summary>
+              <ha-icon icon="mdi:eye-off-outline"></ha-icon>
+              ${panelText(this.hass, 'Hidden devices')} (${this._hiddenDevices.length})
+            </summary>
+            ${this._hiddenDevices.map(device => html`
+              <div class="hidden-device-row">
+                <div class="hidden-device-copy">
+                  <div class="hidden-device-name" data-i18n-ignore>${device.name}</div>
+                  <div class="hidden-device-detail"><span data-i18n-ignore>${device.product_name || device.model || 'SmartHomeShop device'}</span> · ESPHome remains connected</div>
+                </div>
+                <button
+                  class="restore-device"
+                  type="button"
+                  aria-label=${panelText(this.hass, 'Show {name} in SmartHomeShop again', { name: device.name })}
+                  @click=${() => this._restoreHiddenDevice(device)}
+                >
+                  <ha-icon icon="mdi:eye-outline"></ha-icon>
+                  Show again
+                </button>
+              </div>
+            `)}
+          </details>
+        ` : nothing}
       `}
 
       <!-- Tools -->

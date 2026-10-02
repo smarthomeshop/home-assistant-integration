@@ -164,6 +164,7 @@ export interface SmartHomeShopDevice {
   last_seen?: string | null;
   integration_linked?: boolean;
   esphome_configured?: boolean;
+  hidden?: boolean;
 }
 
 export interface DeviceEntity {

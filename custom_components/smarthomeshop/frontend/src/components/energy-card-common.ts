@@ -2,6 +2,7 @@ import { css, LitElement } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
 import { loadHistorySeries, type HistoryPoint } from '../utils/history';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 export type { HistoryPoint } from '../utils/history';
 
@@ -482,6 +483,7 @@ export const fireMoreInfo = (element: HTMLElement, entityId?: string): void => {
 
 export abstract class EnergyCardBase<T extends BaseEnergyCardConfig> extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() protected context?: EnergyContext;
   @state() protected loading = true;
   @state() protected loadError = '';

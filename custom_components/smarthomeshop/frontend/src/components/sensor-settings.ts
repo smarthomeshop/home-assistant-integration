@@ -5,8 +5,9 @@ import './zone-editor';
  */
 
 import { LitElement, html, css, nothing, PropertyValues } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 interface SettingEntity {
   entityId: string;
@@ -27,9 +28,9 @@ interface ZoneConfig {
   endY: number;
 }
 
-@customElement('smarthomeshop-sensor-settings')
 export class SmartHomeShopSensorSettings extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @property() public entityPrefix: string = '';
   @property() public deviceName: string = '';
   @property({ type: Boolean }) public isOpen: boolean = false;

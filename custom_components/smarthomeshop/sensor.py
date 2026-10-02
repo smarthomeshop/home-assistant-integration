@@ -43,6 +43,7 @@ from .products.ultimatesensor import (
     RoomQualitySensorDescription,
     UltimateSensorCoordinator,
 )
+from .energy_runtime import energy_runtime_enabled
 
 # Key under hass.data[DOMAIN] holding the entry that carries the account-wide
 # entities (prices, savings, battery plan, deadline schedules).
@@ -89,6 +90,8 @@ def track_account_host(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     @callback
     def _entry_changed(change: ConfigEntryChange, entry: ConfigEntry) -> None:
         if entry.domain != DOMAIN:
+            return
+        if not energy_runtime_enabled(hass):
             return
         domain_data = hass.data.setdefault(DOMAIN, {})
         host = domain_data.get(ACCOUNT_HOST)
@@ -185,10 +188,15 @@ async def async_setup_entry(
     # by automatically created Utility Meter helpers. See:
     # products/waterp1meterkit/utility_meters.py
 
-    # Account-wide dynamic price sensors: hosted by a single entry so they
-    # exist once, not per device.
-    is_account_host = claim_account_host(hass, config_entry)
-    track_account_host(hass, config_entry)
+    # Account-wide Energy entities only exist while the user has enabled the
+    # complete Smart Energy module. This keeps sensor-only installations free
+    # from unrelated service devices.
+    energy_enabled = energy_runtime_enabled(hass)
+    is_account_host = (
+        claim_account_host(hass, config_entry) if energy_enabled else False
+    )
+    if energy_enabled:
+        track_account_host(hass, config_entry)
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and is_account_host:
         from .price_sensors import PRICE_SENSORS, SmartHomeShopPriceSensor

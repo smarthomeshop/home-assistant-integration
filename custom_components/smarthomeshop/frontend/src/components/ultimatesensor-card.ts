@@ -5,7 +5,7 @@
  */
 
 import { LitElement, html, css, nothing, PropertyValues, svg } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { Room3DRenderer, Scene3D } from '../utils/room3d';
@@ -20,6 +20,7 @@ import {
 } from '../utils/room-selection';
 import './sensor-settings';
 import { debugLog } from '../utils/debug';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 interface RadarCardConfig {
   device_id?: string;
@@ -153,9 +154,9 @@ interface TrendSeries {
   end: number;
 }
 
-@customElement('smarthomeshop-ultimatesensor-card')
 export class SmartHomeShopUltimateSensorCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: RadarCardConfig = {};
   @state() private _targets: Target[] = [];
   @state() private _zones: Zone[] = [];
@@ -2715,9 +2716,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 }
 
 // Card Editor
-@customElement('smarthomeshop-ultimatesensor-card-editor')
 export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: RadarCardConfig = {};
   @state() private _devices: Array<{ id: string; name: string }> = [];
   @state() private _rooms: any[] = [];

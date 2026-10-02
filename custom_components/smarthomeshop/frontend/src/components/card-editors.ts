@@ -3,8 +3,9 @@
  */
 
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 interface SmartHomeShopDevice {
   id: string;
@@ -155,11 +156,11 @@ function findSmartHomeShopDevices(hass: HomeAssistant | undefined): SmartHomeSho
   return Array.from(devices.values());
 }
 
-@customElement('smarthomeshop-water-card-editor')
 export class SmartHomeShopWaterCardEditor extends LitElement {
   static styles = editorStyles;
 
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: Record<string, unknown> = {};
   @state() private _devices: SmartHomeShopDevice[] = [];
 
@@ -294,11 +295,11 @@ export class SmartHomeShopWaterCardEditor extends LitElement {
   }
 }
 
-@customElement('smarthomeshop-waterp1-card-editor')
 export class SmartHomeShopWaterP1CardEditor extends LitElement {
   static styles = editorStyles;
 
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: Record<string, unknown> = {};
   @state() private _devices: SmartHomeShopDevice[] = [];
 

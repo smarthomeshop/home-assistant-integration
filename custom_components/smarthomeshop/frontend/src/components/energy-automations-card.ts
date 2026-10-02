@@ -1,5 +1,5 @@
 import { css, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import {
   EnergyCardBase,
   energyCardStyles,
@@ -167,7 +167,6 @@ let managedAutomationCache: {
   value: ManagedAutomation[];
 } | undefined;
 
-@customElement('smarthomeshop-energy-automations-card')
 export class SmartHomeShopEnergyAutomationsCard extends EnergyCardBase<EnergyAutomationsCardConfig> {
   protected config: EnergyAutomationsCardConfig = { ...DEFAULTS };
   @state() private automations: ManagedAutomation[] = [];

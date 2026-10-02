@@ -285,11 +285,14 @@ const TEXT: Record<string, LocalisedText> = {
 };
 
 export const settingsText = (
-  hass: { language?: string } | undefined,
+  hass: { language?: string; locale?: { language?: string } } | undefined,
   key: string,
   variables: Record<string, string | number> = {},
 ): string => {
-  const language = (hass?.language || 'en').split('-')[0].toLowerCase();
+  const language = (hass?.language || hass?.locale?.language || 'en')
+    .replace('_', '-')
+    .split('-')[0]
+    .toLowerCase();
   const index = LANGUAGE_INDEX[language] ?? 0;
   const template = TEXT[key]?.[index] ?? TEXT[key]?.[0] ?? key;
   return template.replace(/\{(\w+)\}/g, (match, variable) =>

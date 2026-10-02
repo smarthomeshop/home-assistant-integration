@@ -1,0 +1,220 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartHomeShop.io",
+        "description": "Añadir un producto SmartHomeShop a Home Assistant.\n\nSeleccione el producto que coincida con su dispositivo físico. El dispositivo ya debe estar en línea en Home Assistant a través de la integración ESPHome.",
+        "data": {
+          "product_type": "Producto"
+        },
+        "data_description": {
+          "product_type": "Elija el producto SmartHomeShop que desee configurar."
+        }
+      },
+      "device": {
+        "title": "Seleccione {product_name}",
+        "description": "{product_description}\n\nSeleccione el dispositivo ESPHome que pertenece a este producto.",
+        "data": {
+          "device_id": "Dispositivo ESPHome"
+        }
+      },
+      "water_options": {
+        "title": "Detección de levas",
+        "description": "Se encontraron estos sensores en tu dispositivo:\n- Consumo de agua: `{water_sensor}`\n- Caudal: `{flow_sensor}`\n\nLa detección de fugas supervisa estos sensores y añade entidades de alerta a Home Assistant. Elige los ajustes que se adapten a tu hogar. Puedes cambiarlo todo más adelante mediante **Configurar**.",
+        "data": {
+          "continuous_flow_minutes": "alarma de flujo continuo después",
+          "night_start": "La vigilancia nocturna comienza",
+          "night_end": "Finales de vigilancia nocturna",
+          "vacation_mode_entity": "Interruptor de modo de vacaciones (opcional)"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alerta cuando el agua sigue fluyendo sin parar durante tanto tiempo. Esto atrapa una tubería de ráfaga, una manguera de jardín olvidada o un inodoro en funcionamiento. 30 minutos es un buen defecto; elige más tiempo si a menudo llena un baño o piscina.",
+          "night_start": "Desde este momento en su casa normalmente utiliza poco a ningún agua. El uso inesperado durante la ventana de la noche se trata como una posible fuga.",
+          "night_end": "Fin de la ventana nocturna. Después de este tiempo, el uso normal del día se aplica de nuevo.",
+          "vacation_mode_entity": "Opcional: escoge un ayudante de toggle (input_boolean) que enciendes cuando estés lejos. Mientras está encendido, cualquier uso de agua inmediatamente levanta una alerta de fuga."
+        }
+      },
+      "summary": {
+        "title": "Listo para añadir",
+        "description": "**{product_name}** en **{device_name}** está listo.\n\nLas siguientes entidades se añadirán a Home Assistant:\n\n{entities}\n\nTodos los nombres de las entidades terminan en *(CC)* para poder distinguirlos de las entidades ESPHome incorporadas."
+      }
+    },
+    "error": {
+      "no_water_sensor": "No hay sensor de agua encontrado en este dispositivo",
+      "device_not_found": "Dispositivo no encontrado"
+    },
+    "abort": {
+      "already_configured": "Este dispositivo ya está configurado",
+      "no_devices_found": "No hay dispositivos de este tipo encontrados.\n\nAsegúrese de que su dispositivo SmartHomeShop se añade a Home Assistant a través de la integración ESPHome y está en línea.\n\nPara instrucciones de configuración, visite: docs.smarthomeshop.io",
+      "invalid_link_request": "Esta solicitud de enlace no es válida",
+      "device_not_found": "Dispositivo no encontrado",
+      "no_water_sensor": "No se encontró ningún sensor de agua en este dispositivo. Asegúrese de que el dispositivo está en línea y sus sensores de agua están habilitados en Home Assistant, luego inténtelo de nuevo."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ajustes del dispositivo",
+        "data": {
+          "continuous_flow_minutes": "alarma de flujo continuo después",
+          "night_start": "La vigilancia nocturna comienza",
+          "night_end": "Finales de vigilancia nocturna",
+          "vacation_mode_entity": "Interruptor de modo de vacaciones (opcional)",
+          "price_electricity_t1": "Tarifa de precio de electricidad 1",
+          "price_electricity_t2": "Precio de la electricidad 2",
+          "price_feed_in": "Indemnización por alimentos",
+          "price_gas": "Precio del gas",
+          "price_water": "Precio del agua",
+          "main_fuse_amps": "Fusible principal por fase"
+        },
+        "data_description": {
+          "continuous_flow_minutes": "Alerta cuando el agua sigue fluyendo sin parar durante tanto tiempo. Esto atrapa una tubería de ráfaga, una manguera de jardín olvidada o un inodoro en funcionamiento. 30 minutos es un buen defecto; elige más tiempo si a menudo llena un baño o piscina.",
+          "night_start": "Desde este momento en su casa normalmente utiliza poco a ningún agua. El uso inesperado durante la ventana de la noche se trata como una posible fuga.",
+          "night_end": "Fin de la ventana nocturna. Después de este tiempo, el uso normal del día se aplica de nuevo.",
+          "vacation_mode_entity": "Opcional: escoge un ayudante de toggle (input_boolean) que enciendes cuando estés lejos. Mientras está encendido, cualquier uso de agua inmediatamente levanta una alerta de fuga.",
+          "price_electricity_t1": "Lo que paga por kWh a la tarifa normal/día. Usado para los sensores de costo.",
+          "price_electricity_t2": "Lo que pagas por kWh al precio bajo/noche.",
+          "price_feed_in": "Lo que recibe por kWh que sus paneles solares se alimentan de nuevo en la red.",
+          "price_gas": "Lo que pagas por m³ de gas.",
+          "price_water": "Lo que paga por m³ (1000 litros) de agua. Se utiliza para el sensor de coste de agua.",
+          "main_fuse_amps": "El tamaño de su fusible principal por fase (vea su armario medidor, por ejemplo 25A o 35A). Se utiliza para el sensor de carga de fase."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "water_cost_today": {
+        "name": "Costo de agua hoy (CC)"
+      },
+      "usage_vs_average": {
+        "name": "Consumo frente al promedio de 7 días (CC)"
+      },
+      "last_session": {
+        "name": "Última sesión de agua (CC)"
+      },
+      "current_flow_rate": {
+        "name": "Uso actual del agua (CC)"
+      },
+      "today_usage": {
+        "name": "Consumo de hoy (CC)"
+      },
+      "week_usage": {
+        "name": "Uso esta semana (CC)"
+      },
+      "month_usage": {
+        "name": "Uso este mes (CC)"
+      },
+      "year_usage": {
+        "name": "Uso este año (CC)"
+      },
+      "leak_score": {
+        "name": "Puntuación de fugas (CC)"
+      },
+      "leak_confidence": {
+        "name": "Confianza de detección de fugas (CC)"
+      },
+      "baseline_learning_days": {
+        "name": "Días de aprendizaje básico (CC)"
+      },
+      "continuous_flow_duration": {
+        "name": "Duración del flujo continuo (CC)"
+      },
+      "grid_import_energy": {
+        "name": "Energía de importación de rejilla (CC)"
+      },
+      "grid_export_energy": {
+        "name": "Energía de exportación de red (CC)"
+      },
+      "grid_import_power": {
+        "name": "Potencia de importación de rejilla (CC)"
+      },
+      "grid_export_power": {
+        "name": "Potencia de exportación de red (CC)"
+      },
+      "net_power": {
+        "name": "Potencia neta (CC)"
+      },
+      "available_grid_power": {
+        "name": "Potencia de red disponible (CC)"
+      },
+      "phase_max_load": {
+        "name": "Carga de fase más alta (CC)"
+      },
+      "phase_imbalance": {
+        "name": "Desequilibrio de fase (CC)"
+      },
+      "standby_power": {
+        "name": "Potencia de reserva (CC)"
+      },
+      "standby_cost_year": {
+        "name": "Costo de reserva por año (CC)"
+      },
+      "month_peak": {
+        "name": "Mes de pico (CC)"
+      },
+      "energy_used_today": {
+        "name": "Energía utilizada hoy (CC)"
+      },
+      "energy_cost_today": {
+        "name": "Costo energético hoy (CC)"
+      },
+      "energy_cost_month": {
+        "name": "Costo de energía este mes (CC)"
+      },
+      "room_quality": {
+        "name": "Calidad de la habitación (CC)"
+      },
+      "room_quality_label": {
+        "name": "etiqueta de calidad de la habitación (CC)"
+      },
+      "room_quality_percentage": {
+        "name": "Porcentaje de la calidad de la habitación (CC)"
+      }
+    },
+    "binary_sensor": {
+      "smart_leak_detected": {
+        "name": "Detección inteligente de fugas (CC)"
+      },
+      "continuous_flow_leak": {
+        "name": "Flujo continuo (CC)"
+      },
+      "night_usage_detected": {
+        "name": "Uso nocturno (CC)"
+      },
+      "micro_leak_detected": {
+        "name": "Micro fugas (CC)"
+      },
+      "vacation_mode_leak": {
+        "name": "Pérdida de vacaciones (CC)"
+      },
+      "water_flowing": {
+        "name": "Flujo de agua (CC)"
+      },
+      "any_leak_alert": {
+        "name": "alarma de fuga (CC)"
+      },
+      "baseline_ready": {
+        "name": "Base de referencia aprendida (CC)"
+      }
+    }
+  },
+  "services": {
+    "apply_battery_recommendation": {
+      "name": "Recomendación de la batería",
+      "description": "Aplica el plan de batería SmartHomeShop actual a la entidad de control configurada.",
+      "fields": {
+        "action": {
+          "name": "Anulación de la acción",
+          "description": "Deja vacío para usar la recomendación del planificador actual."
+        }
+      }
+    }
+  },
+  "issues": {
+    "leak_detected": {
+      "title": "Posible fuga de agua en {device}",
+      "description": "La detección de fugas de **{device}** reporta una posible fuga (tipo: {leak_type}).\n\nRevise sus grifos, inodoro y electrodomésticos. Este problema desaparece automáticamente una vez que el uso del agua es normal."
+    }
+  }
+}

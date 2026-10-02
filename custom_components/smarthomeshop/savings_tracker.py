@@ -43,9 +43,16 @@ class SavingsTracker:
         self._prices = prices
         self._data: dict[str, Any] = {}
         self._loaded = False
-        async_track_time_change(
+        self._sample_unsubscribe = async_track_time_change(
             hass, self._handle_sample, minute=[1, 16, 31, 46], second=30
         )
+
+    @callback
+    def async_shutdown(self) -> None:
+        """Stop sampling when the Smart Energy module is disabled."""
+        if self._sample_unsubscribe is not None:
+            self._sample_unsubscribe()
+            self._sample_unsubscribe = None
 
     # ---- persistence ----
 

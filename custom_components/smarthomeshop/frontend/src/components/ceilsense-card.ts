@@ -1,10 +1,11 @@
 import { css, html, LitElement, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { fireMoreInfo } from '../utils/helpers';
 import { productLogo } from '../utils/product-logos';
 import { baseStyles } from '../utils/styles';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 import {
   connectionStateForDevice,
   findProductDevices,
@@ -74,9 +75,9 @@ const CEILSENSE_DEFAULTS: Required<Omit<CeilSenseCardConfig, 'device_id' | 'titl
   show_room_quality: true,
 };
 
-@customElement('smarthomeshop-ceilsense-card')
 export class SmartHomeShopCeilSenseCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: CeilSenseCardConfig = { ...CEILSENSE_DEFAULTS };
 
   private _cachedDeviceId?: string;
@@ -594,9 +595,9 @@ export class SmartHomeShopCeilSenseCard extends LitElement {
   }
 }
 
-@customElement('smarthomeshop-ceilsense-card-editor')
 export class SmartHomeShopCeilSenseCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: CeilSenseCardConfig = { ...CEILSENSE_DEFAULTS };
 
   static styles = css`

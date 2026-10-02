@@ -1220,7 +1220,7 @@ export function getLanguageFromHass(hass: any): string {
   const lang = hass.language || hass.locale?.language || 'en';
 
   // Extract base language code (e.g., "nl-NL" -> "nl")
-  const baseLanguage = lang.split('-')[0].toLowerCase();
+  const baseLanguage = lang.replace('_', '-').split('-')[0].toLowerCase();
 
   return baseLanguage;
 }
@@ -1284,4 +1284,3 @@ export function t(key: string, hass?: any): string {
  * Export all translations for use in components
  */
 export { translations, en, nl, de, fr, es, it, pt, pl };
-

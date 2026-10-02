@@ -6,6 +6,7 @@
 import { LitElement, PropertyValues, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 import {
   getEntityValue,
   getEntityState,
@@ -40,6 +41,7 @@ export interface CardConfig {
 
 export abstract class SmartHomeShopBaseCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() protected _config: CardConfig = {};
   @state() protected _historyData: number[] | null = null;
   @state() protected _historyLoading = false;

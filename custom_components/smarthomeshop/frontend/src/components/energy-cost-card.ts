@@ -1,5 +1,5 @@
 import { css, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import {
   EnergyCardBase,
   calculateDailyElectricityCost,
@@ -28,7 +28,6 @@ const DEFAULTS: Required<Omit<EnergyCostCardConfig, 'type' | 'title'>> = {
   include_fixed_daily_cost: false,
 };
 
-@customElement('smarthomeshop-energy-cost-card')
 export class SmartHomeShopEnergyCostCard extends EnergyCardBase<EnergyCostCardConfig> {
   protected config: EnergyCostCardConfig = { ...DEFAULTS };
   @state() private history: Record<string, HistoryPoint[]> = {};

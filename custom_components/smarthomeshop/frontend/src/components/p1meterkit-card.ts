@@ -1,10 +1,11 @@
 import { css, html, LitElement, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { fireMoreInfo } from '../utils/helpers';
 import { productLogo } from '../utils/product-logos';
 import { baseStyles } from '../utils/styles';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 import {
   connectionStateForDevice,
   findProductDevices,
@@ -74,9 +75,9 @@ const P1_DEFAULTS: Required<Omit<P1MeterKitCardConfig, 'device_id' | 'title'>> =
   show_environment: true,
 };
 
-@customElement('smarthomeshop-p1meterkit-card')
 export class SmartHomeShopP1MeterKitCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: P1MeterKitCardConfig = { ...P1_DEFAULTS };
 
   private _cachedDeviceId?: string;
@@ -572,9 +573,9 @@ export class SmartHomeShopP1MeterKitCard extends LitElement {
   }
 }
 
-@customElement('smarthomeshop-p1meterkit-card-editor')
 export class SmartHomeShopP1MeterKitCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: P1MeterKitCardConfig = { ...P1_DEFAULTS };
 
   static styles = css`

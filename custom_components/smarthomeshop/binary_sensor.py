@@ -28,6 +28,7 @@ from .products.base.water import (
 # The account-host election lives in the sensor platform so both platforms
 # agree on which entry carries the account-wide entities.
 from .sensor import adopt_account_entities, claim_account_host
+from .energy_runtime import energy_runtime_enabled
 
 
 async def async_setup_entry(
@@ -60,10 +61,12 @@ async def async_setup_entry(
             for line, label in (("flow1", "Flow 1"), ("flow2", "Flow 2"))
         )
 
-    # Account-wide price binary sensors are always hosted by one entry. They
-    # remain unavailable until an API key is connected, avoiding a reload when
-    # account settings change.
-    is_account_host = claim_account_host(hass, config_entry)
+    # Account-wide controls are absent when the complete Smart Energy module
+    # is disabled, rather than lingering below an unrelated product entry.
+    energy_enabled = energy_runtime_enabled(hass)
+    is_account_host = (
+        claim_account_host(hass, config_entry) if energy_enabled else False
+    )
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None and is_account_host:
         from .price_binary_sensors import (

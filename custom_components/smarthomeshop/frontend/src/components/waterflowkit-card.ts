@@ -5,7 +5,7 @@
  */
 
 import { html, css, nothing, svg, LitElement, PropertyValues } from 'lit';
-import { customElement, state, property } from 'lit/decorators.js';
+import { state, property } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { baseStyles } from '../utils/styles';
 import { productLogo } from '../utils/product-logos';
@@ -13,6 +13,7 @@ import { formatNumber, fireMoreInfo, getEntityValue } from '../utils/helpers';
 import { getTranslations } from '../utils/translations';
 import type { HomeAssistant } from '../types/home-assistant';
 import { debugLog } from '../utils/debug';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 interface WaterFlowKitConfig {
   device_id?: string;
@@ -36,9 +37,9 @@ interface WaterFlowKitConfig {
   show_flow2?: boolean;
 }
 
-@customElement('smarthomeshop-waterflowkit-card')
 export class SmartHomeShopWaterFlowKitCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: WaterFlowKitConfig = {};
 
   static styles = [
@@ -662,9 +663,9 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 }
 
 // Card Editor
-@customElement('smarthomeshop-waterflowkit-card-editor')
 export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: WaterFlowKitConfig = {};
 
   static styles = css`

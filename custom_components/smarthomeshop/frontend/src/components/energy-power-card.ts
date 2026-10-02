@@ -1,5 +1,5 @@
 import { css, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import {
   EnergyCardBase,
   energyCardStyles,
@@ -47,7 +47,6 @@ const DEFAULTS: Required<Omit<EnergyPowerCardConfig, 'type' | 'title'>> = {
   show_battery: true,
 };
 
-@customElement('smarthomeshop-energy-power-card')
 export class SmartHomeShopEnergyPowerCard extends EnergyCardBase<EnergyPowerCardConfig> {
   protected config: EnergyPowerCardConfig = { ...DEFAULTS };
   @state() private history: Record<string, HistoryPoint[]> = {};

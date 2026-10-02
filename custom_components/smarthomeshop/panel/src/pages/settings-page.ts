@@ -2055,8 +2055,8 @@ export class SettingsPage extends LitElement {
               <div class="device-item ${this._selectedDevice?.id === device.id ? 'selected' : ''}" @click=${() => this._selectDevice(device)}>
                 <div class="device-icon"><ha-icon icon="mdi:radar"></ha-icon></div>
                 <div>
-                  <div class="device-name">${device.name}</div>
-                  <div class="device-type">${device.product_name}</div>
+                  <div class="device-name" data-i18n-ignore>${device.name}</div>
+                  <div class="device-type" data-i18n-ignore>${device.product_name}</div>
                 </div>
               </div>
             `)}

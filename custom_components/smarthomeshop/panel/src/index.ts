@@ -1,6 +1,7 @@
 import { LitElement, html, css, PropertyValues } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, PanelConfig, PageType } from './types';
+import { installPanelLocalization, panelText } from './utils/panel-translations';
 import './pages/dashboard-page';
 import './pages/zones-page';
 import './pages/settings-page';
@@ -41,6 +42,7 @@ export class SmartHomeShopPanel extends LitElement {
   @property({ attribute: false }) public panel?: { config: PanelConfig };
   @state() private _currentPage: PageType = 'dashboard';
   @state() private _selectedDeviceId?: string;
+  private _localization?: { refresh: () => void; disconnect: () => void };
 
   static styles = css`
     :host {
@@ -178,11 +180,19 @@ export class SmartHomeShopPanel extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener('beforeunload', this._handleBeforeUnload);
+    if (this.hasUpdated) void this.updateComplete.then(() => this._startLocalization());
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener('beforeunload', this._handleBeforeUnload);
+    this._localization?.disconnect();
+    this._localization = undefined;
+  }
+
+  private _startLocalization(): void {
+    if (this._localization) return;
+    this._localization = installPanelLocalization(this.renderRoot as ShadowRoot, () => this.hass);
   }
 
   private _zonesDirty(): boolean {
@@ -192,6 +202,7 @@ export class SmartHomeShopPanel extends LitElement {
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
     console.log(`SmartHomeShop Panel v${VERSION} initialized`);
+    this._startLocalization();
     if (new URLSearchParams(window.location.search).get('energy-settings') === 'automations') {
       this._currentPage = 'energy';
       void this.updateComplete.then(() => {
@@ -203,12 +214,16 @@ export class SmartHomeShopPanel extends LitElement {
     }
   }
 
+  protected updated(changedProperties: PropertyValues): void {
+    if (changedProperties.has('hass')) this._localization?.refresh();
+  }
+
   private _navigateTo(page: PageType): void {
     // Leaving the Room Designer with unsaved work must not silently discard it.
     const leavingZones = (this._currentPage === 'zones' || this._currentPage === 'room-builder')
       && page !== 'zones' && page !== 'room-builder';
     if (leavingZones && this._zonesDirty()
-      && !window.confirm('You have unsaved changes in the Room Designer. Discard them?')) {
+      && !window.confirm(panelText(this.hass, 'You have unsaved changes in the Room Designer. Discard them?'))) {
       return;
     }
     this._currentPage = page;

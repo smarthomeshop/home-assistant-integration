@@ -46,7 +46,9 @@ from .device_linking import (
     entry_matches_source_device,
     iter_esphome_source_devices,
     resolve_source_device,
+    source_device_storage_key,
 )
+from .energy_runtime import async_schedule_energy_reconfigure
 
 # Water option keys (mirror config_flow); stored in entry.options
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
@@ -168,6 +170,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_set_device_config)
     websocket_api.async_register_command(hass, ws_link_device)
     websocket_api.async_register_command(hass, ws_remove_device)
+    websocket_api.async_register_command(hass, ws_unhide_device)
     websocket_api.async_register_command(hass, ws_get_account)
     websocket_api.async_register_command(hass, ws_set_account)
     websocket_api.async_register_command(hass, ws_refresh_account)
@@ -215,8 +218,10 @@ def ws_get_devices(
 ) -> None:
     """Get SmartHomeShop devices."""
     entity_registry = er.async_get(hass)
+    store = getattr(hass, "data", {}).get(DOMAIN, {}).get("store")
 
     devices = []
+    hidden_devices = []
     product_filter = msg.get("product_type")
 
     for device_entry in iter_esphome_source_devices(hass):
@@ -279,7 +284,7 @@ def ws_get_devices(
         if product_filter and detected_product != product_filter:
             continue
 
-        devices.append({
+        device = {
             "id": device_entry.id,
             "name": device_entry.name_by_user or device_entry.name or "Unknown",
             "model": device_entry.model,
@@ -291,10 +296,22 @@ def ws_get_devices(
             "last_seen": last_seen.isoformat() if (not online and last_seen) else None,
             "integration_linked": _entry_for_device(hass, device_entry.id) is not None,
             "esphome_configured": True,
-        })
+        }
+        device_key = source_device_storage_key(hass, device_entry)
+        if store is not None and store.is_device_hidden(device_key):
+            device["hidden"] = True
+            hidden_devices.append(device)
+        else:
+            devices.append(device)
 
-    LOGGER.debug("Found %d SmartHomeShop devices", len(devices))
-    connection.send_result(msg["id"], {"devices": devices})
+    LOGGER.debug(
+        "Found %d visible and %d hidden SmartHomeShop devices",
+        len(devices),
+        len(hidden_devices),
+    )
+    connection.send_result(
+        msg["id"], {"devices": devices, "hidden_devices": hidden_devices}
+    )
 
 
 @websocket_api.websocket_command(
@@ -956,11 +973,11 @@ async def ws_link_device(hass: HomeAssistant, connection, msg: dict) -> None:
 @websocket_api.websocket_command({
     vol.Required("type"): "smarthomeshop/device/remove",
     vol.Required("device_id"): str,
-    vol.Required("mode"): vol.In(("unlink", "full")),
+    vol.Required("mode"): vol.In(("hide", "unlink", "full")),
 })
 @websocket_api.async_response
 async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
-    """Unlink SmartHomeShop or remove the device's ESPHome entry as well."""
+    """Hide, unlink, or fully remove a discovered SmartHomeShop device."""
     if not connection.user.is_admin:
         connection.send_error(msg["id"], "unauthorized", "Administrator required")
         return
@@ -985,10 +1002,16 @@ async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
 
     integration_entry = _entry_for_device(hass, device_id)
     esphome_entries = config_entries_for_device_domain(hass, device_id, "esphome")
+    store = hass.data.get(DOMAIN, {}).get("store")
 
     if mode == "unlink" and integration_entry is None:
         connection.send_error(
             msg["id"], "not_linked", "This device is not linked to SmartHomeShop"
+        )
+        return
+    if mode == "hide" and store is None:
+        connection.send_error(
+            msg["id"], "not_ready", "SmartHomeShop storage is not ready"
         )
         return
     if mode == "full" and not esphome_entries:
@@ -1019,6 +1042,17 @@ async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
                     result.get("require_restart")
                 )
                 removed_domains.append("esphome")
+        elif mode == "hide":
+            await store.async_hide_device(
+                source_device_storage_key(hass, device),
+                {
+                    "name": getattr(device, "name_by_user", None)
+                    or getattr(device, "name", None)
+                    or "Unknown",
+                    "model": getattr(device, "model", None),
+                    "product_type": product_type,
+                },
+            )
     except Exception:  # Home Assistant logs the underlying integration error.
         LOGGER.exception(
             "Failed to remove device %s in mode %s after removing %s",
@@ -1044,10 +1078,37 @@ async def ws_remove_device(hass: HomeAssistant, connection, msg: dict) -> None:
     connection.send_result(msg["id"], {
         "ok": True,
         "mode": mode,
+        "hidden": mode == "hide",
         "removed_smarthomeshop": DOMAIN in removed_domains,
         "removed_esphome": "esphome" in removed_domains,
         "require_restart": require_restart,
     })
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/device/unhide",
+    vol.Required("device_id"): str,
+})
+@websocket_api.async_response
+async def ws_unhide_device(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Restore a hidden device to the panel without changing ESPHome."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    device = resolve_source_device(hass, msg["device_id"])
+    if device is None or _product_for_registry_device(hass, device) is None:
+        connection.send_error(msg["id"], "not_found", "Device not found")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(
+            msg["id"], "not_ready", "SmartHomeShop storage is not ready"
+        )
+        return
+    restored = await store.async_unhide_device(
+        source_device_storage_key(hass, device)
+    )
+    connection.send_result(msg["id"], {"ok": True, "restored": restored})
 
 
 def _account_result(hass: HomeAssistant) -> dict:
@@ -1512,9 +1573,18 @@ async def ws_set_energy_sources(hass: HomeAssistant, connection, msg: dict) -> N
     # picker are separate writers to this one slot, so keys a writer does
     # not send must survive its save. Clearing a field still works because
     # the panel sends an explicit empty value for it.
+    previous_sources = store.get_energy_sources()
     saved = await store.async_set_energy_sources(
-        {**store.get_energy_sources(), **config}
+        {**previous_sources, **config}
     )
+    if (
+        "energy_dashboard_enabled" in config
+        and config["energy_dashboard_enabled"]
+        != previous_sources.get("energy_dashboard_enabled")
+    ):
+        async_schedule_energy_reconfigure(
+            hass, bool(config["energy_dashboard_enabled"])
+        )
     prices = hass.data.get(DOMAIN, {}).get("prices")
     if prices is not None:
         prices.async_refresh_tariff_source()

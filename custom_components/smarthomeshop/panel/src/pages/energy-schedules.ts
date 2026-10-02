@@ -1,6 +1,7 @@
 import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
+import { panelText } from '../utils/panel-translations';
 
 // Deadline schedules (smart-energy Phase 2): "have this load done by <time>,
 // it needs <N> hours" → the integration computes a binary sensor that is on
@@ -294,7 +295,7 @@ export class EnergySchedules extends LitElement {
 
   private async _delete(s: Schedule): Promise<void> {
     if (!this.hass.user?.is_admin) return;
-    if (!window.confirm(`Delete "${s.name}" and its automation?`)) return;
+    if (!window.confirm(panelText(this.hass, 'Delete "{name}" and its automation?', { name: s.name }))) return;
     try {
       await this.hass.callWS({ type: 'smarthomeshop/schedules/delete', schedule_id: s.id });
       // Remove the generated automation too, so it can't keep steering the load.

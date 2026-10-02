@@ -5,8 +5,9 @@
  */
 
 import { LitElement, html, css, nothing, PropertyValues, svg } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types/home-assistant';
+import { CardLocalizationController } from '../utils/runtime-translations';
 
 interface Zone {
   id: number;
@@ -36,9 +37,9 @@ interface Camera3D {
 type DragMode = 'none' | 'move' | 'resize-nw' | 'resize-ne' | 'resize-sw' | 'resize-se' | 'resize-n' | 'resize-s' | 'resize-w' | 'resize-e';
 type ViewMode = '2d' | '3d';
 
-@customElement('smarthomeshop-zone-editor')
 export class SmartHomeShopZoneEditor extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
+  protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @property() public entityPrefix: string = '';
   @property() public deviceName: string = '';
   @property({ type: Boolean }) public isOpen: boolean = false;

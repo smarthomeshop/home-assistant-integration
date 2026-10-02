@@ -4,7 +4,7 @@
  */
 
 import { html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { SmartHomeShopBaseCard, CardConfig } from './base-card';
 import { baseStyles } from '../utils/styles';
@@ -15,7 +15,6 @@ interface WaterCardConfig extends CardConfig {
   // Add any water-specific config options here
 }
 
-@customElement('smarthomeshop-water-card')
 export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
   static styles = [baseStyles];
 
