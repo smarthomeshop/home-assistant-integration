@@ -52,18 +52,30 @@ def _entity(entity_id: str, device_id: str, platform: str, config_entry_id: str)
     )
 
 
+class _DeviceView:
+    """Model the supported HA 2026.9 iterable device view."""
+
+    def __init__(self, devices):
+        self._devices = devices
+
+    def __iter__(self):
+        return iter(self._devices.values())
+
+    def values(self):
+        raise AssertionError("deprecated device_registry.devices.values() was used")
+
+
 class _DeviceRegistry:
     def __init__(self, devices, composite=None):
         self._devices = {device.id: device for device in devices}
         self._composite = composite or {}
+        self.devices = _DeviceView(self._devices)
 
-    @property
-    def devices(self):
-        raise AssertionError("deprecated device_registry.devices was accessed")
-
-    def async_get(self, device_id):
+    def async_get(self, device_id, *, include_composite_devices=True):
         if device_id in self._devices:
             return self._devices[device_id]
+        if not include_composite_devices:
+            return None
         splits = self._composite.get(device_id, [])
         if not splits:
             return None
@@ -78,15 +90,25 @@ class _DeviceRegistry:
     def async_get_devices_for_composite_device_id(self, device_id):
         return list(self._composite.get(device_id, []))
 
-    def async_get_devices(self):
-        return list(self._devices.values())
+    def async_get_devices(
+        self, *, identifiers=None, connections=None, config_entry_id=None
+    ):
+        # This is a filtered lookup in HA, not an enumeration API. With no
+        # identifiers or connections it intentionally returns no devices.
+        if not identifiers and not connections:
+            return []
+        return [
+            device
+            for device in self._devices.values()
+            if (not identifiers or identifiers & device.identifiers)
+            or (connections and connections & device.connections)
+            if config_entry_id is None or device.config_entry_id == config_entry_id
+        ]
 
     def async_is_composite_device_id(self, device_id):
-        if device_id in self._devices:
-            return False
-        if self._composite.get(device_id):
-            return True
-        return None
+        raise AssertionError(
+            "deprecated async_is_composite_device_id() was used on HA 2026.9"
+        )
 
 
 class _EntityRegistry:
@@ -142,6 +164,30 @@ def _install(monkeypatch, devices, entities, entries, composite=None):
         device_linking.er, "async_entries_for_device", entries_for_device
     )
     return hass
+
+
+def test_ha_2026_9_iterable_device_view_is_used_for_enumeration() -> None:
+    esphome = _device("esp-device", "esp-entry")
+    registry = _DeviceRegistry([esphome])
+
+    # Reproduces the 1.13.0 regression: this filtered lookup is empty when no
+    # identifiers or connections are supplied, even though the registry has a
+    # real device. The supported iterable view must be used instead.
+    assert registry.async_get_devices() == []
+    assert device_linking._registry_devices(registry) == [esphome]
+
+
+def test_pre_2026_9_mapping_iteration_ids_are_resolved() -> None:
+    esphome = _device("esp-device", "esp-entry")
+
+    class LegacyRegistry:
+        devices = {esphome.id: esphome}
+
+        @staticmethod
+        def async_get(device_id):
+            return LegacyRegistry.devices.get(device_id)
+
+    assert device_linking._registry_devices(LegacyRegistry()) == [esphome]
 
 
 def test_ha_2026_8_composite_and_all_splits_resolve_to_esphome(monkeypatch) -> None:

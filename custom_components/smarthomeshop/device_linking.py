@@ -39,29 +39,48 @@ def _entries_for_device(
         return list(er.async_entries_for_device(entity_registry, device_id))
 
 
-def _registry_devices(device_registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
-    """Return concrete registry devices without deprecated mapping access.
-
-    Home Assistant 2026.9 warns when integrations enumerate
-    ``device_registry.devices`` directly and removes that compatibility path in
-    2027.9.  The public helper only returns real stored devices, never the
-    synthetic entry produced for an old composite id.  Keep a narrow fallback
-    for Home Assistant versions predating the helper.
-    """
-    get_devices = getattr(device_registry, "async_get_devices", None)
-    if callable(get_devices):
-        return list(get_devices())
-    return list(getattr(device_registry, "devices", {}).values())
-
-
-def _is_concrete_device_id(
+def _get_concrete_device(
     device_registry: dr.DeviceRegistry, device_id: str
-) -> bool:
-    """Return whether an id belongs to a stored device, not a composite alias."""
-    is_composite = getattr(device_registry, "async_is_composite_device_id", None)
-    if callable(is_composite):
-        return is_composite(device_id) is False
-    return any(device.id == device_id for device in _registry_devices(device_registry))
+) -> dr.DeviceEntry | None:
+    """Get a stored device without accepting a synthetic composite alias.
+
+    Home Assistant 2026.9 added ``include_composite_devices`` and deprecated
+    ``async_is_composite_device_id``.  Older versions do not accept that keyword,
+    so retain the earlier check only on their compatibility path.
+    """
+    try:
+        return device_registry.async_get(
+            device_id, include_composite_devices=False
+        )
+    except TypeError:
+        is_composite = getattr(
+            device_registry, "async_is_composite_device_id", None
+        )
+        if callable(is_composite) and is_composite(device_id) is not False:
+            return None
+        return device_registry.async_get(device_id)
+
+
+def _registry_devices(device_registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
+    """Return all concrete devices across supported registry generations.
+
+    In Home Assistant 2026.9 ``device_registry.devices`` became an iterable view
+    of ``DeviceEntry`` values. Iteration is the documented enumeration API;
+    mapping operations such as ``.values()`` are deprecated. In older versions
+    iteration yields device ids, which are resolved through ``async_get``.
+
+    ``async_get_devices()`` is intentionally not used here: it is a filtered
+    identifier/connection lookup and returns no entries without search criteria.
+    """
+    devices: list[dr.DeviceEntry] = []
+    for item in device_registry.devices:
+        if isinstance(item, str):
+            device = _get_concrete_device(device_registry, item)
+            if device is not None:
+                devices.append(device)
+        else:
+            devices.append(item)
+    return devices
 
 
 def device_config_entry_ids(device: dr.DeviceEntry) -> set[str]:
@@ -182,12 +201,10 @@ def resolve_source_device(
     def add_concrete(candidate_id: str | None, *, preferred: bool = False) -> None:
         if not candidate_id:
             return
-        candidate = device_registry.async_get(candidate_id)
+        candidate = _get_concrete_device(device_registry, candidate_id)
         # A composite id can synthesize a read-only entry.  Only return live,
-        # concrete devices from the registry mapping.
-        if candidate is None or not _is_concrete_device_id(
-            device_registry, candidate_id
-        ):
+        # concrete devices from the registry.
+        if candidate is None:
             return
         candidates[candidate.id] = candidate
         if preferred:
