@@ -14,6 +14,7 @@ export interface P3 { x: number; y: number; z: number }
 export interface Scene3DFurniture { x: number; y: number; width: number; height: number; rotation: number; name: string }
 export interface Scene3DDoor { wallIndex: number; position: number; width: number }
 export interface Scene3DWindow { wallIndex: number; position: number; width: number; height: number }
+export interface Scene3DMirror { wallIndex: number; position: number; width: number; height: number; protectionEnabled?: boolean }
 export interface Scene3DZone { points: P2[]; type: 'detection' | 'exclusion' | 'entry'; name: string; inDirection?: 'left' | 'right' }
 export interface Scene3DSensor { x: number; y: number; rotation: number; range: number; fov: number; heightMm?: number }
 
@@ -22,6 +23,7 @@ export interface Scene3D {
   furniture: Scene3DFurniture[];
   doors: Scene3DDoor[];
   windows: Scene3DWindow[];
+  mirrors: Scene3DMirror[];
   zones: Scene3DZone[];
   sensors: Scene3DSensor[];
   /** Active targets in world (room) coordinates */
@@ -86,6 +88,7 @@ export class Room3DRenderer {
       this.drawFurniture(ctx, scene);
       this.drawDoors(ctx, scene);
       this.drawWindows(ctx, scene);
+      this.drawMirrors(ctx, scene);
       this.drawZones(ctx, scene);
     }
     this.drawSensors(ctx, scene);
@@ -342,6 +345,41 @@ export class Room3DRenderer {
         ctx.fill();
         ctx.stroke();
       }
+    }
+  }
+
+  private drawMirrors(ctx: CanvasRenderingContext2D, scene: Scene3D): void {
+    for (const mirror of scene.mirrors || []) {
+      if (mirror.wallIndex < 0 || mirror.wallIndex >= scene.roomPoints.length) continue;
+      const wallStart = scene.roomPoints[mirror.wallIndex];
+      const wallEnd = scene.roomPoints[(mirror.wallIndex + 1) % scene.roomPoints.length];
+      const center = {
+        x: wallStart.x + (wallEnd.x - wallStart.x) * mirror.position,
+        y: wallStart.y + (wallEnd.y - wallStart.y) * mirror.position,
+      };
+      const angle = Math.atan2(wallEnd.y - wallStart.y, wallEnd.x - wallStart.x);
+      const dx = Math.cos(angle) * mirror.width / 2;
+      const dy = Math.sin(angle) * mirror.width / 2;
+      const bottom = 300;
+      const corners = [
+        this.project({ x: center.x - dx, y: center.y - dy, z: bottom }),
+        this.project({ x: center.x + dx, y: center.y + dy, z: bottom }),
+        this.project({ x: center.x + dx, y: center.y + dy, z: bottom + mirror.height }),
+        this.project({ x: center.x - dx, y: center.y - dy, z: bottom + mirror.height }),
+      ];
+      const gradient = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+      gradient.addColorStop(0, 'rgba(226, 232, 240, 0.85)');
+      gradient.addColorStop(0.5, 'rgba(125, 211, 252, 0.3)');
+      gradient.addColorStop(1, 'rgba(248, 250, 252, 0.75)');
+      ctx.fillStyle = gradient;
+      ctx.strokeStyle = mirror.protectionEnabled ? '#22c55e' : '#64748b';
+      ctx.lineWidth = mirror.protectionEnabled ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      corners.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
   }
 

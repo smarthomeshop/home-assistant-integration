@@ -34,6 +34,17 @@ test('translates primary navigation and the device visibility flow', () => {
   assert.equal(panelText({ language: 'es' }, 'Enable Smart Energy'), 'Activar Smart Energy');
 });
 
+test('translates mirror reflection protection in every supported language', () => {
+  for (const language of REQUIRED.slice(1)) {
+    assert.notEqual(panelText({ language }, 'Reflection protection'), 'Reflection protection');
+    assert.notEqual(panelText({ language }, 'Protection depth (cm)'), 'Protection depth (cm)');
+    assert.match(
+      panelText({ language }, '{used}/2 radar exclusion slots used.', { used: 2 }),
+      /2\/2/,
+    );
+  }
+});
+
 test('keeps interpolation values intact and falls back safely to English', () => {
   assert.equal(
     panelText({ language: 'es' }, 'Delete "{name}" and its automation?', { name: 'Lavavajillas' }),

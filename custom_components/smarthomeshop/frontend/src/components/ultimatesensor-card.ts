@@ -14,6 +14,11 @@ import { loadHistorySeries, type HistoryPoint } from '../utils/history';
 import { productLogo } from '../utils/product-logos';
 import { resolveFurnitureRotation } from '../utils/furniture-geometry';
 import {
+  createMirrorReflectionPolygon,
+  filterReflectedTargets,
+  pointInPolygon,
+} from '../utils/reflection-protection';
+import {
   normaliseRoomViewHeight,
   resolveRoomForDevice,
   roomSensorForDevice,
@@ -574,7 +579,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       position: relative;
       height: 12px;
       border-radius: 6px;
-      overflow: hidden;
+      overflow: visible;
       background: linear-gradient(90deg,
         #4caf50 0%,
         #8bc34a 25%,
@@ -590,8 +595,13 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       width: 4px;
       height: 20px;
       background: var(--primary-text-color);
+      border: 1px solid var(--card-background-color);
+      box-sizing: border-box;
       border-radius: 2px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--primary-text-color) 24%, transparent),
+        0 2px 6px rgba(0,0,0,0.35);
+      z-index: 1;
       transition: left 0.5s ease;
     }
     .co2-bar-labels {
@@ -1075,6 +1085,30 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
 
   private _roomSensor(room: any): any | null {
     return roomSensorForDevice(room, this._roomAliases());
+  }
+
+  private _roomVisibleTargets(room: any, placement: any): Target[] {
+    const active = this._targets.filter(target => target.active && Number.isFinite(target.x) && Number.isFinite(target.y));
+    if (!room || !placement) return active;
+    const roomPoints = (room.walls || [])
+      .filter((wall: any) => Number.isFinite(Number(wall?.x1)) && Number.isFinite(Number(wall?.y1)))
+      .map((wall: any) => ({ x: Number(wall.x1), y: Number(wall.y1) }));
+    if (roomPoints.length < 3) return active;
+    const sensor = { x: Number(placement.x), y: Number(placement.y) };
+    const rotation = ((Number.isFinite(Number(placement.rotation)) ? Number(placement.rotation) : 270) - 90)
+      * Math.PI / 180;
+    return active.filter(target => {
+      const roomTarget = {
+        x: sensor.x + target.y * Math.cos(rotation) - target.x * Math.sin(rotation),
+        y: sensor.y + target.y * Math.sin(rotation) + target.x * Math.cos(rotation),
+      };
+      const manualExclusions = (room.zones || [])
+        .filter((zone: any) => zone?.type === 'exclusion')
+        .flatMap((zone: any) => Array.isArray(zone.parts) && zone.parts.length ? zone.parts : [zone.points])
+        .filter((points: any) => Array.isArray(points) && points.length >= 3);
+      if (manualExclusions.some((points: Array<{ x: number; y: number }>) => pointInPolygon(roomTarget, points))) return false;
+      return filterReflectedTargets([roomTarget], roomPoints, room.mirrors || [], sensor).length === 1;
+    });
   }
 
   private _stopUpdates(): void {
@@ -1826,7 +1860,9 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       y: isNaN(sensorY) ? minY + 0.5 : sensorY
     };
     // Never revive coordinates from an inactive or unavailable target slot.
-    const activeTargets = this._targets.filter(t => t.active && Number.isFinite(t.x) && Number.isFinite(t.y));
+    const roomPointsMm = wallSegments.map((wall: any) => ({ x: Number(wall.x1), y: Number(wall.y1) }));
+    const sensorMm = { x: Number(roomSensor.x), y: Number(roomSensor.y) };
+    const activeTargets = this._roomVisibleTargets(room, roomSensor);
     debugLog('SmartHomeShop: Room targets:', JSON.stringify(this._targets), 'Active/visible:', activeTargets.length);
 
     // Calculate FOV triangle points based on rotation
@@ -1987,6 +2023,43 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
             `;
           });
         })()}
+        <!-- Mirrors and their optional reflection guards -->
+        ${(() => {
+          const mirrors = room.mirrors || [];
+          const pts = roomPointsMm;
+          if (pts.length < 3) return nothing;
+          return mirrors.map((mirror: any, index: number) => {
+            if (mirror.wallIndex < 0 || mirror.wallIndex >= pts.length) return nothing;
+            const p1 = pts[mirror.wallIndex];
+            const p2 = pts[(mirror.wallIndex + 1) % pts.length];
+            const centerX = p1.x + (p2.x - p1.x) * mirror.position;
+            const centerY = p1.y + (p2.y - p1.y) * mirror.position;
+            const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            const halfWidth = Number(mirror.width || 1000) / 2;
+            const reflection = createMirrorReflectionPolygon(pts, mirror, sensorMm);
+            const reflectionPath = reflection
+              ? `M ${reflection.map(point => `${point.x / 1000} ${point.y / 1000}`).join(' L ')} Z`
+              : '';
+            return svg`
+              ${reflectionPath ? svg`<path d="${reflectionPath}" fill="rgba(14, 165, 233, 0.08)" stroke="#0ea5e9" stroke-width="0.018" stroke-dasharray="0.08 0.05"/>` : nothing}
+              <line
+                x1="${(centerX - Math.cos(angle) * halfWidth) / 1000}"
+                y1="${(centerY - Math.sin(angle) * halfWidth) / 1000}"
+                x2="${(centerX + Math.cos(angle) * halfWidth) / 1000}"
+                y2="${(centerY + Math.sin(angle) * halfWidth) / 1000}"
+                stroke="${mirror.protectionEnabled ? '#22c55e' : '#94a3b8'}" stroke-width="0.07" stroke-linecap="round"
+                aria-label="Mirror ${index + 1}"
+              />
+              <line
+                x1="${(centerX - Math.cos(angle) * halfWidth) / 1000}"
+                y1="${(centerY - Math.sin(angle) * halfWidth) / 1000}"
+                x2="${(centerX + Math.cos(angle) * halfWidth) / 1000}"
+                y2="${(centerY + Math.sin(angle) * halfWidth) / 1000}"
+                stroke="#e2e8f0" stroke-width="0.018" stroke-linecap="round"
+              />
+            `;
+          });
+        })()}
         <!-- Furniture - same style as zones-page (gray) -->
         ${(() => {
           const furniture = room.furniture || [];
@@ -2094,8 +2167,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
           heightMm: Number.isFinite(Number(placement.heightMm)) ? Number(placement.heightMm) : 2000,
         }]
       : [];
-    const targets = placement ? this._targets
-      .filter(target => target.active && Number.isFinite(target.x) && Number.isFinite(target.y))
+    const targets = placement ? this._roomVisibleTargets(room, placement)
       .map(target => {
         const rotation = ((Number.isFinite(Number(placement.rotation)) ? Number(placement.rotation) : 270) - 90)
           * Math.PI / 180;
@@ -2110,6 +2182,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       furniture,
       doors: room.doors || [],
       windows: room.windows || [],
+      mirrors: room.mirrors || [],
       zones: room.zones || [],
       sensors,
       targets,
@@ -2382,7 +2455,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       `;
     }
 
-    const activeTargets = this._targets.filter((t) => t.active).length;
+    const selectedRoom = this._rooms.find(room => room.id === this._selectedRoomId);
+    const activeTargets = (this._config.view_mode === 'room'
+      ? this._roomVisibleTargets(selectedRoom, this._roomSensor(selectedRoom))
+      : this._targets.filter(target => target.active)).length;
     const title = this._config.title || this._deviceName || 'UltimateSensor';
     const logo = productLogo(
       /mini/i.test(this._entityPrefix) ? 'ultimatesensor_mini' : 'ultimatesensor'

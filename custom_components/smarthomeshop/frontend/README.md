@@ -101,6 +101,12 @@ If the card cannot find a room automatically, open Room Designer and link that
 exact Home Assistant device to a sensor placement. A room can also be selected
 explicitly in the visual card editor.
 
+Mirrors placed in Room Designer appear in both the 2D and 3D room views. When
+reflection protection is enabled, targets inside the predicted area behind the
+mirror are hidden from the room view. The same area can be pushed to compatible
+LD2450 and LD2460 firmware as an exclusion polygon, so it is also ignored by
+zone, entry-line and persistent people-count logic.
+
 The compact `Total meter reading` row stays available on firmware without a
 calibration entity. Firmware that supports meter calibration also shows a
 `Set` action in the same row.

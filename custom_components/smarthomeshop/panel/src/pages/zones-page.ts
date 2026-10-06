@@ -33,6 +33,11 @@ import {
   findDeviceEntity,
   resolveESPHomeDeviceService,
 } from '../utils/device-entity-resolution';
+import {
+  allocateReflectionExclusions,
+  createMirrorReflectionPolygons,
+  pointInPolygon,
+} from '../utils/reflection-protection';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -64,6 +69,7 @@ interface TrackingSettings { smoothingEnabled: boolean; smoothingAlpha: number; 
 interface LocalFurnitureItem { id: string; type: string; name: string; x: number; y: number; width: number; height: number; rotation: number; }
 interface DoorItem { id: string; wallIndex: number; position: number; width: number; openDirection: 'inward' | 'outward'; openSide: 'left' | 'right'; }
 interface WindowItem { id: string; wallIndex: number; position: number; width: number; height: number; windowType: 'fixed' | 'open' | 'tilt'; }
+interface MirrorItem { id: string; wallIndex: number; position: number; width: number; height: number; protectionEnabled: boolean; reflectionDepthMm: number; }
 type SensorMountingMode = 'wall' | 'ceiling';
 type RadarProductFamily = 'ceilsense' | 'ultimate-sensor' | 'unknown';
 interface SensorInstance { id: string; deviceId: string | null; x: number; y: number; rotation: number; range: number; fov: number; heightMm: number; mountingMode: SensorMountingMode; }
@@ -126,7 +132,7 @@ interface RadarDevice {
 
 const CANVAS_SIZE = 800;
 const HALF = CANVAS_SIZE / 2;
-type ToolMode = 'select' | 'sensor' | 'zone' | 'walls' | 'door' | 'window' | 'furniture';
+type ToolMode = 'select' | 'sensor' | 'zone' | 'walls' | 'door' | 'window' | 'mirror' | 'furniture';
 type DesignMode = 'layout' | 'sensors';
 interface FurnitureType { id: string; name: string; icon: string; defaultWidth: number; defaultHeight: number; }
 
@@ -219,6 +225,7 @@ export class ZonesPage extends LitElement {
   @state() private _furniture: LocalFurnitureItem[] = [];
   @state() private _doors: DoorItem[] = [];
   @state() private _windows: WindowItem[] = [];
+  @state() private _mirrors: MirrorItem[] = [];
 
   // Sensor state (multiple sensors per room)
   @state() private _sensors: SensorInstance[] = [];
@@ -296,14 +303,17 @@ export class ZonesPage extends LitElement {
   @state() private _selectedFurnitureIndex: number | null = null;
   @state() private _draggingFurnitureIndex: number | null = null;
 
-  // Door/window editing state
+  // Door/window/mirror editing state
   @state() private _draggingDoorIndex: number | null = null;
   @state() private _draggingWindowIndex: number | null = null;
-  @state() private _doorWindowPreview: { wallIndex: number; position: number; point: Point; type: 'door' | 'window' } | null = null;
+  @state() private _draggingMirrorIndex: number | null = null;
+  @state() private _doorWindowPreview: { wallIndex: number; position: number; point: Point; type: 'door' | 'window' | 'mirror' } | null = null;
   @state() private _showDoorDialog = false;
   @state() private _showWindowDialog = false;
+  @state() private _showMirrorDialog = false;
   @state() private _editingDoorIndex: number | null = null;
   @state() private _editingWindowIndex: number | null = null;
+  @state() private _editingMirrorIndex: number | null = null;
   @state() private _selectedWallIndex: number | null = null;
   @state() private _doorWidth = 900;
   @state() private _doorOpenDirection: 'inward' | 'outward' = 'inward';
@@ -311,6 +321,10 @@ export class ZonesPage extends LitElement {
   @state() private _windowWidth = 1200;
   @state() private _windowHeight = 1000;
   @state() private _windowType: 'fixed' | 'open' | 'tilt' = 'open';
+  @state() private _mirrorWidth = 1000;
+  @state() private _mirrorHeight = 1800;
+  @state() private _mirrorProtectionEnabled = false;
+  @state() private _mirrorReflectionDepthMm = 2000;
 
   // Room management
   @state() private _showNewRoomDialog = false;
@@ -1201,6 +1215,7 @@ export class ZonesPage extends LitElement {
   private _setToolMode(mode: ToolMode) {
     this._toolMode = mode;
     this._resetTransientState();
+    if (mode === 'mirror') this._autoZoom(true);
   }
 
   private _resetTransientState() {
@@ -1417,6 +1432,59 @@ export class ZonesPage extends LitElement {
     this._showWindowDialog = false;
   }
 
+  private _addMirror() {
+    if (this._selectedWallIndex === null || !this._pendingStart) return;
+    this._mirrors = [...this._mirrors, {
+      id: `mirror_${Date.now()}`,
+      wallIndex: this._selectedWallIndex,
+      position: this._pendingStart.x,
+      width: this._mirrorWidth,
+      height: this._mirrorHeight,
+      protectionEnabled: this._mirrorProtectionEnabled,
+      reflectionDepthMm: this._mirrorReflectionDepthMm,
+    }];
+    this._markDirty();
+    this._hideMirrorDialog();
+    this._autoZoom(true);
+  }
+
+  private _hideMirrorDialog() {
+    this._showMirrorDialog = false;
+    this._selectedWallIndex = null;
+    this._pendingStart = null;
+    this._editingMirrorIndex = null;
+  }
+
+  private _deleteMirror(index: number) {
+    this._mirrors = this._mirrors.filter((_, itemIndex) => itemIndex !== index);
+    this._markDirty();
+  }
+
+  private _editMirror(index: number) {
+    const mirror = this._mirrors[index];
+    if (!mirror) return;
+    this._editingMirrorIndex = index;
+    this._mirrorWidth = mirror.width;
+    this._mirrorHeight = mirror.height;
+    this._mirrorProtectionEnabled = mirror.protectionEnabled;
+    this._mirrorReflectionDepthMm = mirror.reflectionDepthMm;
+    this._showMirrorDialog = true;
+  }
+
+  private _saveMirrorEdit() {
+    if (this._editingMirrorIndex === null) return;
+    this._mirrors = this._mirrors.map((mirror, index) => index === this._editingMirrorIndex ? {
+      ...mirror,
+      width: this._mirrorWidth,
+      height: this._mirrorHeight,
+      protectionEnabled: this._mirrorProtectionEnabled,
+      reflectionDepthMm: this._mirrorReflectionDepthMm,
+    } : mirror);
+    this._markDirty();
+    this._hideMirrorDialog();
+    this._autoZoom(true);
+  }
+
   // Room management
   private async _createNewRoom() {
     if (!this._newRoomName.trim()) return;
@@ -1486,6 +1554,7 @@ export class ZonesPage extends LitElement {
     this._furniture = [];
     this._doors = [];
     this._windows = [];
+    this._mirrors = [];
     this._sensors = [];
     this._zones = [];
     this._selectedSensorIndex = null;
@@ -1526,6 +1595,7 @@ export class ZonesPage extends LitElement {
       if (this._showZoneTypePicker) { this._cancelZoneTypePicker(); return; }
       if (this._showDoorDialog) { this._hideDoorDialog(); return; }
       if (this._showWindowDialog) { this._hideWindowDialog(); return; }
+      if (this._showMirrorDialog) { this._hideMirrorDialog(); return; }
       if (this._showFurnitureDialog) { this._showFurnitureDialog = false; return; }
       if (this._showNewRoomDialog) { this._showNewRoomDialog = false; return; }
       if (this._showRenameRoomDialog) { this._showRenameRoomDialog = false; return; }
@@ -1637,11 +1707,13 @@ export class ZonesPage extends LitElement {
           : presenceState === 'off'
             ? false
             : x !== 0 || y !== 0;
-        targets.push({ index: targetMap.index, x, y, active });
+        const roomTarget = projectRadarTargetToRoom({ x, y }, sensor, this._coordinateProjection(sensor));
+        const excluded = active && this._targetFallsInExclusion(roomTarget, sensor);
+        targets.push({ index: targetMap.index, x, y, active: active && !excluded });
 
         // Record trail history (sensor-local coords, capped length)
         const trail = trails[trailIndex] || (trails[trailIndex] = []);
-        if (active) {
+        if (active && !excluded) {
           const last = trail[trail.length - 1];
           if (!last || Math.hypot(x - last.x, y - last.y) > 30) {
             trail.push({ x, y });
@@ -1948,6 +2020,19 @@ export class ZonesPage extends LitElement {
       // Load doors and windows
       this._doors = (room as any).doors || [];
       this._windows = (room as any).windows || [];
+      this._mirrors = Array.isArray((room as any).mirrors)
+        ? (room as any).mirrors
+          .filter((mirror: any) => Number.isInteger(mirror?.wallIndex))
+          .map((mirror: any, index: number): MirrorItem => ({
+            id: String(mirror.id || `mirror_${index + 1}`),
+            wallIndex: Number(mirror.wallIndex),
+            position: Math.min(0.95, Math.max(0.05, Number(mirror.position) || 0.5)),
+            width: Math.min(5000, Math.max(100, Number(mirror.width) || 1000)),
+            height: Math.min(3000, Math.max(100, Number(mirror.height) || 1800)),
+            protectionEnabled: mirror.protectionEnabled === true,
+            reflectionDepthMm: Math.min(6000, Math.max(250, Number(mirror.reflectionDepthMm) || 2000)),
+          }))
+        : [];
 
       // Load sensors (with migration from the old single-sensor format)
       const roomSensors = (room as any).sensors;
@@ -2049,6 +2134,7 @@ export class ZonesPage extends LitElement {
         furniture,
         doors: this._doors,
         windows: this._windows,
+        mirrors: this._mirrors,
         sensor,
         sensors: this._sensors,
         zones: this._zones,
@@ -2127,6 +2213,25 @@ export class ZonesPage extends LitElement {
       alert(`Wait for side mode, mounting height and downward angle to be reported by ${unreadyLd2460.map(radar => radar.name).join(', ')} before pushing zones.`);
       return;
     }
+    const manualExclusionParts = this._zones
+      .filter(zone => zone.type === 'exclusion')
+      .flatMap(zone => getZoneParts(zone));
+    const reflectionOverflow = linkedSensors.find(sensor =>
+      manualExclusionParts.length
+        + createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor).length > ZONE_LIMITS.exclusion
+    );
+    if (reflectionOverflow) {
+      const reflectionCount = createMirrorReflectionPolygons(this._roomPoints, this._mirrors, reflectionOverflow).length;
+      alert(panelText(
+        this.hass,
+        'Reflection protection needs {total} exclusion slots for {sensor}, but the radar supports 2. Disable protection for a mirror or remove a manual exclusion zone.',
+        {
+          total: manualExclusionParts.length + reflectionCount,
+          sensor: this._sensorLabel(reflectionOverflow, linkedSensors.indexOf(reflectionOverflow)),
+        },
+      ));
+      return;
+    }
     const oversizedPolygon = this._zones
       .filter(zone => zone.type !== 'entry')
       .flatMap(zone => getZoneParts(zone).map(points => ({ zone, points })))
@@ -2180,7 +2285,19 @@ export class ZonesPage extends LitElement {
           return slots.slice(0, maxSlots);
         };
         const detectionSlots = toZoneSlots(detectionZones, 4, 'detection zones');
-        const exclusionSlots = toZoneSlots(exclusionZones, 2, 'exclusion zones');
+        const manualExclusions = exclusionZones.flatMap(zone =>
+          getZoneParts(zone).map(points => ({ zone, points }))
+        );
+        const reflectionPolygons = createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor);
+        const exclusionAllocation = allocateReflectionExclusions(
+          manualExclusions.map(item => item.points),
+          reflectionPolygons,
+          ZONE_LIMITS.exclusion,
+        );
+        const exclusionSlots = exclusionAllocation.polygons.map((points, index) => ({
+          zone: manualExclusions[index]?.zone,
+          polygon: toPolygonStr(points),
+        }));
         const toProfileStr = (zone: ZoneData | undefined): string => {
           const profile = zone?.profile || PROFILE_DEFAULTS.default;
           return `${profile.enterDelayMs},${profile.leaveDelayMs},${profile.minDwellMs},${Math.min(profile.minTargets, maximumTargets)}`;
@@ -2355,9 +2472,15 @@ export class ZonesPage extends LitElement {
     }
   }
 
-  private _autoZoom() {
+  private _autoZoom(includeReflections = this._toolMode === 'mirror') {
     if (this._roomPoints.length < 3) { this._zoom = 1; this._panOffset = { x: 0, y: 0 }; return; }
-    const xs = this._roomPoints.map(p => p.x), ys = this._roomPoints.map(p => p.y);
+    const reflectionPoints = includeReflections
+      ? this._sensors.filter(sensor => sensor.deviceId)
+        .flatMap(sensor => createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor))
+        .flatMap(item => item.points)
+      : [];
+    const visiblePoints = [...this._roomPoints, ...reflectionPoints];
+    const xs = visiblePoints.map(p => p.x), ys = visiblePoints.map(p => p.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
     const w = maxX - minX, h = maxY - minY;
     // Calculate zoom to fit room with 15% padding
@@ -2539,8 +2662,8 @@ export class ZonesPage extends LitElement {
       return;
     }
 
-    // Door/window placement is handled via the wall preview mousedown
-    if (this._toolMode === 'door' || this._toolMode === 'window') {
+    // Door/window/mirror placement is handled via the wall preview mousedown
+    if (this._toolMode === 'door' || this._toolMode === 'window' || this._toolMode === 'mirror') {
       return;
     }
 
@@ -2742,6 +2865,25 @@ export class ZonesPage extends LitElement {
       return;
     }
 
+    // Dragging a mirror along its wall
+    if (this._draggingMirrorIndex !== null) {
+      const mirror = this._mirrors[this._draggingMirrorIndex];
+      if (mirror && mirror.wallIndex < this._roomPoints.length) {
+        const p1 = this._roomPoints[mirror.wallIndex];
+        const p2 = this._roomPoints[(mirror.wallIndex + 1) % this._roomPoints.length];
+        const dx = p2.x - p1.x, dy = p2.y - p1.y;
+        const wallLength = Math.hypot(dx, dy);
+        if (wallLength > 0) {
+          const position = Math.max(0.05, Math.min(0.95,
+            ((worldPt.x - p1.x) * dx + (worldPt.y - p1.y) * dy) / (wallLength * wallLength)));
+          this._mirrors = this._mirrors.map((item, index) =>
+            index === this._draggingMirrorIndex ? { ...item, position } : item);
+          this._markDirty();
+        }
+      }
+      return;
+    }
+
     // Wall drawing preview
     if (this._toolMode === 'walls' && this._pendingStart) {
       this._previewPoint = this._snapToGrid(worldPt);
@@ -2765,8 +2907,8 @@ export class ZonesPage extends LitElement {
       this._wallHoverPreview = null;
     }
 
-    // Door/window placement preview on the nearest wall
-    if ((this._toolMode === 'door' || this._toolMode === 'window') && this._roomPoints.length >= 3) {
+    // Door/window/mirror placement preview on the nearest wall
+    if ((this._toolMode === 'door' || this._toolMode === 'window' || this._toolMode === 'mirror') && this._roomPoints.length >= 3) {
       const wallInfo = this._findNearestWall(worldPt);
       if (wallInfo) {
         const p1 = this._roomPoints[wallInfo.wallIndex];
@@ -2775,7 +2917,7 @@ export class ZonesPage extends LitElement {
           wallIndex: wallInfo.wallIndex,
           position: wallInfo.position,
           point: { x: p1.x + (p2.x - p1.x) * wallInfo.position, y: p1.y + (p2.y - p1.y) * wallInfo.position },
-          type: this._toolMode as 'door' | 'window',
+          type: this._toolMode as 'door' | 'window' | 'mirror',
         };
       } else {
         this._doorWindowPreview = null;
@@ -2962,6 +3104,15 @@ export class ZonesPage extends LitElement {
     return inside;
   }
 
+  private _targetFallsInExclusion(roomTarget: Point, sensor: SensorInstance): boolean {
+    const manualExclusions = this._zones
+      .filter(zone => zone.type === 'exclusion')
+      .flatMap(zone => getZoneParts(zone));
+    if (manualExclusions.some(points => pointInPolygon(roomTarget, points))) return true;
+    return createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor)
+      .some(item => pointInPolygon(roomTarget, item.points));
+  }
+
   private _handleCanvasUp() {
     this._isDragging = false;
     this._draggingSensorIndex = null;
@@ -2969,6 +3120,7 @@ export class ZonesPage extends LitElement {
     this._draggingPointIndex = null;
     this._draggingDoorIndex = null;
     this._draggingWindowIndex = null;
+    this._draggingMirrorIndex = null;
     this._draggingZonePointIndex = null;
     this._draggingDrawingPointIndex = null;
     this._draggingWholeZoneIndex = null;
@@ -3352,6 +3504,8 @@ export class ZonesPage extends LitElement {
         return { title: 'Add Door', text: 'Hover a wall for the purple preview and click to place. Drag existing doors along their wall.' };
       case 'window':
         return { title: 'Add Window', text: 'Hover a wall for the blue preview and click to place. Drag existing windows along their wall.' };
+      case 'mirror':
+        return { title: 'Add Mirror', text: 'Place the mirror on a wall, then choose whether its predicted reflection area should be excluded from tracking.' };
       case 'furniture':
         return { title: 'Place Furniture', text: this._selectedFurnitureType ? `Click the canvas to place the ${this._selectedFurnitureType.name.toLowerCase()}.` : 'Pick a furniture type on the right, or drag existing furniture. R rotates, Delete removes.' };
       default:
@@ -3455,6 +3609,7 @@ export class ZonesPage extends LitElement {
       this._draw3DFurniture(ctx);
       this._draw3DDoors(ctx);
       this._draw3DWindows(ctx);
+      this._draw3DMirrors(ctx);
       this._draw3DZones(ctx);
     }
     this._draw3DSensor(ctx);
@@ -3740,6 +3895,41 @@ export class ZonesPage extends LitElement {
         ctx.fill();
         ctx.stroke();
       }
+    }
+  }
+
+  private _draw3DMirrors(ctx: CanvasRenderingContext2D): void {
+    for (const mirror of this._mirrors) {
+      if (mirror.wallIndex < 0 || mirror.wallIndex >= this._roomPoints.length) continue;
+      const wallStart = this._roomPoints[mirror.wallIndex];
+      const wallEnd = this._roomPoints[(mirror.wallIndex + 1) % this._roomPoints.length];
+      const center = {
+        x: wallStart.x + (wallEnd.x - wallStart.x) * mirror.position,
+        y: wallStart.y + (wallEnd.y - wallStart.y) * mirror.position,
+      };
+      const angle = Math.atan2(wallEnd.y - wallStart.y, wallEnd.x - wallStart.x);
+      const dx = Math.cos(angle) * mirror.width / 2;
+      const dy = Math.sin(angle) * mirror.width / 2;
+      const bottomHeight = 300;
+      const corners = [
+        this._project3D({ x: center.x - dx, y: center.y - dy, z: bottomHeight }),
+        this._project3D({ x: center.x + dx, y: center.y + dy, z: bottomHeight }),
+        this._project3D({ x: center.x + dx, y: center.y + dy, z: bottomHeight + mirror.height }),
+        this._project3D({ x: center.x - dx, y: center.y - dy, z: bottomHeight + mirror.height }),
+      ];
+      const gradient = ctx.createLinearGradient(corners[0].x, corners[0].y, corners[2].x, corners[2].y);
+      gradient.addColorStop(0, 'rgba(226, 232, 240, 0.82)');
+      gradient.addColorStop(0.45, 'rgba(125, 211, 252, 0.32)');
+      gradient.addColorStop(1, 'rgba(248, 250, 252, 0.72)');
+      ctx.fillStyle = gradient;
+      ctx.strokeStyle = mirror.protectionEnabled ? '#22c55e' : '#64748b';
+      ctx.lineWidth = mirror.protectionEnabled ? 3 : 2;
+      ctx.beginPath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      corners.slice(1).forEach(point => ctx.lineTo(point.x, point.y));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
   }
 
@@ -4326,9 +4516,12 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const cp = this._toCanvas(preview.point);
     const wallAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
     const scale = CANVAS_SIZE / 10000 * this._zoom;
-    const previewWidth = (preview.type === 'door' ? this._doorWidth : this._windowWidth) * scale;
+    const previewWidth = (preview.type === 'door'
+      ? this._doorWidth
+      : preview.type === 'mirror' ? this._mirrorWidth : this._windowWidth) * scale;
     const isDoor = preview.type === 'door';
-    const color = isDoor ? '#a855f7' : '#0ea5e9';
+    const isMirror = preview.type === 'mirror';
+    const color = isDoor ? '#a855f7' : isMirror ? '#64748b' : '#0ea5e9';
     const x1 = cp.x - Math.cos(wallAngle) * previewWidth / 2;
     const y1 = cp.y - Math.sin(wallAngle) * previewWidth / 2;
     const x2 = cp.x + Math.cos(wallAngle) * previewWidth / 2;
@@ -4341,7 +4534,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
            e.preventDefault();
            this._selectedWallIndex = preview.wallIndex;
            this._pendingStart = { x: preview.position, y: 0 };
-           if (isDoor) { this._showDoorDialog = true; } else { this._showWindowDialog = true; }
+           if (isDoor) this._showDoorDialog = true;
+           else if (isMirror) this._showMirrorDialog = true;
+           else this._showWindowDialog = true;
          }}">
         <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="6" stroke-dasharray="8 4" opacity="0.8"/>
         <circle cx="${cp.x}" cy="${cp.y}" r="10" fill="rgba(168, 85, 247, 0.25)" stroke="${color}" stroke-width="2"/>
@@ -4384,7 +4579,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
   private _renderDoorsAndWindows() {
     const elements: unknown[] = [];
     const scale = CANVAS_SIZE / 10000 * this._zoom;
-    const canDrag = this._designMode === 'layout' && (this._toolMode === 'door' || this._toolMode === 'window' || this._toolMode === 'select');
+    const canDrag = this._designMode === 'layout' && (this._toolMode === 'door' || this._toolMode === 'window' || this._toolMode === 'mirror' || this._toolMode === 'select');
 
     this._doors.forEach((door, index) => {
       if (door.wallIndex >= this._roomPoints.length) return;
@@ -4448,6 +4643,40 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${winColor}" stroke-width="6"/>
           <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${isDraggingThis ? '#4ade80' : '#38bdf8'}" stroke-width="3"/>
           ${this._designMode === 'layout' ? svg`<circle cx="${cp.x}" cy="${cp.y}" r="6" fill="${winColor}" stroke="white" stroke-width="2"/>` : nothing}
+        </g>
+      `);
+    });
+
+    this._mirrors.forEach((mirror, index) => {
+      if (mirror.wallIndex >= this._roomPoints.length) return;
+      const p1 = this._roomPoints[mirror.wallIndex];
+      const p2 = this._roomPoints[(mirror.wallIndex + 1) % this._roomPoints.length];
+      const mirrorX = p1.x + (p2.x - p1.x) * mirror.position;
+      const mirrorY = p1.y + (p2.y - p1.y) * mirror.position;
+      const cp = this._toCanvas({ x: mirrorX, y: mirrorY });
+      const wallAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      const width = mirror.width * scale;
+      const x1 = cp.x - Math.cos(wallAngle) * width / 2;
+      const y1 = cp.y - Math.sin(wallAngle) * width / 2;
+      const x2 = cp.x + Math.cos(wallAngle) * width / 2;
+      const y2 = cp.y + Math.sin(wallAngle) * width / 2;
+      const isDragging = index === this._draggingMirrorIndex;
+      const color = isDragging ? '#22c55e' : '#94a3b8';
+      elements.push(svg`
+        <g style="cursor: ${isDragging ? 'grabbing' : canDrag ? 'grab' : 'default'};"
+           @mousedown="${(event: MouseEvent) => {
+             if (!canDrag) return;
+             event.stopPropagation();
+             event.preventDefault();
+             this._draggingMirrorIndex = index;
+           }}">
+          <circle cx="${cp.x}" cy="${cp.y}" r="15" fill="transparent"/>
+          <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#334155" stroke-width="8"/>
+          <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="5"/>
+          <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#e2e8f0" stroke-width="1.5" opacity="0.9"/>
+          ${mirror.protectionEnabled ? svg`
+            <circle cx="${cp.x}" cy="${cp.y}" r="6" fill="#22c55e" stroke="white" stroke-width="2"/>
+          ` : nothing}
         </g>
       `);
     });
@@ -4745,6 +4974,27 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     }
 
     return elements;
+  }
+
+  private _renderMirrorReflectionZones() {
+    if (!this._mirrors.some(mirror => mirror.protectionEnabled)) return nothing;
+    const sensors = this._sensors.filter(sensor => sensor.deviceId);
+    return sensors.flatMap((sensor, sensorIndex) =>
+      createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor).map(reflection => {
+        const points = reflection.points.map(point => this._toCanvas(point));
+        if (points.length < 3) return nothing;
+        const path = `M ${points.map(point => `${point.x} ${point.y}`).join(' L ')} Z`;
+        return svg`
+          <g pointer-events="none" aria-hidden="true">
+            <path d="${path}" fill="rgba(14, 165, 233, 0.10)" stroke="#0ea5e9"
+              stroke-width="1.5" stroke-dasharray="7 5"/>
+            <text x="${points[0].x}" y="${points[0].y - 8}" fill="#0284c7" font-size="10" font-weight="700">
+              ${panelText(this.hass, 'Reflection guard')} ${sensors.length > 1 ? sensorIndex + 1 : ''}
+            </text>
+          </g>
+        `;
+      })
+    );
   }
 
   private _renderSensorFOV() {
@@ -5081,6 +5331,51 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       `;
     }
 
+    if (this._toolMode === 'mirror') {
+      const manualSlots = this._zones.filter(zone => zone.type === 'exclusion')
+        .reduce((count, zone) => count + getZoneParts(zone).length, 0);
+      const protectedMirrors = this._mirrors.filter(mirror => mirror.protectionEnabled).length;
+      const totalSlots = manualSlots + protectedMirrors;
+      return html`
+        <div>
+          <div class="section-title">${panelText(this.hass, 'MIRRORS')}</div>
+          <p class="info-text" style="margin-bottom: 10px;">
+            ${panelText(this.hass, 'Place a mirror on its real wall. Optional reflection protection filters predicted ghost targets behind it.')}
+          </p>
+          <div class="dialog-warning" style="border-color: ${totalSlots > 2 ? '#ef4444' : 'var(--rd-line)'};">
+            <ha-icon icon="mdi:shield-check-outline"></ha-icon>
+            <div>
+              ${panelText(this.hass, '{used}/2 radar exclusion slots used.', { used: totalSlots })}
+              ${totalSlots > 2 ? html`<br>${panelText(this.hass, 'Disable protection for a mirror or remove a manual exclusion before pushing.')}` : nothing}
+            </div>
+          </div>
+          ${this._sensors.some(sensor => sensor.deviceId) ? nothing : html`
+            <p class="info-text" style="color: #f59e0b;">${panelText(this.hass, 'Link a radar placement to preview and use reflection protection. The mirror can still be saved visually.')}</p>
+          `}
+          ${this._mirrors.length === 0 ? html`
+            <p class="info-text" style="color: var(--rd-dim);">${panelText(this.hass, 'No mirrors added yet.')}</p>
+          ` : this._mirrors.map((mirror, index) => html`
+            <div class="placed-item">
+              <ha-icon icon="mdi:mirror-rectangle"></ha-icon>
+              <span class="name">${panelText(this.hass, 'Mirror')} ${index + 1}</span>
+              <span class="size">${mirror.width / 10}×${mirror.height / 10}cm</span>
+              <ha-icon
+                icon="${mirror.protectionEnabled ? 'mdi:shield-check' : 'mdi:shield-off-outline'}"
+                title="${mirror.protectionEnabled ? panelText(this.hass, 'Reflection protection enabled') : panelText(this.hass, 'Visual only')}"
+                style="color: ${mirror.protectionEnabled ? '#22c55e' : 'var(--rd-dim)'};"
+              ></ha-icon>
+              <button class="icon-btn" title="${panelText(this.hass, 'Edit')}" aria-label="${panelText(this.hass, 'Edit mirror {number}', { number: index + 1 })}" @click="${() => this._editMirror(index)}">
+                <ha-icon icon="mdi:pencil"></ha-icon>
+              </button>
+              <button class="delete-btn" title="${panelText(this.hass, 'Delete')}" aria-label="${panelText(this.hass, 'Delete mirror {number}', { number: index + 1 })}" @click="${() => this._deleteMirror(index)}">
+                <ha-icon icon="mdi:delete"></ha-icon>
+              </button>
+            </div>
+          `)}
+        </div>
+      `;
+    }
+
     // select / walls: room info + selected furniture
     const area = this._calculateArea();
     return html`
@@ -5092,7 +5387,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <p>Area: <span class="info-value">${area.toFixed(1)} m²</span></p>
             <p>Corners: <span class="info-value">${this._roomPoints.length}</span></p>
             <p>Furniture: <span class="info-value">${this._furniture.length}</span></p>
-            <p>Doors: <span class="info-value">${this._doors.length}</span> · Windows: <span class="info-value">${this._windows.length}</span></p>
+            <p>Doors: <span class="info-value">${this._doors.length}</span> · Windows: <span class="info-value">${this._windows.length}</span> · Mirrors: <span class="info-value">${this._mirrors.length}</span></p>
             <p>Sensors: <span class="info-value">${this._sensors.length}</span> · Zones: <span class="info-value">${this._zones.length}</span></p>
           ` : html`<p>Draw walls to see measurements. Use the Walls tool to start.</p>`}
         </div>
@@ -5224,7 +5519,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <button class="tool-btn ${this._toolMode === 'window' ? 'active' : ''}" @click="${() => this._setToolMode('window')}">
                 <ha-icon icon="mdi:window-closed-variant"></ha-icon><span>Window</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'furniture' ? 'active' : ''}" @click="${() => this._setToolMode('furniture')}" style="grid-column: span 2;">
+              <button class="tool-btn ${this._toolMode === 'mirror' ? 'active' : ''}" @click="${() => this._setToolMode('mirror')}">
+                <ha-icon icon="mdi:mirror-rectangle"></ha-icon><span>${panelText(this.hass, 'Mirror')}</span>
+              </button>
+              <button class="tool-btn ${this._toolMode === 'furniture' ? 'active' : ''}" @click="${() => this._setToolMode('furniture')}">
                 <ha-icon icon="mdi:sofa"></ha-icon><span>Furniture</span>
               </button>
             </div>
@@ -5318,6 +5616,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             ${this._renderFurnitureGhost()}
             ${this._renderSensorFOV()}
             ${this._renderZones()}
+            ${this._renderMirrorReflectionZones()}
             ${this._renderWallDrawPreview()}
             ${this._renderDoorWindowPreview()}
             ${this._renderSensorIcon()}
@@ -5326,7 +5625,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <div class="control-group">
               <button class="control-btn" @click="${() => this._zoom = Math.min(5, this._zoom * 1.25)}"><ha-icon icon="mdi:plus"></ha-icon></button>
               <button class="control-btn" @click="${() => this._zoom = Math.max(0.2, this._zoom / 1.25)}"><ha-icon icon="mdi:minus"></ha-icon></button>
-              <button class="control-btn" @click="${this._autoZoom}"><ha-icon icon="mdi:fit-to-screen"></ha-icon></button>
+              <button class="control-btn" @click="${() => this._autoZoom()}"><ha-icon icon="mdi:fit-to-screen"></ha-icon></button>
             </div>
             ${this._toolMode === 'walls' ? html`
               <div class="control-group">
@@ -6260,6 +6559,58 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <div class="dialog-buttons">
               <button class="dialog-btn cancel" @click="${this._hideWindowDialog}">Cancel</button>
               <button class="dialog-btn primary" @click="${this._editingWindowIndex !== null ? this._saveWindowEdit : this._addWindow}">${this._editingWindowIndex !== null ? 'Save' : 'Add'}</button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+
+      ${this._showMirrorDialog ? html`
+        <div class="dialog-overlay" @click="${this._hideMirrorDialog}">
+          <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="mirror-dialog-title"
+               @click="${(event: Event) => event.stopPropagation()}">
+            <h3 id="mirror-dialog-title">${panelText(this.hass, this._editingMirrorIndex !== null ? 'Edit Mirror' : 'Add Mirror')}</h3>
+            <p class="help-text">${panelText(this.hass, 'Place the mirror on the wall where it is physically installed.')}</p>
+            <div class="input-row">
+              <div>
+                <label for="mirror-width">${panelText(this.hass, 'Width (cm)')}</label>
+                <input id="mirror-width" type="number" min="10" max="500" .value="${String(this._mirrorWidth / 10)}"
+                  @change="${(event: Event) => this._mirrorWidth = Math.round(
+                    this._commitNumberInput(event, this._mirrorWidth / 10, 10, 500) * 10,
+                  )}"/>
+              </div>
+              <div>
+                <label for="mirror-height">${panelText(this.hass, 'Height (cm)')}</label>
+                <input id="mirror-height" type="number" min="10" max="300" .value="${String(this._mirrorHeight / 10)}"
+                  @change="${(event: Event) => this._mirrorHeight = Math.round(
+                    this._commitNumberInput(event, this._mirrorHeight / 10, 10, 300) * 10,
+                  )}"/>
+              </div>
+            </div>
+            <div class="settings-row" style="margin-top: 14px;">
+              <input id="mirror-protection" type="checkbox" .checked="${this._mirrorProtectionEnabled}"
+                @change="${(event: Event) => this._mirrorProtectionEnabled = (event.target as HTMLInputElement).checked}"/>
+              <label for="mirror-protection" style="margin: 0;">
+                <strong>${panelText(this.hass, 'Reflection protection')}</strong><br>
+                <span class="help-text">${panelText(this.hass, 'Filter ghost targets predicted behind this mirror and send the area to each linked radar as an exclusion polygon.')}</span>
+              </label>
+            </div>
+            <label for="mirror-depth">${panelText(this.hass, 'Protection depth (cm)')}</label>
+            <input id="mirror-depth" type="number" min="25" max="600" step="25"
+              ?disabled="${!this._mirrorProtectionEnabled}"
+              .value="${String(this._mirrorReflectionDepthMm / 10)}"
+              @change="${(event: Event) => this._mirrorReflectionDepthMm = Math.round(
+                this._commitNumberInput(event, this._mirrorReflectionDepthMm / 10, 25, 600) * 10,
+              )}"/>
+            <p class="help-text">${panelText(this.hass, 'The dashed preview follows the radar rays beyond the mirror. Increase the depth only when ghost targets appear farther behind it.')}</p>
+            <div class="dialog-warning" style="border-color: var(--rd-line);">
+              <ha-icon icon="mdi:information-outline" style="color: #0ea5e9;"></ha-icon>
+              <div>${panelText(this.hass, 'Each protected mirror uses one of the radar\'s two exclusion slots. Raw diagnostic target entities remain unchanged; Room Designer, the UltimateSensor room view and firmware people counting ignore the protected area.')}</div>
+            </div>
+            <div class="dialog-buttons">
+              <button class="dialog-btn cancel" @click="${this._hideMirrorDialog}">${panelText(this.hass, 'Cancel')}</button>
+              <button class="dialog-btn primary" @click="${this._editingMirrorIndex !== null ? this._saveMirrorEdit : this._addMirror}">
+                ${panelText(this.hass, this._editingMirrorIndex !== null ? 'Save' : 'Add')}
+              </button>
             </div>
           </div>
         </div>

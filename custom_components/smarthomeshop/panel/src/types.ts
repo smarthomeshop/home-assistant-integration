@@ -273,6 +273,16 @@ export interface Wall {
   y2: number;
 }
 
+export interface RoomMirror {
+  id: string;
+  wallIndex: number;
+  position: number;
+  width: number;
+  height: number;
+  protectionEnabled: boolean;
+  reflectionDepthMm: number;
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -280,6 +290,10 @@ export interface Room {
   furniture: FurnitureInstance[];
   devices: DevicePlacement[];
   zones: Zone[];
+  mirrors?: RoomMirror[];
+  doors?: Array<Record<string, unknown>>;
+  windows?: Array<Record<string, unknown>>;
+  sensors?: Array<Record<string, unknown>>;
   calibration?: RoomCalibration;
   tracking?: RadarTrackingSettings;
 }

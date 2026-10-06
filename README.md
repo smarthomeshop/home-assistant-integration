@@ -140,6 +140,14 @@ prefixes remain supported.
   coordinate cannot remain visible while the radar applies a setting.
 - Detection and exclusion polygons use integer millimetres and enforce the
   firmware limit of 20 vertices per polygon.
+- Mirrors can be placed on their physical wall. Optional reflection protection
+  previews a sensor-specific wedge behind the mirror, filters matching ghost
+  targets from Room Designer and the UltimateSensor room view, and synchronizes
+  that wedge to the radar as an exclusion polygon. Each protected mirror uses
+  one of the two firmware exclusion slots; Room Designer blocks synchronization
+  instead of silently replacing or dropping a manual exclusion. Raw diagnostic
+  target entities stay unchanged so installers can still troubleshoot radar
+  behaviour.
 - Existing saved rooms keep their range, field of view, height and projection
   until the user chooses to adopt new firmware defaults.
 - Coverage measurement uses near/far and left/right from the radar's own
