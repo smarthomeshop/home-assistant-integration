@@ -1,6 +1,7 @@
 import { LitElement, css, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { DeviceEntity, HomeAssistant } from '../types';
+import { findWaterEnergySource } from '../utils/device-entity-resolution';
 
 type EnergySource = Record<string, any> & { type: string };
 
@@ -311,7 +312,7 @@ export class HaEnergySync extends LitElement {
       '_gas_consumed',
       '_gas_consumed_belgium',
     );
-    const waterCandidate = this._entityBySuffix('_water_meter_total', '_water_total_consumption');
+    const waterCandidate = findWaterEnergySource(this.deviceEntities || []);
     const importedCheck = this._entityCompatibility(importedCandidate, 'energy');
     const exportedCheck = this._entityCompatibility(exportedCandidate, 'energy');
     const netPowerCheck = this._entityCompatibility(netPowerCandidate, 'power');

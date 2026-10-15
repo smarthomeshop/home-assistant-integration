@@ -205,6 +205,10 @@ class LeakDetectionEngine:
             "today_start_reading": self._today_start_reading,
             "today_start_day": self._today_start_day,
             "today_from_midnight": self._today_from_midnight,
+            "last_meter_total": self._last_meter_total,
+            "last_meter_time": self._last_meter_time.isoformat() if self._last_meter_time else None,
+            "hourly_readings": self._hourly_readings,
+            "night_start_reading": self._night_start_reading,
         }
 
     def _restore_day_tracking(self, tracking: dict[str, Any]) -> None:
@@ -216,6 +220,10 @@ class LeakDetectionEngine:
         self._today_start_reading = tracking.get("today_start_reading")
         self._today_start_day = tracking.get("today_start_day", "")
         self._today_from_midnight = bool(tracking.get("today_from_midnight"))
+        self._last_meter_total = tracking.get("last_meter_total")
+        self._last_meter_time = dt_util.parse_datetime(tracking.get("last_meter_time") or "")
+        self._hourly_readings = {int(hour): value for hour, value in tracking.get("hourly_readings", {}).items()}
+        self._night_start_reading = tracking.get("night_start_reading")
 
     def update_config(self, config: LeakDetectionConfig) -> None:
         """Update configuration."""
@@ -352,7 +360,7 @@ class LeakDetectionEngine:
 
         delta_liters = (meter_total - previous) * 1000
         if delta_liters < 0:
-            self._reset_meter_anchors(meter_total)
+            self._shift_meter_anchors(meter_total - previous)
         elif is_meter_jump(
             delta_liters, (now - (self._last_meter_time or now)).total_seconds()
         ):

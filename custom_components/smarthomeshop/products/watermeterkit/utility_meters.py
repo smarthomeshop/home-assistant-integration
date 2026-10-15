@@ -9,6 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ...const import CONF_DEVICE_ID, CONF_WATER_SENSOR, LOGGER
+from ..base.utility_sources import meter_sources
+from ..base.p1.utility_meters import create_single_utility_meter
 
 # Utility meter cycles to create
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
@@ -81,7 +83,10 @@ async def async_setup_utility_meters(
     short_id = _short_device_id(entry, water_sensor, product_prefix)
 
     # Water source entity (from ESPHome water meter)
-    water_entity = _pulse_total_source(hass, entry, water_sensor)
+    sources = meter_sources(hass, entry)
+    water_entity = sources.get("water_total_consumption") or _pulse_total_source(hass, entry, water_sensor)
+    pulse_source = bool(sources.get("water_total_consumption") or water_entity != water_sensor
+                        or "total_consumption" in water_entity)
     if not water_entity:
         LOGGER.warning(
             "No water sensor for %s yet, skipping the utility meters", entry.title
@@ -98,6 +103,7 @@ async def async_setup_utility_meters(
             source=water_entity,
             cycle=cycle,
             unique_id=f"{product_prefix}_{short_id}_water_{cycle}",
+            periodically_resetting=pulse_source,
         ):
             meters_created += 1
 
@@ -113,81 +119,10 @@ async def _create_single_utility_meter(
     source: str,
     cycle: str,
     unique_id: str,
+    periodically_resetting: bool = True,
 ) -> bool:
-    """Create a single utility meter helper if it doesn't exist."""
-    # Check if config entry already exists with this name
-    ent_reg = er.async_get(hass)
-    for entry in hass.config_entries.async_entries("utility_meter"):
-        entry_name = entry.options.get("name", entry.title)
-        if entry_name != name:
-            continue
-        stored_source = entry.options.get("source")
-        if stored_source and stored_source != source and not ent_reg.async_get(
-            stored_source
-        ):
-            # An earlier version pointed these meters at an entity the
-            # firmware never created, so they never counted a litre.
-            hass.config_entries.async_update_entry(
-                entry, options={**entry.options, "source": source}
-            )
-            hass.config_entries.async_schedule_reload(entry.entry_id)
-            LOGGER.info(
-                "Utility meter '%s' now counts %s instead of the missing %s",
-                name, source, stored_source,
-            )
-        else:
-            LOGGER.debug("Utility meter config entry for '%s' already exists", name)
-        return True
-
-    # Also check by entity registry as fallback
-    name_slug = name.lower().replace(" ", "_").replace("-", "_")
-    for entity in ent_reg.entities.values():
-        if entity.platform == "utility_meter" and name_slug in entity.entity_id:
-            LOGGER.debug("Utility meter entity for '%s' already exists", name)
-            return True
-
-    # Create via config flow
-    try:
-        result = await hass.config_entries.flow.async_init(
-            "utility_meter",
-            context={"source": "user"},
-            data={
-                "name": name,
-                "source": source,
-                "cycle": cycle,
-                "offset": 0,
-                "tariffs": [],
-                "net_consumption": False,
-                "delta_values": False,
-                "periodically_resetting": False,
-                "always_available": True,
-            },
-        )
-
-        if result.get("type") == "create_entry":
-            LOGGER.info("Created utility meter: %s (source: %s, cycle: %s)", name, source, cycle)
-            return True
-        elif result.get("type") == "form":
-            if result.get("step_id") == "user":
-                result = await hass.config_entries.flow.async_configure(
-                    result["flow_id"],
-                    user_input={
-                        "name": name,
-                        "source": source,
-                        "cycle": cycle,
-                        "offset": 0,
-                        "net_consumption": False,
-                        "delta_values": False,
-                        "periodically_resetting": False,
-                        "always_available": True,
-                    },
-                )
-                if result.get("type") == "create_entry":
-                    LOGGER.info("Created utility meter: %s", name)
-                    return True
-
-        return False
-
-    except Exception as err:
-        LOGGER.warning("Could not create utility meter %s: %s", name, err)
-        return False
+    """Create or migrate a helper that accepts the pulse counter's resets."""
+    return await create_single_utility_meter(
+        hass, name=name, source=source, cycle=cycle, unique_id=unique_id,
+        periodically_resetting=periodically_resetting,
+    )

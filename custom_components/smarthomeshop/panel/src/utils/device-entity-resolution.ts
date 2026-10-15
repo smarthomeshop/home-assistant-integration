@@ -83,3 +83,24 @@ export const resolveESPHomeDeviceService = (
   }
   return null;
 };
+
+
+/** Prefer counted water over a calibrated absolute reading in HA Energy. */
+export const findWaterEnergySource = (entities: ReadonlyArray<{
+  entity_id: string;
+  unique_id?: string | null;
+  original_name?: string | null;
+  disabled_by?: string | null;
+}>): string | undefined => {
+  for (const suffix of ['water_total_consumption', 'water_meter_total']) {
+    const match = entities.find(entity => {
+      if (entity.disabled_by || !entity.entity_id.startsWith('sensor.')) return false;
+      return [entity.entity_id, entity.unique_id, entity.original_name].some(value => {
+        const identity = String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        return identity === suffix || identity.endsWith(`_${suffix}`);
+      });
+    });
+    if (match) return match.entity_id;
+  }
+  return undefined;
+};

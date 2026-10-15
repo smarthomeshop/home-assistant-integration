@@ -84,9 +84,11 @@ class EnergyTracker:
         entry: ConfigEntry,
         entity_prefix: str,
         meter_prefix: str,
+        source_entities: dict[str, str] | None = None,
     ) -> None:
         self.hass = hass
         self.entry = entry
+        self._source_entities = source_entities or {}
         self._prefix = entity_prefix
         self._meter_prefix = meter_prefix
 
@@ -158,7 +160,7 @@ class EnergyTracker:
         return state
 
     def _value(self, suffix: str) -> float | None:
-        state = self._raw_state(f"{self._prefix}_{suffix}")
+        state = self._raw_state(getattr(self, "_source_entities", {}).get(suffix, f"{self._prefix}_{suffix}"))
         if state is None:
             return None
         try:
@@ -168,7 +170,7 @@ class EnergyTracker:
 
     def _value_watts(self, suffix: str) -> float | None:
         """Read a power value and normalise to watts (DSMR uses kW)."""
-        state = self._raw_state(f"{self._prefix}_{suffix}")
+        state = self._raw_state(getattr(self, "_source_entities", {}).get(suffix, f"{self._prefix}_{suffix}"))
         if state is None:
             return None
         try:

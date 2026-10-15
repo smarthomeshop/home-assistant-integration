@@ -101,10 +101,11 @@ async def create_single_utility_meter(
         entry_name = entry.options.get("name", entry.title)
         if entry_name == name:
             current_source = entry.options.get("source")
-            if current_source != source:
+            needs_reset_mode = entry.options.get("periodically_resetting", False) != periodically_resetting
+            if current_source != source or needs_reset_mode:
                 hass.config_entries.async_update_entry(
                     entry,
-                    options={**entry.options, "source": source},
+                    options={**entry.options, "source": source, **({"periodically_resetting": periodically_resetting} if needs_reset_mode else {})},
                 )
                 LOGGER.info(
                     "Updated utility meter %s source from %s to %s",

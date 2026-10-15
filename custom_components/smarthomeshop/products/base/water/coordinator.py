@@ -180,6 +180,8 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         self._session_start: datetime | None = None
         self._session_liters = 0.0
         self._session_last_flow: datetime | None = None
+        self._session_last_meter: float | None = None
+        self._session_last_sample: datetime | None = None
         self._last_session: dict[str, Any] | None = None
         self._recent_sessions: list[dict[str, Any]] = []
         self._flow_history: list[tuple[float, float]] = []
@@ -271,6 +273,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
                 self._water_sensor,
             )
             return
+        self._last_meter_reading = anchors.get("last_meter_reading")
         self._day_start_reading = anchors.get("day_start")
         self._week_start_reading = anchors.get("week_start")
         self._month_start_reading = anchors.get("month_start")
@@ -318,6 +321,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             return
         anchors = {
             "source": self._water_sensor,
+            "last_meter_reading": self._last_meter_reading,
             "day_start": self._day_start_reading,
             "week_start": self._week_start_reading,
             "month_start": self._month_start_reading,
@@ -398,6 +402,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
         # Update tracking
         self._last_meter_reading = data.meter_total
+        self._persist_period_anchors()
 
         # Save baseline periodically (every hour)
         if now.minute == 0 and now.second < 30:
@@ -443,21 +448,25 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
 
     def _track_session(self, data: WaterUsageData, now: datetime) -> None:
         """Detect start/stop of water sessions and remember the last one."""
-        flow = data.current_flow_rate or 0.0
-        interval = UPDATE_INTERVAL_SECONDS
+        previous = self._session_last_meter
+        elapsed = (now - (self._session_last_sample or now)).total_seconds()
+        self._session_last_meter = data.meter_total
+        self._session_last_sample = now
+        liters = 0.0 if previous is None else (data.meter_total - previous) * 1000
+        if liters < 0 or is_meter_jump(liters, elapsed):
+            liters = 0.0
 
-        if flow > 0.2:
+        if liters > 0:
             if not self._session_active:
                 self._session_active = True
                 self._session_start = now
                 self._session_liters = 0.0
-            self._session_liters += flow * interval / 60
+            self._session_liters += liters
             self._session_last_flow = now
         elif self._session_active and self._session_last_flow:
-            # Close the session after 90 seconds without flow
             if (now - self._session_last_flow).total_seconds() > 90:
                 duration = (self._session_last_flow - (self._session_start or now)).total_seconds()
-                if self._session_liters >= 1 and duration >= 5:
+                if self._session_liters >= 0.9:
                     self._last_session = {
                         "duration_min": round(duration / 60, 1),
                         "liters": round(self._session_liters, 1),
@@ -656,9 +665,6 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         data.month_usage = self._period_usage("month", self._month_start_reading, data)
         data.year_usage = self._period_usage("year", self._year_start_reading, data)
 
-        # Persist the anchors so a restart does not reset the usage sensors.
-        self._persist_period_anchors()
-
     def _period_usage(
         self, period: str, anchor: float, data: WaterUsageData
     ) -> float:
@@ -686,7 +692,12 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
         if not known:
             return
 
-        if any(meter_total < value for value in known):
+        reference = self._last_meter_reading
+        stepped_back = (
+            meter_total < reference if reference is not None
+            else any(meter_total < value for value in known)
+        )
+        if stepped_back:
             reference = (
                 self._last_meter_reading
                 if self._last_meter_reading is not None
@@ -701,7 +712,7 @@ class WaterCoordinator(DataUpdateCoordinator[WaterUsageData]):
             self._month_start_reading = meter_total
             self._year_start_reading = meter_total
             if self._night_start_reading is not None:
-                self._night_start_reading = meter_total
+                self._night_start_reading += meter_total - reference
             LOGGER.info(
                 "Water meter of %s stepped back to %s; usage counted so far is kept",
                 self.config_entry.title,

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from ...const import CONF_WATER_SENSOR, LOGGER
+from ..base.utility_sources import meter_sources, waterp1_short_id
 from ..base.p1.utility_meters import (
     create_single_utility_meter as _create_single_utility_meter,
     resolve_gas_source,
@@ -34,34 +34,28 @@ async def async_setup_utility_meters(
     These are created as official Home Assistant Utility Meter helpers,
     which are persistent and work correctly with the Energy Dashboard.
     """
-    # Extract short device ID from water sensor entity name
-    water_sensor = entry.data.get(CONF_WATER_SENSOR, "")
-    match = re.search(r"waterp1meterkit_([a-f0-9]+)_", water_sensor.lower())
-
-    if not match:
-        LOGGER.warning("Could not extract device ID for utility meters from %s", water_sensor)
-        return
-
-    short_id = match.group(1)
-
-    # Create all utility meters
-    await _create_all_utility_meters(hass, short_id)
+    short_id = waterp1_short_id(hass, entry)
+    await _create_all_utility_meters(hass, short_id, meter_sources(hass, entry), entry.data.get(CONF_WATER_SENSOR, ""))
 
 
-async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None:
+async def _create_all_utility_meters(
+    hass: HomeAssistant, short_id: str, sources: dict[str, str] | None = None, water_sensor: str = ""
+) -> None:
     """Create all utility meters for a WaterP1MeterKit device."""
 
+    sources = sources or {}
+
     # Energy CONSUMED source entities (from ESPHome P1 meter)
-    consumed_t1_entity = f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_1"
-    consumed_t2_entity = f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_2"
+    consumed_t1_entity = sources.get("energy_consumed_tariff_1", f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_1")
+    consumed_t2_entity = sources.get("energy_consumed_tariff_2", f"sensor.waterp1meterkit_{short_id}_energy_consumed_tariff_2")
 
     # Energy RETURNED source entities (for solar/teruglevering). Firmware
     # variants name these either energy_returned_tariff_X or
     # energy_produced_tariff_X; pick whichever actually exists.
     def _returned_entity(tariff: int) -> str:
-        returned = f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_{tariff}"
-        produced = f"sensor.waterp1meterkit_{short_id}_energy_produced_tariff_{tariff}"
-        return returned if hass.states.get(returned) else produced
+        returned = sources.get(f"energy_returned_tariff_{tariff}", f"sensor.waterp1meterkit_{short_id}_energy_returned_tariff_{tariff}")
+        produced = sources.get(f"energy_produced_tariff_{tariff}", f"sensor.waterp1meterkit_{short_id}_energy_produced_tariff_{tariff}")
+        return returned if sources.get(f"energy_returned_tariff_{tariff}") or hass.states.get(returned) else produced
 
     returned_t1_entity = _returned_entity(1)
     returned_t2_entity = _returned_entity(2)
@@ -69,10 +63,12 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
     # The raw pulse total is intentional here. Utility meters calculate period
     # deltas and handle source resets, while the absolute Water Meter Total can
     # be changed by calibration and must only be used as the displayed reading.
-    water_entity = f"sensor.waterp1meterkit_{short_id}_water_total_consumption"
+    pulse_entity = sources.get("water_total_consumption") or f"sensor.waterp1meterkit_{short_id}_water_total_consumption"
+    pulse_source = bool(sources.get("water_total_consumption") or hass.states.get(pulse_entity) or not water_sensor)
+    water_entity = pulse_entity if pulse_source else water_sensor
 
     # Gas source entity (from ESPHome P1 meter)
-    gas_entity = resolve_gas_source(hass, f"sensor.waterp1meterkit_{short_id}")
+    gas_entity = sources.get("gas_consumed") or sources.get("gas_consumed_belgium") or resolve_gas_source(hass, f"sensor.waterp1meterkit_{short_id}")
 
     meters_created = 0
 
@@ -134,7 +130,7 @@ async def _create_all_utility_meters(hass: HomeAssistant, short_id: str) -> None
             source=water_entity,
             cycle=cycle,
             unique_id=f"waterp1_{short_id}_water_{cycle}",
-            periodically_resetting=False,  # Water meter totals never reset
+            periodically_resetting=pulse_source,
         ):
             meters_created += 1
 

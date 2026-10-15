@@ -12,7 +12,8 @@ from homeassistant.helpers import entity_registry as er
 
 from ..base.p1 import EnergyTracker
 from ..base.water import WaterCoordinator, WaterUsageData
-from ...const import CONF_WATER_SENSOR, LOGGER
+from ...const import LOGGER
+from ..base.utility_sources import meter_sources, waterp1_short_id
 
 
 @dataclass
@@ -54,20 +55,16 @@ class WaterP1MeterKitCoordinator(WaterCoordinator):
                     base = f"sensor.{match.group(1)}"
                     break
 
-        water_sensor = config_entry.data.get(CONF_WATER_SENSOR, "")
-        match = re.search(r"waterp1meterkit_([a-f0-9]+)_", water_sensor.lower())
-        if match:
-            short_id = match.group(1)
-        else:
-            short_id = config_entry.data.get("device_id", "unknown")
+        short_id = waterp1_short_id(hass, config_entry)
         self._short_device_id = short_id
 
         if base is None:
             base = f"sensor.waterp1meterkit_{short_id}"
-        self._energy_tariff1_sensor = f"{base}_energy_consumed_tariff_1"
-        self._energy_tariff2_sensor = f"{base}_energy_consumed_tariff_2"
-        self._power_sensor = f"{base}_power_consumed"
-        self._gas_sensor = f"{base}_gas_consumed"
+        sources = meter_sources(hass, config_entry)
+        self._energy_tariff1_sensor = sources.get("energy_consumed_tariff_1", f"{base}_energy_consumed_tariff_1")
+        self._energy_tariff2_sensor = sources.get("energy_consumed_tariff_2", f"{base}_energy_consumed_tariff_2")
+        self._power_sensor = sources.get("power_consumed", f"{base}_power_consumed")
+        self._gas_sensor = sources.get("gas_consumed", f"{base}_gas_consumed")
 
         LOGGER.info(
             "WaterP1MeterKit using short_id=%s, sensors: tariff1=%s, power=%s",
@@ -78,7 +75,7 @@ class WaterP1MeterKitCoordinator(WaterCoordinator):
 
         # Shared P1 energy layer: standby power, month peak, costs
         self.energy_tracker = EnergyTracker(
-            hass, config_entry, base, f"waterp1_{short_id}"
+            hass, config_entry, base, f"waterp1_{short_id}", source_entities=sources
         )
 
         LOGGER.info("WaterP1MeterKit coordinator initialized")
