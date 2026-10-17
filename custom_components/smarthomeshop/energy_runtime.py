@@ -178,9 +178,24 @@ def remove_account_energy_registry_entries(hass: HomeAssistant) -> None:
 
     device_registry = dr.async_get(hass)
     for identifier in _ACCOUNT_DEVICE_IDENTIFIERS:
-        device = device_registry.async_get_device(identifiers={identifier})
-        if device is not None:
+        for device in _account_devices(device_registry, identifier):
             device_registry.async_remove_device(device.id)
+
+
+def _account_devices(
+    device_registry: dr.DeviceRegistry, identifier: tuple[str, str]
+) -> list[dr.DeviceEntry]:
+    """Return every registered device with an account identifier.
+
+    Home Assistant 2026.9 deprecated ``async_get_device`` because identifiers
+    are only unique per config entry; ``async_get_devices`` (added in 2026.8)
+    returns every match.  Older versions only have the single-device lookup.
+    """
+    get_devices = getattr(device_registry, "async_get_devices", None)
+    if callable(get_devices):
+        return list(get_devices(identifiers={identifier}))
+    device = device_registry.async_get_device(identifiers={identifier})
+    return [device] if device is not None else []
 
 
 async def _async_reconfigure_energy(hass: HomeAssistant, enabled: bool) -> None:
