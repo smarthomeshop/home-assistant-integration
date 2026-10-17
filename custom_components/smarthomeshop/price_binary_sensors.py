@@ -20,11 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, VERSION
-from .price_coordinator import PriceCoordinator
-
-# Statuses that only mean the poll itself did not get through. The contract is
-# not gone, so the last known answer still stands.
-TRANSIENT_STATUSES = {"error", "connecting"}
+from .price_coordinator import TRANSIENT_STATUSES, PriceCoordinator
 
 
 def _prices_device_info() -> DeviceInfo:
@@ -58,8 +54,10 @@ class SmartHomeShopCheapNowBinarySensor(
 
     @property
     def available(self) -> bool:
+        # A failed poll must not flip this to 'unavailable' and back: the
+        # return to 'on' would re-trigger "turn on when cheap" automations.
         return (
-            self.coordinator.status == "ok"
+            self.coordinator.has_usable_prices()
             and self.coordinator.supports_price_optimisation()
             and self.coordinator.cheap_now() is not None
         )
@@ -124,7 +122,7 @@ class SmartHomeShopTomorrowPricesBinarySensor(
     @property
     def available(self) -> bool:
         return (
-            self.coordinator.status == "ok"
+            self.coordinator.has_usable_prices()
             and self.coordinator.supports_price_optimisation()
         )
 

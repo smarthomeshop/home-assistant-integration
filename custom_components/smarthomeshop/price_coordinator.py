@@ -31,6 +31,10 @@ UPDATE_INTERVAL = timedelta(minutes=60)
 REQUEST_TIMEOUT = 30
 ACCOUNT_CHECK_TIMEOUT = 8
 
+# Statuses that only mean the poll itself did not get through. The contract is
+# not gone, so the last known answer still stands.
+TRANSIENT_STATUSES = frozenset({"error", "connecting"})
+
 
 class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Fetch resolved energy prices from the SmartHomeShop account API."""
@@ -356,8 +360,31 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Select the row for the CURRENT hour locally instead of trusting the
         # server-computed "current": with a 30-minute poll interval the server
         # value can be up to 30 minutes stale after each hour change.
-        from homeassistant.util import dt as dt_util
+        row = self._cached_period()
+        if row is not None:
+            return row
+        return energy_api.current_electricity(self.data)
 
+    def has_usable_prices(self) -> bool:
+        """Whether price entities can publish right now.
+
+        A failed poll keeps the last price data, and published day-ahead prices
+        do not change, so a transient failure only ends availability once the
+        cached periods no longer cover the current moment. Without this the
+        Energy dashboard loses its price, and automations see 'unavailable',
+        until the next poll up to an hour later.
+        """
+        if self.status == "ok":
+            return True
+        if self.status not in TRANSIENT_STATUSES or not self.data:
+            return False
+        if self.today() or self.tomorrow():
+            return self._cached_period() is not None
+        # Fixed tariffs have no periods; their prices do not expire.
+        return self.contract() is not None
+
+    def _cached_period(self) -> dict[str, Any] | None:
+        """Return the cached price period that covers this moment, if any."""
         now = dt_util.now()
         for row in self.today() + self.tomorrow():
             start = dt_util.parse_datetime(str(row.get("start")))
@@ -380,7 +407,7 @@ class PriceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 end = end.replace(tzinfo=dt_util.get_default_time_zone())
             if start <= now < end:
                 return row
-        return energy_api.current_electricity(self.data)
+        return None
 
     def electricity_price(self) -> float | None:
         cur = self.current_electricity()

@@ -331,4 +331,4 @@ class SmartHomeShopPriceSensor(CoordinatorEntity[PriceCoordinator], SensorEntity
 
     @property
     def available(self) -> bool:
-        return self.coordinator.status == "ok"
+        return self.coordinator.has_usable_prices()
