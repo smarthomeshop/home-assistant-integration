@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import RestoreSensor, SensorEntity
@@ -260,6 +261,13 @@ class SmartHomeShopWaterSensor(CoordinatorEntity[WaterCoordinator], SensorEntity
         return self.entity_description.value_fn(self.coordinator.data)
 
     @property
+    def last_reset(self) -> datetime | None:
+        """Start of the period a total that restarts every period counts from."""
+        if self.coordinator.data is None or self.entity_description.last_reset_fn is None:
+            return None
+        return self.entity_description.last_reset_fn(self.coordinator.data)
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return extra state attributes."""
         if self.coordinator.data is None or self.entity_description.attr_fn is None:
@@ -347,11 +355,28 @@ class SmartHomeShopP1Sensor(CoordinatorEntity, RestoreSensor):
         return tracker.data if tracker else None
 
     @property
+    def available(self) -> bool:
+        if not super().available:
+            return False
+        available_fn = self.entity_description.available_fn
+        if available_fn is None:
+            return True
+        data = self._p1_data
+        return data is not None and available_fn(data)
+
+    @property
     def native_value(self):
         data = self._p1_data
         if data is None:
             return None
         return self.entity_description.value_fn(data)
+
+    @property
+    def last_reset(self) -> datetime | None:
+        data = self._p1_data
+        if data is None or self.entity_description.last_reset_fn is None:
+            return None
+        return self.entity_description.last_reset_fn(data)
 
     @property
     def extra_state_attributes(self):

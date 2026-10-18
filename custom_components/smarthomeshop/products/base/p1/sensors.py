@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -23,6 +24,10 @@ class P1SensorDescription(SensorEntityDescription):
     attr_fn: Callable[[EnergyData], dict[str, Any] | None] | None = None
     # Restore the value across restarts (month peak / standby power)
     restore: bool = False
+    # Report the sensor unavailable while the meter does not provide its data
+    available_fn: Callable[[EnergyData], bool] | None = None
+    # Start of the cycle a total that restarts every day or month counts from
+    last_reset_fn: Callable[[EnergyData], datetime | None] | None = None
 
 
 def _sum_cumulative(first: float | None, second: float | None) -> float | None:
@@ -61,6 +66,8 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
     # Publish one stable gas total for both DSMR naming variants. Belgian
     # meters commonly expose ``gas_consumed_belgium`` instead of
     # ``gas_consumed``; EnergyTracker already normalises both into gas_total.
+    # Homes without a gas meter never get a reading, so the sensor is
+    # unavailable there instead of unknown forever.
     P1SensorDescription(
         key="gas_consumption",
         name="Gas consumption (CC)",
@@ -70,6 +77,7 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=3,
         value_fn=lambda data: data.gas_total,
+        available_fn=lambda data: data.gas_total is not None,
     ),
     P1SensorDescription(
         key="standby_power",
@@ -111,6 +119,7 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.cost_today,
+        last_reset_fn=lambda data: data.daily_reset,
     ),
     P1SensorDescription(
         key="energy_cost_month",
@@ -120,6 +129,7 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.cost_month,
+        last_reset_fn=lambda data: data.monthly_reset,
     ),
     P1SensorDescription(
         key="energy_used_today",
@@ -130,6 +140,7 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.energy_today_kwh,
+        last_reset_fn=lambda data: data.daily_reset,
     ),
     P1SensorDescription(
         key="grid_import_power",

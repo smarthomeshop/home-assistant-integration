@@ -62,6 +62,52 @@ management experience.
 3. Search for "SmartHomeShop.io"
 4. Follow the configuration steps
 
+## Migration notes
+
+### Water in HA Energy
+
+- When the Energy sync moves the water source to **Water Total
+  Consumption** (`water_total_consumption`), Home Assistant creates a new
+  cost entity for it and leaves the old
+  `sensor.<device>_water_meter_total_cost` behind as unavailable. Nothing
+  uses it any more: remove it under **Settings > Devices & services >
+  Entities** by searching for `water_meter_total_cost`, opening it and
+  choosing **Delete**.
+- Water Total Consumption counts the pulses measured since the kit last
+  started, so it goes back to 0 after a restart or firmware update. That is
+  on purpose: Home Assistant treats the drop as the start of a new meter
+  cycle and keeps counting. Water Meter Total is the calibrated meter
+  reading, which jumps when you enter the reading of your water meter, so
+  Energy does not use it. The name cannot change: the firmware sensor name
+  sets the entity ID, and renaming it would break existing entity IDs,
+  dashboards and statistics.
+- Use Water Total Consumption as the water source in HA Energy; the Energy
+  sync selects it for you. The **Usage … (CC)** sensors start again every day,
+  week, month or year and report when that happened (`last_reset`), so their
+  own statistics count each new period instead of a drop.
+
+### Water usage units
+
+**Usage today (CC)**, **Usage this week (CC)**, **Usage this month (CC)** and
+**Usage this year (CC)** have the water device class, so you can pick a
+display unit for each in its entity settings. New installations show all four
+in litres. Existing installations keep their current units (this year in m³)
+until you change them, so dashboards, automations and long-term statistics
+keep their numbers.
+
+These four sensors, **Water cost today (CC)** and the P1 sensors **Energy used
+today (CC)**, **Energy cost today (CC)** and **Energy cost this month (CC)**
+report the start of their period. The first hour after updating, the long-term
+statistics of these sensors can show a single step, because Home Assistant
+then starts counting from the reported period start.
+
+### Homes without gas
+
+Without a gas meter, **Gas consumption (CC)** is unavailable and no gas
+helpers are created. **Gas Daily/Weekly/Monthly/Yearly (CC)** helpers made by
+earlier versions can be deleted under **Settings > Devices & services >
+Helpers**. They are created again automatically once the meter reports gas.
+
 ## Languages
 
 SmartHomeShop.io automatically follows the language selected by the current

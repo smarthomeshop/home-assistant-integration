@@ -172,9 +172,13 @@ async def async_setup_entry(
 
         # Create utility meter helpers for energy + water tracking
         # These are persistent and work with the Energy Dashboard
-        from .products.waterp1meterkit.utility_meters import async_setup_utility_meters
+        from .products.waterp1meterkit.utility_meters import (
+            async_setup_gas_meters,
+            async_setup_utility_meters,
+        )
 
         hass.async_create_task(async_setup_utility_meters(hass, entry))
+        async_setup_gas_meters(hass, entry)
 
     elif product_type == PRODUCT_WATERMETERKIT:
         from .products.waterp1meterkit.entity_resolver import (
@@ -206,7 +210,10 @@ async def async_setup_entry(
 
     elif product_type == PRODUCT_P1METERKIT:
         from .products.p1meterkit import P1MeterKitCoordinator
-        from .products.base.p1.utility_meters import async_setup_energy_utility_meters
+        from .products.base.p1.utility_meters import (
+            async_create_gas_meters_once_seen,
+            async_setup_energy_utility_meters,
+        )
 
         coordinator = P1MeterKitCoordinator(hass, entry)
         hass.async_create_task(
@@ -216,6 +223,13 @@ async def async_setup_entry(
                 uid_prefix=f"p1_{coordinator.short_device_id}",
                 entity_base=coordinator.entity_prefix,
             )
+        )
+        async_create_gas_meters_once_seen(
+            hass,
+            entry,
+            label=f"P1 {coordinator.short_device_id}",
+            uid_prefix=f"p1_{coordinator.short_device_id}",
+            entity_base=coordinator.entity_prefix,
         )
 
     elif product_type in (

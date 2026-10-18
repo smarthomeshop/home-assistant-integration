@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -16,6 +17,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, UnitOfVolume, UnitOfVolumeFlowRate
+from homeassistant.util import dt as dt_util
 
 from .coordinator import WaterUsageData
 
@@ -26,6 +28,29 @@ class WaterSensorEntityDescription(SensorEntityDescription):
 
     value_fn: Callable[[WaterUsageData], Any]
     attr_fn: Callable[[WaterUsageData], dict[str, Any]] | None = None
+    # Start of the period a total that restarts every period counts from
+    last_reset_fn: Callable[[WaterUsageData], datetime | None] | None = None
+
+
+def period_start(data: WaterUsageData, period: str) -> datetime | None:
+    """Start of the day, ISO week, month or year the period values belong to.
+
+    The coordinator rolls its periods over on the local clock of the update
+    that computed them, so the reset is taken from that same moment rather
+    than from the time the state is read. Value and reset then always move
+    to a new period together.
+    """
+    moment = data.last_update
+    if moment is None:
+        return None
+    day = moment.date()
+    if period == "week":
+        day -= timedelta(days=moment.weekday())
+    elif period == "month":
+        day = day.replace(day=1)
+    elif period == "year":
+        day = day.replace(month=1, day=1)
+    return dt_util.start_of_local_day(day)
 
 
 WATER_SENSORS: tuple[WaterSensorEntityDescription, ...] = (
@@ -37,6 +62,7 @@ WATER_SENSORS: tuple[WaterSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=2,
         value_fn=lambda data: data.water_cost_today,
+        last_reset_fn=lambda data: period_start(data, "day"),
     ),
     WaterSensorEntityDescription(
         key="usage_vs_average",
@@ -64,41 +90,59 @@ WATER_SENSORS: tuple[WaterSensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: round(data.current_flow_rate, 2),
     ),
+    # The period sensors carry the water device class so users can pick their
+    # own display unit, and all suggest litres so new installations show one
+    # unit. The native units are unchanged: Home Assistant stores a suggested
+    # unit only when an entity is first registered, so existing installations
+    # keep their states, dashboards and long-term statistics as they are.
     WaterSensorEntityDescription(
         key="today_usage",
         name="Usage today (CC)",
         icon="mdi:water-check",
+        device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.LITERS,
+        suggested_unit_of_measurement=UnitOfVolume.LITERS,
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=0,
         value_fn=lambda data: round(data.today_usage, 1),
+        last_reset_fn=lambda data: period_start(data, "day"),
     ),
     WaterSensorEntityDescription(
         key="week_usage",
         name="Usage this week (CC)",
         icon="mdi:water-check",
+        device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.LITERS,
+        suggested_unit_of_measurement=UnitOfVolume.LITERS,
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=0,
         value_fn=lambda data: round(data.week_usage, 1),
+        last_reset_fn=lambda data: period_start(data, "week"),
     ),
     WaterSensorEntityDescription(
         key="month_usage",
         name="Usage this month (CC)",
         icon="mdi:water-check",
+        device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.LITERS,
+        suggested_unit_of_measurement=UnitOfVolume.LITERS,
         state_class=SensorStateClass.TOTAL,
         suggested_display_precision=0,
         value_fn=lambda data: round(data.month_usage, 0),
+        last_reset_fn=lambda data: period_start(data, "month"),
     ),
     WaterSensorEntityDescription(
         key="year_usage",
         name="Usage this year (CC)",
         icon="mdi:water-check",
+        device_class=SensorDeviceClass.WATER,
         native_unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+        suggested_unit_of_measurement=UnitOfVolume.LITERS,
         state_class=SensorStateClass.TOTAL,
-        suggested_display_precision=3,
+        # Counts in the suggested unit: whole litres, or 3 decimals in m³.
+        suggested_display_precision=0,
         value_fn=lambda data: round(data.year_usage / 1000, 3),
+        last_reset_fn=lambda data: period_start(data, "year"),
     ),
     # Smart leak score sensor
     WaterSensorEntityDescription(

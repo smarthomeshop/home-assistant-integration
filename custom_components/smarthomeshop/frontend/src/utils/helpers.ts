@@ -3,6 +3,7 @@
  */
 
 import type { HomeAssistant, HassEntity } from '../types/home-assistant';
+import { volumeToLiters } from './water-units';
 
 /**
  * Get entity state object
@@ -31,6 +32,18 @@ export function getEntityValue(
   }
   const value = parseFloat(state.state);
   return isNaN(value) ? defaultValue : value;
+}
+
+/**
+ * Get a water volume from entity in litres, whatever display unit it uses
+ */
+export function getEntityLiters(
+  hass: HomeAssistant | undefined,
+  entityId: string | undefined,
+  fallbackUnit = 'L'
+): number {
+  const unit = getEntityState(hass, entityId)?.attributes.unit_of_measurement;
+  return volumeToLiters(getEntityValue(hass, entityId), unit, fallbackUnit);
 }
 
 /**

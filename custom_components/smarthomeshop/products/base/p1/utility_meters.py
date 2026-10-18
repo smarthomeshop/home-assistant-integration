@@ -2,21 +2,131 @@
 
 from __future__ import annotations
 
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from ....const import LOGGER
 
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
 
+# Dutch meters publish gas on OBIS 24.2.1, Belgian meters on 24.2.3, which
+# the firmware exposes as its own register.
+GAS_SOURCE_SUFFIXES = ("gas_consumed", "gas_consumed_belgium")
 
-def resolve_gas_source(hass: HomeAssistant, entity_base: str) -> str | None:
-    """Return the available DSMR gas total, including the Belgian variant."""
-    for suffix in ("gas_consumed", "gas_consumed_belgium"):
-        entity_id = f"{entity_base}_{suffix}"
-        if hass.states.get(entity_id):
-            return entity_id
-    return None
+
+def gas_source_candidates(
+    entity_base: str, sources: dict[str, str] | None = None
+) -> list[str]:
+    """List the possible DSMR gas totals, renamed registry entities first."""
+    sources = sources or {}
+    candidates = [sources[suffix] for suffix in GAS_SOURCE_SUFFIXES if sources.get(suffix)]
+    candidates.extend(f"{entity_base}_{suffix}" for suffix in GAS_SOURCE_SUFFIXES)
+    return list(dict.fromkeys(candidates))
+
+
+def _has_reading(hass: HomeAssistant, entity_id: str) -> bool:
+    """Has this sensor published a number rather than unknown or unavailable?"""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return False
+    try:
+        float(state.state)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def resolve_gas_source(
+    hass: HomeAssistant, entity_base: str, sources: dict[str, str] | None = None
+) -> str | None:
+    """Return the DSMR gas total that reports a reading, including the Belgian variant.
+
+    The firmware defines its gas sensors whether or not a gas meter is
+    connected, so an existing entity proves nothing: without a gas meter it
+    never gets a reading, and a Belgian meter only fills its own register.
+    """
+    return next(
+        (
+            entity_id
+            for entity_id in gas_source_candidates(entity_base, sources)
+            if _has_reading(hass, entity_id)
+        ),
+        None,
+    )
+
+
+async def async_setup_gas_utility_meters(
+    hass: HomeAssistant, label: str, uid_prefix: str, source: str
+) -> int:
+    """Create the daily/weekly/monthly/yearly gas meters for one gas total."""
+    created = 0
+    for cycle in METER_CYCLES:
+        if await create_single_utility_meter(
+            hass,
+            name=f"{label} Gas {cycle.capitalize()} (CC)",
+            source=source,
+            cycle=cycle,
+            unique_id=f"{uid_prefix}_gas_{cycle}",
+        ):
+            created += 1
+    LOGGER.info("Gas utility meters ready for %s (%d meters)", label, created)
+    return created
+
+
+@callback
+def async_create_gas_meters_once_seen(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    label: str,
+    uid_prefix: str,
+    entity_base: str,
+    sources: dict[str, str] | None = None,
+) -> None:
+    """Create the gas utility meters once the P1 meter has reported gas.
+
+    Meters made from a gas total without readings stay unknown in every home
+    without a gas meter. Waiting for the first reading also covers a device
+    that is still offline at startup and a gas meter that is added later.
+    This is the only place that creates gas meters, so a reading that arrives
+    during setup cannot create them twice.
+    """
+    unsubscribe: CALLBACK_TYPE | None = None
+
+    @callback
+    def _create(source: str) -> None:
+        hass.async_create_task(
+            async_setup_gas_utility_meters(hass, label, uid_prefix, source)
+        )
+
+    @callback
+    def _state_changed(_event) -> None:
+        nonlocal unsubscribe
+        if unsubscribe is None:
+            return
+        source = resolve_gas_source(hass, entity_base, sources)
+        if source is None:
+            return
+        unsubscribe()
+        unsubscribe = None
+        _create(source)
+
+    @callback
+    def _stop_watching() -> None:
+        if unsubscribe is not None:
+            unsubscribe()
+
+    source = resolve_gas_source(hass, entity_base, sources)
+    if source is not None:
+        _create(source)
+        return
+
+    LOGGER.debug("No gas reading for %s yet; gas meters follow the first one", label)
+    unsubscribe = async_track_state_change_event(
+        hass, gas_source_candidates(entity_base, sources), _state_changed
+    )
+    entry.async_on_unload(_stop_watching)
 
 
 async def async_setup_energy_utility_meters(
@@ -25,7 +135,10 @@ async def async_setup_energy_utility_meters(
     uid_prefix: str,
     entity_base: str,
 ) -> None:
-    """Create daily/weekly/monthly/yearly energy (+gas) utility meters.
+    """Create daily/weekly/monthly/yearly energy utility meters.
+
+    Gas meters follow the first gas reading instead, see
+    async_create_gas_meters_once_seen.
 
     label:       display prefix, e.g. "P1 776c6c"
     uid_prefix:  unique id prefix, e.g. "p1_776c6c"
@@ -33,7 +146,6 @@ async def async_setup_energy_utility_meters(
     """
     consumed_t1 = f"{entity_base}_energy_consumed_tariff_1"
     consumed_t2 = f"{entity_base}_energy_consumed_tariff_2"
-    gas_entity = resolve_gas_source(hass, entity_base)
 
     # Returned energy entities differ per firmware generation
     returned_entities = {
@@ -71,17 +183,6 @@ async def async_setup_energy_utility_meters(
                 source=source,
                 cycle=cycle,
                 unique_id=f"{uid_prefix}_energy_returned_{cycle}_{tariff}",
-            ):
-                created += 1
-
-    if gas_entity:
-        for cycle in METER_CYCLES:
-            if await create_single_utility_meter(
-                hass,
-                name=f"{label} Gas {cycle.capitalize()} (CC)",
-                source=gas_entity,
-                cycle=cycle,
-                unique_id=f"{uid_prefix}_gas_{cycle}",
             ):
                 created += 1
 

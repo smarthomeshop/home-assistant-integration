@@ -181,7 +181,7 @@ export class SmartHomeShopWaterCard extends SmartHomeShopBaseCard {
         ` : nothing}
         ${showYear ? html`
           <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}>
-            <div class="stat-value">${formatNumber(year, 1)}<span class="stat-unit">m³</span></div>
+            <div class="stat-value">${formatNumber(year / 1000, 1)}<span class="stat-unit">m³</span></div>
             <div class="stat-label">Year</div>
           </div>
         ` : nothing}

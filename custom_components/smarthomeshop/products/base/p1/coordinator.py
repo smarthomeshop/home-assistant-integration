@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -64,6 +65,9 @@ class EnergyData:
 
     cost_today: float | None = None
     cost_month: float | None = None
+    # When the utility meters behind the daily and monthly values last reset
+    daily_reset: datetime | None = None
+    monthly_reset: datetime | None = None
 
     phase_max_load_pct: float | None = None
     phase_imbalance_a: float | None = None
@@ -372,9 +376,35 @@ class EnergyTracker:
         # ---- Costs from the daily/monthly utility meters ----
         data.cost_today = self._cost_for_cycle("daily", price_t1, price_t2, price_feed, price_gas)
         data.cost_month = self._cost_for_cycle("monthly", price_t1, price_t2, price_feed, price_gas)
+        data.daily_reset = self._cycle_reset("daily")
+        data.monthly_reset = self._cycle_reset("monthly")
 
         self.data = data
         return data
+
+    def _cycle_reset(self, cycle: str) -> datetime | None:
+        """When the utility meters of a daily or monthly cycle last reset.
+
+        The daily and monthly values are read from these helpers, so their own
+        last_reset keeps a value and its reset from ever belonging to
+        different periods, even when the helpers reset a moment after or
+        before this update.
+        """
+        resets = []
+        for suffix in (
+            f"energy_{cycle}_t1_cc",
+            f"energy_{cycle}_t2_cc",
+            f"energy_returned_{cycle}_t1_cc",
+            f"energy_returned_{cycle}_t2_cc",
+            f"gas_{cycle}_cc",
+        ):
+            state = self._raw_state(self._meter_entity_id(suffix))
+            if state is None:
+                continue
+            reset = dt_util.parse_datetime(str(state.attributes.get("last_reset") or ""))
+            if reset is not None:
+                resets.append(reset)
+        return max(resets, default=None)
 
     def _cost_for_cycle(
         self,

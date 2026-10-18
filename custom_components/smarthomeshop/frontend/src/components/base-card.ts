@@ -9,6 +9,7 @@ import type { HomeAssistant } from '../types/home-assistant';
 import { CardLocalizationController } from '../utils/runtime-translations';
 import {
   getEntityValue,
+  getEntityLiters,
   getEntityState,
   fireMoreInfo,
   processHistoryData,
@@ -287,20 +288,22 @@ export abstract class SmartHomeShopBaseCard extends LitElement {
     return getEntityValue(this.hass, this._config.flow_entity);
   }
 
+  // Period usage in litres, whatever display unit the user picked
   protected _getTodayUsage(): number {
-    return getEntityValue(this.hass, this._config.today_entity);
+    return getEntityLiters(this.hass, this._config.today_entity);
   }
 
   protected _getWeekUsage(): number {
-    return getEntityValue(this.hass, this._config.week_entity);
+    return getEntityLiters(this.hass, this._config.week_entity);
   }
 
   protected _getMonthUsage(): number {
-    return getEntityValue(this.hass, this._config.month_entity);
+    return getEntityLiters(this.hass, this._config.month_entity);
   }
 
   protected _getYearUsage(): number {
-    return getEntityValue(this.hass, this._config.year_entity);
+    // The year sensor has m³ as its native unit
+    return getEntityLiters(this.hass, this._config.year_entity, 'm³');
   }
 
   protected _getMeterTotal(): number {

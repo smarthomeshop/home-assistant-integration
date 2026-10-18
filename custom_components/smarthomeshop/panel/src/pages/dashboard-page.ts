@@ -2,6 +2,7 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
 import { panelText } from '../utils/panel-translations';
+import { volumeToLiters } from '../utils/water-units';
 import './settings-page';
 import './automations-page';
 import '../components/ha-energy-sync';
@@ -1778,6 +1779,16 @@ export class DashboardPage extends LitElement {
     return value;
   }
 
+  private _getWaterLiters(entities: DeviceEntity[] | undefined, patterns: string[]): number | null {
+    const entity = this._getSensorEntity(entities, patterns);
+    if (!entity || !entity.state || entity.state === 'unavailable' || entity.state === 'unknown') return null;
+    const value = Number(entity.state);
+    if (!Number.isFinite(value)) return null;
+    // Water sensors report the display unit the user picked for them.
+    const unit = entity.attributes?.unit_of_measurement;
+    return volumeToLiters(value, typeof unit === 'string' ? unit : undefined);
+  }
+
   private _formatPowerMetric(watts: number | null): string {
     if (watts === null) return '-';
     const value = Math.abs(watts);
@@ -1789,6 +1800,11 @@ export class DashboardPage extends LitElement {
     if (kwh === null) return '-';
     const decimals = Math.abs(kwh) >= 100 ? 0 : Math.abs(kwh) >= 10 ? 1 : 2;
     return `${kwh.toFixed(decimals)} kWh`;
+  }
+
+  private _formatWaterMetric(liters: number | null): string {
+    if (liters === null) return '-';
+    return `${liters.toFixed(0)} L`;
   }
 
   private _sumAvailable(values: Array<number | null>): number | null {
@@ -1811,7 +1827,7 @@ export class DashboardPage extends LitElement {
       const flow = this._getSensorValue(entities, [
         'current_water_usage_cc', 'water_current_usage', 'current_flow_rate', 'flow_rate',
       ]);
-      const waterToday = this._getSensorValue(entities, [
+      const waterToday = this._getWaterLiters(entities, [
         'usage_today_cc', 'water_daily_cc', 'today_usage', 'water_daily',
       ]);
       const netGrid = this._getPowerWatts(entities, ['net_grid_power_cc', 'net_grid_power']);
@@ -1839,7 +1855,7 @@ export class DashboardPage extends LitElement {
           </div>
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
-            <span class="sensor-value">${this._formatValue(waterToday, ' L', 0)}</span>
+            <span class="sensor-value">${this._formatWaterMetric(waterToday)}</span>
             <div class="sensor-label">Water today</div>
           </div>
           <div class="sensor-item energy-metric">
@@ -1861,7 +1877,7 @@ export class DashboardPage extends LitElement {
       // "flow" fallback also matches leak and duration entities.
       const flow = this._getSensorValue(entities, ['current_water_usage_cc', 'water_current_usage', 'flow_rate', 'flow']);
       const total = this._getSensorValue(entities, ['water_meter_total', 'water_total_consumption', 'total_consumption', 'total']);
-      const daily = this._getSensorValue(entities, ['water_daily_cc', 'usage_today_cc', 'daily']);
+      const daily = this._getWaterLiters(entities, ['water_daily_cc', 'usage_today_cc', 'daily']);
 
       return html`
         <div class="sensor-grid">
@@ -1877,7 +1893,7 @@ export class DashboardPage extends LitElement {
           </div>
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
-            <span class="sensor-value">${this._formatValue(daily, ' L', 0)}</span>
+            <span class="sensor-value">${this._formatWaterMetric(daily)}</span>
             <div class="sensor-label">Today</div>
           </div>
         </div>

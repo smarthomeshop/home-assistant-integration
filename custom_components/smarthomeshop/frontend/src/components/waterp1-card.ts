@@ -786,7 +786,7 @@ export class SmartHomeShopWaterP1Card extends SmartHomeShopBaseCard {
             <div class="stat-item" @click=${() => this._handleClick(this._config.month_entity)}><div class="stat-value">${formatNumber(monthUsage / 1000, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Month</div></div>
           ` : nothing}
           ${showYear ? html`
-            <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}><div class="stat-value">${formatNumber(yearUsage, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Year</div></div>
+            <div class="stat-item" @click=${() => this._handleClick(this._config.year_entity)}><div class="stat-value">${formatNumber(yearUsage / 1000, 1)}<span class="stat-unit">m³</span></div><div class="stat-label">Year</div></div>
           ` : nothing}
         </div>
       ` : nothing}
