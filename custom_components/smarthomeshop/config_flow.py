@@ -56,12 +56,13 @@ from .device_linking import (
     iter_esphome_source_devices,
     resolve_source_device,
 )
+from .energy_runtime import async_enable_energy_for_first_p1
+from .products.waterflowkit.lines import (
+    BASE_FLOW_LINES,
+    FLOW_LINES,
+    find_flow_sensors,
+)
 
-# WaterFlowKit dual sensor config keys
-CONF_FLOW1_WATER_SENSOR = "flow1_water_sensor"
-CONF_FLOW1_FLOW_SENSOR = "flow1_flow_sensor"
-CONF_FLOW2_WATER_SENSOR = "flow2_water_sensor"
-CONF_FLOW2_FLOW_SENSOR = "flow2_flow_sensor"
 
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
 CONF_NIGHT_START = "night_start"
@@ -83,10 +84,7 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
         self._water_sensor: str | None = None
         self._flow_sensor: str | None = None
         # WaterFlowKit dual sensors
-        self._flow1_water_sensor: str | None = None
-        self._flow1_flow_sensor: str | None = None
-        self._flow2_water_sensor: str | None = None
-        self._flow2_flow_sensor: str | None = None
+        self._flow_line_sensors: dict[str, str] = {}
         self._pending_options: dict[str, Any] | None = None
 
     def _find_devices_for_product(self, product_type: str) -> dict[str, str]:
@@ -203,50 +201,6 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return water_sensor, flow_sensor
 
-    def _find_waterflowkit_sensors(
-        self, device_id: str
-    ) -> dict[str, str | None]:
-        """Find Flow1 and Flow2 sensors for WaterFlowKit device."""
-        entity_registry = er.async_get(self.hass)
-
-        sensors: dict[str, str | None] = {
-            "flow1_water": None,
-            "flow1_flow": None,
-            "flow2_water": None,
-            "flow2_flow": None,
-        }
-
-        for entity in er.async_entries_for_device(entity_registry, device_id):
-            if entity.domain != "sensor":
-                continue
-
-            entity_id = entity.entity_id.lower()
-
-            # Flow1 sensors
-            if "flow1" in entity_id:
-                if "total_consumption" in entity_id:
-                    sensors["flow1_water"] = entity.entity_id
-                    LOGGER.debug("Found Flow1 water sensor: %s", entity.entity_id)
-                elif "current" in entity_id and "usage" in entity_id:
-                    sensors["flow1_flow"] = entity.entity_id
-                    LOGGER.debug("Found Flow1 flow sensor: %s", entity.entity_id)
-
-            # Flow2 sensors
-            if "flow2" in entity_id:
-                if "total_consumption" in entity_id:
-                    sensors["flow2_water"] = entity.entity_id
-                    LOGGER.debug("Found Flow2 water sensor: %s", entity.entity_id)
-                elif "current" in entity_id and "usage" in entity_id:
-                    sensors["flow2_flow"] = entity.entity_id
-                    LOGGER.debug("Found Flow2 flow sensor: %s", entity.entity_id)
-
-        LOGGER.info(
-            "WaterFlowKit sensors found - Flow1: %s, Flow2: %s",
-            sensors["flow1_water"],
-            sensors["flow2_water"],
-        )
-        return sensors
-
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -306,13 +260,10 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         if product_type == PRODUCT_WATERFLOWKIT:
-            sensors = self._find_waterflowkit_sensors(device_id)
-            if not sensors["flow1_water"] and not sensors["flow2_water"]:
+            sensors = find_flow_sensors(self.hass, device_id)
+            if not self._has_water_sensor(sensors):
                 return self.async_abort(reason="no_water_sensor")
-            self._flow1_water_sensor = sensors["flow1_water"]
-            self._flow1_flow_sensor = sensors["flow1_flow"]
-            self._flow2_water_sensor = sensors["flow2_water"]
-            self._flow2_flow_sensor = sensors["flow2_flow"]
+            self._flow_line_sensors = sensors
         else:
             water_sensor, flow_sensor = self._find_sensors_for_device(device_id)
             if not water_sensor and product_type in (
@@ -332,7 +283,7 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_NIGHT_END: DEFAULT_NIGHT_END,
             }
 
-        return self._create_entry(options=options)
+        return await self._async_finish_entry(options=options)
 
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
@@ -355,15 +306,12 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
 
                 # WaterFlowKit has dual sensors
                 if self._product_type == PRODUCT_WATERFLOWKIT:
-                    sensors = self._find_waterflowkit_sensors(device_id)
+                    sensors = find_flow_sensors(self.hass, device_id)
 
-                    if not sensors["flow1_water"] and not sensors["flow2_water"]:
+                    if not self._has_water_sensor(sensors):
                         errors["base"] = "no_water_sensor"
                     else:
-                        self._flow1_water_sensor = sensors["flow1_water"]
-                        self._flow1_flow_sensor = sensors["flow1_flow"]
-                        self._flow2_water_sensor = sensors["flow2_water"]
-                        self._flow2_flow_sensor = sensors["flow2_flow"]
+                        self._flow_line_sensors = sensors
 
                         # Set unique ID
                         await self.async_set_unique_id(f"{self._product_type}_{device_id}")
@@ -467,7 +415,7 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Show which entities will be created before finishing."""
         if user_input is not None:
-            return self._create_entry(options=self._pending_options)
+            return await self._async_finish_entry(options=self._pending_options)
 
         return self.async_show_form(
             step_id="summary",
@@ -512,23 +460,38 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         return "- SmartHomeShop enhancements for this product"
 
+    @staticmethod
+    def _has_water_sensor(sensors: dict[str, str]) -> bool:
+        """Return whether a kit reports at least one of its two base lines."""
+        return any(f"{line}_water_sensor" in sensors for line in BASE_FLOW_LINES)
+
+    def _flow_line_summary(self, kind: str) -> str:
+        """List the sensor of each line; Flow 3 and 4 only when the kit has them."""
+        parts = []
+        for line in FLOW_LINES:
+            sensor = self._flow_line_sensors.get(f"{line}_{kind}_sensor")
+            if sensor or line in BASE_FLOW_LINES:
+                parts.append(f"{line.capitalize()}: {sensor or 'Not found'}")
+        return ", ".join(parts)
+
     def _get_water_placeholders(self) -> dict[str, str]:
         """Get description placeholders for water options step."""
         if self._product_type == PRODUCT_WATERFLOWKIT:
             return {
-                "water_sensor": (
-                    f"Flow1: {self._flow1_water_sensor or 'Not found'}, "
-                    f"Flow2: {self._flow2_water_sensor or 'Not found'}"
-                ),
-                "flow_sensor": (
-                    f"Flow1: {self._flow1_flow_sensor or 'Not found'}, "
-                    f"Flow2: {self._flow2_flow_sensor or 'Not found'}"
-                ),
+                "water_sensor": self._flow_line_summary("water"),
+                "flow_sensor": self._flow_line_summary("flow"),
             }
         return {
             "water_sensor": self._water_sensor or "Not found",
             "flow_sensor": self._flow_sensor or "Not found",
         }
+
+    async def _async_finish_entry(
+        self, options: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Create the entry, with Smart Energy on for a first P1 kit."""
+        await async_enable_energy_for_first_p1(self.hass, self._product_type)
+        return self._create_entry(options=options)
 
     def _create_entry(self, options: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Create the config entry."""
@@ -537,12 +500,9 @@ class SmartHomeShopConfigFlow(ConfigFlow, domain=DOMAIN):
             CONF_DEVICE_ID: self._device_id,
         }
 
-        # WaterFlowKit has dual sensors
+        # WaterFlowKit has a sensor pair per line
         if self._product_type == PRODUCT_WATERFLOWKIT:
-            data[CONF_FLOW1_WATER_SENSOR] = self._flow1_water_sensor
-            data[CONF_FLOW1_FLOW_SENSOR] = self._flow1_flow_sensor
-            data[CONF_FLOW2_WATER_SENSOR] = self._flow2_water_sensor
-            data[CONF_FLOW2_FLOW_SENSOR] = self._flow2_flow_sensor
+            data.update(self._flow_line_sensors)
         else:
             data[CONF_WATER_SENSOR] = self._water_sensor
             data[CONF_FLOW_SENSOR] = self._flow_sensor

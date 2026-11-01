@@ -41,17 +41,13 @@ from ..base.water.leak_detection import (
     LeakDetectionEngine,
     is_meter_jump,
 )
+from .lines import BASE_FLOW_LINES, FLOW_LINES
 
 # Config keys for dual sensors
 CONF_FLOW1_WATER_SENSOR = "flow1_water_sensor"
 CONF_FLOW1_FLOW_SENSOR = "flow1_flow_sensor"
 CONF_FLOW2_WATER_SENSOR = "flow2_water_sensor"
 CONF_FLOW2_FLOW_SENSOR = "flow2_flow_sensor"
-
-# Flow inputs a WaterFlowKit can have. Flow1 and Flow2 are always reported,
-# the V2 board adds two more.
-FLOW_LINES = ("flow1", "flow2", "flow3", "flow4")
-BASE_FLOW_LINES = ("flow1", "flow2")
 
 
 class _LineTracker:
@@ -279,6 +275,11 @@ class WaterFlowKitCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             or config_entry.data.get(f"{line}_flow_sensor")
         )
         return tuple(dict.fromkeys(BASE_FLOW_LINES + configured))
+
+    @property
+    def lines(self) -> tuple[str, ...]:
+        """Return the flow lines of this kit."""
+        return self._lines
 
     @property
     def device_entry(self) -> DeviceEntry | None:

@@ -1,90 +1,122 @@
-"""Automatic Utility Meter creation for WaterFlowKit (dual sensors)."""
+"""Automatic Utility Meter creation for WaterFlowKit (one set per flow line)."""
 
 from __future__ import annotations
 
 import re
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from ...const import LOGGER
+from .lines import BASE_FLOW_LINES, FLOW_LINES
 
 # Utility meter cycles to create
 METER_CYCLES = ["daily", "weekly", "monthly", "yearly"]
 
-# Config keys
-CONF_FLOW1_WATER_SENSOR = "flow1_water_sensor"
-CONF_FLOW2_WATER_SENSOR = "flow2_water_sensor"
+
+def _short_id(sources: list[str], entry: ConfigEntry) -> str:
+    """Return the device ID used in the names of the meters.
+
+    Sensors look like sensor.waterflowkit_XXXXX_flow1_total_consumption, or
+    sensor.waterflowkit_flow1_total_consumption without a device ID.
+    """
+    for pattern in (r"waterflowkit_([a-f0-9]+)_flow", r"waterflowkit_(\w+)_flow"):
+        for source in sources:
+            match = re.search(pattern, source.lower())
+            if match:
+                return match.group(1)
+    short_id = entry.entry_id[:8]
+    LOGGER.info("Using entry_id as device ID for utility meters: %s", short_id)
+    return short_id
+
+
+def _has_counted_water(hass: HomeAssistant, source: str) -> bool:
+    """Return whether a line has ever measured water."""
+    state = hass.states.get(source)
+    try:
+        return state is not None and float(state.state) > 0
+    except ValueError:
+        return False
+
+
+async def _create_line_meters(
+    hass: HomeAssistant, short_id: str, line: str, source: str
+) -> int:
+    """Create the daily to yearly meters of one flow line."""
+    created = 0
+    for cycle in METER_CYCLES:
+        if await _create_single_utility_meter(
+            hass,
+            name=f"WaterFlowKit {short_id} {line.capitalize()} {cycle.capitalize()}",
+            source=source,
+            cycle=cycle,
+            unique_id=f"waterflowkit_{short_id}_{line}_{cycle}",
+        ):
+            created += 1
+    return created
+
+
+@callback
+def _create_line_meters_once_used(
+    hass: HomeAssistant, entry: ConfigEntry, short_id: str, line: str, source: str
+) -> None:
+    """Create the meters of Flow 3 or 4 once a sensor on that line counts water.
+
+    The V2 board reports these lines without a sensor connected, and meters on
+    a total that stays 0 only fill the helpers list. Waiting also covers a kit
+    that is offline at startup and a sensor that is connected later.
+    """
+    if _has_counted_water(hass, source):
+        hass.async_create_task(_create_line_meters(hass, short_id, line, source))
+        return
+
+    stop_watching = None
+
+    @callback
+    def _state_changed(_event) -> None:
+        nonlocal stop_watching
+        if stop_watching is None or not _has_counted_water(hass, source):
+            return
+        stop_watching()
+        stop_watching = None
+        hass.async_create_task(_create_line_meters(hass, short_id, line, source))
+
+    @callback
+    def _stop() -> None:
+        if stop_watching is not None:
+            stop_watching()
+
+    stop_watching = async_track_state_change_event(hass, [source], _state_changed)
+    entry.async_on_unload(_stop)
 
 
 async def async_setup_utility_meters(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Set up utility meters for WaterFlowKit (both Flow1 and Flow2).
+    """Set up utility meters for WaterFlowKit.
 
-    Creates utility meter helpers for:
-    - Flow1: Daily/Weekly/Monthly/Yearly water consumption
-    - Flow2: Daily/Weekly/Monthly/Yearly water consumption
-    - Combined: Daily/Weekly/Monthly/Yearly total water consumption
-
-    These are created as official Home Assistant Utility Meter helpers,
-    which are persistent and work correctly with the Energy Dashboard.
+    Creates Daily/Weekly/Monthly/Yearly water consumption helpers per flow
+    line, as official Home Assistant Utility Meter helpers, which are
+    persistent and work correctly with the Energy Dashboard.
     """
-    # Extract device ID from sensor entity names
-    flow1_sensor = entry.data.get(CONF_FLOW1_WATER_SENSOR, "")
-    flow2_sensor = entry.data.get(CONF_FLOW2_WATER_SENSOR, "")
-
-    # Try to get short_id from either sensor
-    # Pattern matches: sensor.waterflowkit_XXXXX_flow1_total_consumption
-    # or sensor.waterflowkit_flow1_total_consumption (without device ID)
-    match = re.search(r"waterflowkit_([a-f0-9]+)_flow", flow1_sensor.lower())
-    if not match:
-        match = re.search(r"waterflowkit_([a-f0-9]+)_flow", flow2_sensor.lower())
-
-    # If no match with hex ID, try extracting any word between waterflowkit and flow
-    if not match:
-        match = re.search(r"waterflowkit_(\w+)_flow", flow1_sensor.lower())
-    if not match:
-        match = re.search(r"waterflowkit_(\w+)_flow", flow2_sensor.lower())
-
-    # Last resort: use entry_id
-    if not match:
-        short_id = entry.entry_id[:8]
-        LOGGER.info(
-            "Using entry_id as device ID for utility meters: %s",
-            short_id,
-        )
-    else:
-        short_id = match.group(1)
+    sources = {
+        line: entry.data.get(f"{line}_water_sensor") or "" for line in FLOW_LINES
+    }
+    short_id = _short_id([source for source in sources.values() if source], entry)
     meters_created = 0
 
-    # Create Flow1 meters
-    if flow1_sensor:
-        for cycle in METER_CYCLES:
-            if await _create_single_utility_meter(
-                hass,
-                name=f"WaterFlowKit {short_id} Flow1 {cycle.capitalize()}",
-                source=flow1_sensor,
-                cycle=cycle,
-                unique_id=f"waterflowkit_{short_id}_flow1_{cycle}",
-            ):
-                meters_created += 1
-
-    # Create Flow2 meters
-    if flow2_sensor:
-        for cycle in METER_CYCLES:
-            if await _create_single_utility_meter(
-                hass,
-                name=f"WaterFlowKit {short_id} Flow2 {cycle.capitalize()}",
-                source=flow2_sensor,
-                cycle=cycle,
-                unique_id=f"waterflowkit_{short_id}_flow2_{cycle}",
-            ):
-                meters_created += 1
+    for line, source in sources.items():
+        if not source:
+            continue
+        if line in BASE_FLOW_LINES:
+            meters_created += await _create_line_meters(hass, short_id, line, source)
+        else:
+            _create_line_meters_once_used(hass, entry, short_id, line, source)
 
     LOGGER.info(
-        "Utility meters setup complete for WaterFlowKit %s (%d meters for 2 sensors)",
+        "Utility meters setup complete for WaterFlowKit %s (%d meters)",
         short_id,
         meters_created,
     )

@@ -49,6 +49,7 @@ from .device_linking import (
     source_device_storage_key,
 )
 from .energy_runtime import async_schedule_energy_reconfigure
+from .products.waterflowkit.lines import FLOW_LINES
 
 # Water option keys (mirror config_flow); stored in entry.options
 CONF_CONTINUOUS_FLOW_MINUTES = "continuous_flow_minutes"
@@ -573,7 +574,7 @@ def ws_get_device_insights(
     if product_type == "waterflowkit":
         flows = {}
         cdata = data if isinstance(data, dict) else {}
-        for line in ("flow1", "flow2"):
+        for line in FLOW_LINES:
             if not entry.data.get(f"{line}_flow_sensor") and not entry.data.get(
                 f"{line}_water_sensor"
             ):

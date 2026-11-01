@@ -8,9 +8,11 @@ from custom_components.smarthomeshop.const import (
     DOMAIN,
     PRODUCT_P1METERKIT,
     PRODUCT_ULTIMATESENSOR,
+    PRODUCT_WATERP1METERKIT,
 )
 from custom_components.smarthomeshop import energy_runtime
 from custom_components.smarthomeshop.energy_runtime import (
+    async_enable_energy_for_first_p1,
     async_ensure_energy_preference,
     energy_runtime_enabled,
     remove_account_energy_registry_entries,
@@ -142,6 +144,54 @@ def test_explicit_disabled_preference_is_never_overridden() -> None:
     hass = _hass(store, PRODUCT_P1METERKIT)
 
     assert asyncio.run(async_ensure_energy_preference(hass)) is False
+
+
+def test_first_p1_kit_turns_energy_on_for_a_sensor_only_setup(monkeypatch) -> None:
+    scheduled = []
+    monkeypatch.setattr(
+        energy_runtime,
+        "async_schedule_energy_reconfigure",
+        lambda hass, enabled: scheduled.append(enabled),
+    )
+    store = _Store(sources={"energy_dashboard_enabled": False})
+    hass = _hass(store, PRODUCT_ULTIMATESENSOR)
+
+    asyncio.run(async_enable_energy_for_first_p1(hass, PRODUCT_WATERP1METERKIT))
+
+    assert store.sources["energy_dashboard_enabled"] is True
+    assert scheduled == [True]
+
+
+def test_adding_a_sensor_leaves_energy_disabled(monkeypatch) -> None:
+    scheduled = []
+    monkeypatch.setattr(
+        energy_runtime,
+        "async_schedule_energy_reconfigure",
+        lambda hass, enabled: scheduled.append(enabled),
+    )
+    store = _Store(sources={"energy_dashboard_enabled": False})
+    hass = _hass(store, PRODUCT_ULTIMATESENSOR)
+
+    asyncio.run(async_enable_energy_for_first_p1(hass, PRODUCT_ULTIMATESENSOR))
+
+    assert store.sources["energy_dashboard_enabled"] is False
+    assert scheduled == []
+
+
+def test_second_p1_kit_keeps_a_disabled_preference(monkeypatch) -> None:
+    scheduled = []
+    monkeypatch.setattr(
+        energy_runtime,
+        "async_schedule_energy_reconfigure",
+        lambda hass, enabled: scheduled.append(enabled),
+    )
+    store = _Store(sources={"energy_dashboard_enabled": False})
+    hass = _hass(store, PRODUCT_P1METERKIT)
+
+    asyncio.run(async_enable_energy_for_first_p1(hass, PRODUCT_WATERP1METERKIT))
+
+    assert store.sources["energy_dashboard_enabled"] is False
+    assert scheduled == []
 
 
 def test_disabling_energy_removes_account_devices_of_every_config_entry(

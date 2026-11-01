@@ -19,6 +19,7 @@ from .const import (
 )
 
 ENERGY_ENABLED = "energy_dashboard_enabled"
+_P1_PRODUCTS = (PRODUCT_P1METERKIT, PRODUCT_WATERP1METERKIT)
 _RECONFIGURE_TASK = "energy_runtime_reconfigure_task"
 _RECONFIGURE_TARGET = "energy_runtime_reconfigure_target"
 _ACCOUNT_REFRESH_TASK = "account_price_refresh_task"
@@ -61,8 +62,7 @@ def _legacy_installation_uses_energy(hass: HomeAssistant, store: Any) -> bool:
     if store.get_battery().get("enabled") or store.get_schedules():
         return True
     return any(
-        entry.data.get(CONF_PRODUCT_TYPE)
-        in (PRODUCT_P1METERKIT, PRODUCT_WATERP1METERKIT)
+        entry.data.get(CONF_PRODUCT_TYPE) in _P1_PRODUCTS
         for entry in hass.config_entries.async_entries(DOMAIN)
     )
 
@@ -90,7 +90,34 @@ async def async_ensure_energy_preference(hass: HomeAssistant) -> bool:
     return enabled
 
 
-async def _async_initial_energy_refresh(prices: Any, battery_plan: Any) -> None:
+async def async_enable_energy_for_first_p1(
+    hass: HomeAssistant, product_type: str
+) -> None:
+    """Turn Smart Energy on when the first P1 kit joins a sensor-only setup.
+
+    This only runs while a product is being added, so a preference the user
+    changed later stays untouched on every restart.
+    """
+    if product_type not in _P1_PRODUCTS:
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None or energy_runtime_enabled(hass):
+        return
+    if any(
+        entry.data.get(CONF_PRODUCT_TYPE) in _P1_PRODUCTS
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    ):
+        return
+    await store.async_set_energy_sources(
+        {**store.get_energy_sources(), ENERGY_ENABLED: True}
+    )
+    LOGGER.info("Enabled Smart Energy for the first P1 kit")
+    async_schedule_energy_reconfigure(hass, True)
+
+
+async def _async_initial_energy_refresh(
+    prices: Any, solar_forecast: Any, battery_plan: Any
+) -> None:
     """Warm the enabled Energy coordinators without delaying setup."""
     try:
         await asyncio.wait_for(prices.async_refresh(), timeout=35)
@@ -100,6 +127,15 @@ async def _async_initial_energy_refresh(prices: Any, battery_plan: Any) -> None:
         raise
     except Exception as err:  # External account errors must not fail setup.
         LOGGER.warning("Initial energy price refresh failed: %s", err)
+
+    try:
+        await asyncio.wait_for(solar_forecast.async_refresh(), timeout=35)
+    except TimeoutError:
+        LOGGER.warning("Initial solar forecast refresh timed out after 35 seconds")
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:
+        LOGGER.warning("Initial solar forecast refresh failed: %s", err)
 
     try:
         await asyncio.wait_for(battery_plan.async_refresh(), timeout=10)
@@ -121,10 +157,13 @@ async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
     from .battery_coordinator import BatteryPlanCoordinator
     from .price_coordinator import PriceCoordinator
     from .savings_tracker import async_setup_savings
+    from .solar_forecast import SolarForecastCoordinator
 
     prices = PriceCoordinator(hass)
+    solar_forecast = SolarForecastCoordinator(hass, prices)
     battery_plan = BatteryPlanCoordinator(hass, prices)
     domain_data["prices"] = prices
+    domain_data["solar_forecast"] = solar_forecast
     domain_data["battery_plan"] = battery_plan
     async_setup_savings(hass, prices)
 
@@ -134,9 +173,14 @@ async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
     domain_data["battery_price_unsubscribe"] = prices.async_add_listener(
         lambda: hass.async_create_task(battery_plan.async_request_refresh())
     )
+    # A coordinator only polls while something listens. The planner reads the
+    # forecast without listening, and accounts without one have no sensors.
+    domain_data["solar_forecast_unsubscribe"] = solar_forecast.async_add_listener(
+        lambda: None
+    )
     await async_register_battery_services(hass)
     domain_data["initial_energy_refresh_task"] = hass.async_create_task(
-        _async_initial_energy_refresh(prices, battery_plan),
+        _async_initial_energy_refresh(prices, solar_forecast, battery_plan),
         f"{DOMAIN}_initial_energy_refresh",
     )
 
@@ -149,9 +193,11 @@ async def async_stop_energy_runtime(hass: HomeAssistant) -> None:
         if task is not None and not task.done():
             task.cancel()
 
-    unsubscribe = domain_data.pop("battery_price_unsubscribe", None)
-    if unsubscribe:
-        unsubscribe()
+    for key in ("battery_price_unsubscribe", "solar_forecast_unsubscribe"):
+        unsubscribe = domain_data.pop(key, None)
+        if unsubscribe:
+            unsubscribe()
+    domain_data.pop("solar_forecast", None)
 
     savings = domain_data.pop("savings", None)
     if savings is not None:

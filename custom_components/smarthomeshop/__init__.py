@@ -42,6 +42,7 @@ from .energy_runtime import (
 from .products.waterp1meterkit import WaterP1MeterKitCoordinator
 from .products.watermeterkit import WaterMeterKitCoordinator
 from .products.waterflowkit import WaterFlowKitCoordinator
+from .products.waterflowkit.lines import add_new_flow_lines
 from .products.ultimatesensor import UltimateSensorCoordinator
 
 PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR]
@@ -199,9 +200,10 @@ async def async_setup_entry(
         hass.async_create_task(setup_water_meters(hass, entry, "watermeterkit"))
 
     elif product_type == PRODUCT_WATERFLOWKIT:
+        add_new_flow_lines(hass, entry)
         coordinator = WaterFlowKitCoordinator(hass, entry)
 
-        # Create utility meter helpers for both Flow1 and Flow2
+        # Create utility meter helpers for every flow line
         from .products.waterflowkit.utility_meters import (
             async_setup_utility_meters as setup_flowkit_meters,
         )

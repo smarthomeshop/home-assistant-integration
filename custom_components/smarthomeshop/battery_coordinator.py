@@ -129,6 +129,11 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             result.append(value)
         return result
 
+    def _account_solar_series(self, starts: list[str]) -> list[float] | None:
+        """Use the account forecast when no Home Assistant forecast is selected."""
+        forecast = self.hass.data.get(DOMAIN, {}).get("solar_forecast")
+        return forecast.series(starts) if forecast is not None else None
+
     async def _async_update_data(self) -> dict[str, Any]:
         config = self._config()
         if not config.get("enabled"):
@@ -142,6 +147,8 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         starts = [str(item.get("start") or "") for item in forecast]
         soc = self._state_number(config.get("soc_sensor"))
         solar = self._forecast_series(config.get("pv_forecast_sensor"), starts)
+        if solar is None:
+            solar = self._account_solar_series(starts)
         try:
             fallback_load_kw = max(
                 0.0, float(config.get("assumed_load_power") or 0.0) / 1000

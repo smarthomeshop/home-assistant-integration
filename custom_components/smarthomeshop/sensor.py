@@ -227,6 +227,42 @@ async def async_setup_entry(
 
     async_add_entities(entities)
 
+    solar_forecast = hass.data.get(DOMAIN, {}).get("solar_forecast")
+    if is_account_host and solar_forecast is not None:
+        _add_solar_sensors_when_available(
+            hass, config_entry, solar_forecast, async_add_entities
+        )
+
+
+@callback
+def _add_solar_sensors_when_available(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    solar_forecast: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+) -> None:
+    """Add the forecast sensors once the account turns out to have a forecast.
+
+    The answer arrives after setup, and an account without solar forecast
+    should not carry a row of unavailable sensors.
+    """
+    from .solar_sensors import build_solar_sensors
+
+    added = False
+
+    @callback
+    def _add() -> None:
+        nonlocal added
+        if added or not solar_forecast.available:
+            return
+        added = True
+        entities = build_solar_sensors(solar_forecast)
+        adopt_account_entities(hass, config_entry, "sensor", entities)
+        async_add_entities(entities)
+
+    config_entry.async_on_unload(solar_forecast.async_add_listener(_add))
+    _add()
+
 
 class SmartHomeShopWaterSensor(CoordinatorEntity[WaterCoordinator], SensorEntity):
     """SmartHomeShop water sensor entity."""

@@ -49,6 +49,8 @@ export interface Translations {
     subtitle: string;
     pipe1: string;
     pipe2: string;
+    pipe3: string;
+    pipe4: string;
     currentFlow: string;
     totalConsumption: string;
     flowRate: string;
@@ -185,9 +187,11 @@ const en: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Dual flow monitoring',
+    subtitle: 'Flow monitoring per pipe',
     pipe1: 'Pipe 1',
     pipe2: 'Pipe 2',
+    pipe3: 'Pipe 3',
+    pipe4: 'Pipe 4',
     currentFlow: 'Current flow',
     totalConsumption: 'Total consumption',
     flowRate: 'Flow rate',
@@ -316,9 +320,11 @@ const nl: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Dubbele flowmeting',
+    subtitle: 'Flowmeting per leiding',
     pipe1: 'Leiding 1',
     pipe2: 'Leiding 2',
+    pipe3: 'Leiding 3',
+    pipe4: 'Leiding 4',
     currentFlow: 'Huidige flow',
     totalConsumption: 'Totaal verbruik',
     flowRate: 'Debiet',
@@ -447,9 +453,11 @@ const de: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Doppelte Durchflussmessung',
+    subtitle: 'Durchflussmessung pro Leitung',
     pipe1: 'Leitung 1',
     pipe2: 'Leitung 2',
+    pipe3: 'Leitung 3',
+    pipe4: 'Leitung 4',
     currentFlow: 'Aktueller Durchfluss',
     totalConsumption: 'Gesamtverbrauch',
     flowRate: 'Durchflussrate',
@@ -578,9 +586,11 @@ const fr: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Double mesure de débit',
+    subtitle: 'Mesure de débit par conduite',
     pipe1: 'Conduite 1',
     pipe2: 'Conduite 2',
+    pipe3: 'Conduite 3',
+    pipe4: 'Conduite 4',
     currentFlow: 'Débit actuel',
     totalConsumption: 'Consommation totale',
     flowRate: 'Débit',
@@ -709,9 +719,11 @@ const es: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Medición de flujo dual',
+    subtitle: 'Medición de flujo por tubería',
     pipe1: 'Tubería 1',
     pipe2: 'Tubería 2',
+    pipe3: 'Tubería 3',
+    pipe4: 'Tubería 4',
     currentFlow: 'Flujo actual',
     totalConsumption: 'Consumo total',
     flowRate: 'Caudal',
@@ -840,9 +852,11 @@ const it: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Misurazione doppio flusso',
+    subtitle: 'Misurazione del flusso per tubo',
     pipe1: 'Tubo 1',
     pipe2: 'Tubo 2',
+    pipe3: 'Tubo 3',
+    pipe4: 'Tubo 4',
     currentFlow: 'Flusso attuale',
     totalConsumption: 'Consumo totale',
     flowRate: 'Portata',
@@ -971,9 +985,11 @@ const pt: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Medição de fluxo duplo',
+    subtitle: 'Medição de fluxo por tubo',
     pipe1: 'Tubo 1',
     pipe2: 'Tubo 2',
+    pipe3: 'Tubo 3',
+    pipe4: 'Tubo 4',
     currentFlow: 'Fluxo atual',
     totalConsumption: 'Consumo total',
     flowRate: 'Vazão',
@@ -1102,9 +1118,11 @@ const pl: Translations = {
   },
   waterflowkit: {
     title: 'WaterFlowKit',
-    subtitle: 'Podwójny pomiar przepływu',
+    subtitle: 'Pomiar przepływu na rurę',
     pipe1: 'Rura 1',
     pipe2: 'Rura 2',
+    pipe3: 'Rura 3',
+    pipe4: 'Rura 4',
     currentFlow: 'Bieżący przepływ',
     totalConsumption: 'Całkowite zużycie',
     flowRate: 'Przepływ',

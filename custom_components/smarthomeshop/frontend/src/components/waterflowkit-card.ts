@@ -1,7 +1,7 @@
 /**
  * SmartHomeShop WaterFlowKit Card
  * Beautiful animated pipe visualization with flowing water
- * Two independent pipes for separate water lines
+ * Up to four independent pipes for separate water lines
  */
 
 import { html, css, nothing, svg, LitElement, PropertyValues } from 'lit';
@@ -31,16 +31,63 @@ interface WaterFlowKitConfig {
   flow2_total_entity?: string;
   flow2_temp_entity?: string;
   flow2_show_temp?: boolean;
+  flow3_flow_entity?: string;
+  flow3_total_entity?: string;
+  flow3_temp_entity?: string;
+  flow3_show_temp?: boolean;
+  flow4_flow_entity?: string;
+  flow4_total_entity?: string;
+  flow4_temp_entity?: string;
+  flow4_show_temp?: boolean;
   flow1_name?: string;
   flow2_name?: string;
+  flow3_name?: string;
+  flow4_name?: string;
   show_flow1?: boolean;
   show_flow2?: boolean;
+  show_flow3?: boolean;
+  show_flow4?: boolean;
 }
+
+type FlowNum = 1 | 2 | 3 | 4;
+
+interface FlowData {
+  flow: number;
+  total: number;
+  temp: number | null;
+  hasTemp: boolean;
+  isFlowing: boolean;
+}
+
+const FLOW_NUMS: FlowNum[] = [1, 2, 3, 4];
+const PIPE_ROW_HEIGHT = 70;
+
+const FLOW_COLORS: Record<FlowNum, { main: string; light: string; pale: string }> = {
+  1: { main: '#0ea5e9', light: '#38bdf8', pale: '#7dd3fc' },
+  2: { main: '#22c55e', light: '#4ade80', pale: '#86efac' },
+  3: { main: '#f59e0b', light: '#fbbf24', pale: '#fcd34d' },
+  4: { main: '#a855f7', light: '#c084fc', pale: '#d8b4fe' },
+};
+
+const BUBBLE_STARTS: Record<FlowNum, [number, number, number]> = {
+  1: [80, 120, 160],
+  2: [90, 140, 180],
+  3: [70, 130, 170],
+  4: [100, 150, 190],
+};
+
+const BUBBLE_SECONDS: Record<FlowNum, [number, number, number]> = {
+  1: [1.5, 1.8, 2],
+  2: [1.6, 1.9, 2.1],
+  3: [1.7, 2, 2.2],
+  4: [1.4, 1.7, 1.9],
+};
 
 export class SmartHomeShopWaterFlowKitCard extends LitElement {
   @property({ attribute: false }) public hass?: HomeAssistant;
   protected readonly _localization = new CardLocalizationController(this, () => this.hass);
   @state() private _config: WaterFlowKitConfig = {};
+  private _detected = false;
 
   static styles = [
     baseStyles,
@@ -113,6 +160,14 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
         stroke: url(#waterGradient2);
         filter: drop-shadow(0 0 4px rgba(74, 222, 128, 0.5));
       }
+      .water-flow.flow3 {
+        stroke: url(#waterGradient3);
+        filter: drop-shadow(0 0 4px rgba(251, 191, 36, 0.5));
+      }
+      .water-flow.flow4 {
+        stroke: url(#waterGradient4);
+        filter: drop-shadow(0 0 4px rgba(192, 132, 252, 0.5));
+      }
       .water-flow.fast {
         animation-duration: 0.25s;
         stroke-dasharray: 20 6;
@@ -146,6 +201,8 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
       }
 
       .pipe-value.flow2 { fill: #22c55e; }
+      .pipe-value.flow3 { fill: #f59e0b; }
+      .pipe-value.flow4 { fill: #a855f7; }
       .pipe-unit { font-size: 10px; fill: var(--secondary-text-color); opacity: 0.7; }
       .temp-badge { font-size: 11px; font-weight: 600; }
       .temp-badge.cold { fill: #38bdf8; }
@@ -179,6 +236,16 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
         background: color-mix(in srgb, var(--success-color) 9%, var(--card-background-color));
       }
 
+      .flow-card.flow3.active {
+        border-color: color-mix(in srgb, #f59e0b 55%, var(--divider-color));
+        background: color-mix(in srgb, #f59e0b 9%, var(--card-background-color));
+      }
+
+      .flow-card.flow4.active {
+        border-color: color-mix(in srgb, #a855f7 55%, var(--divider-color));
+        background: color-mix(in srgb, #a855f7 9%, var(--card-background-color));
+      }
+
       .flow-card-header {
         display: flex;
         align-items: center;
@@ -203,6 +270,8 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
       .flow-icon.flow1 { background: color-mix(in srgb, var(--info-color) 14%, transparent); color: var(--info-color); }
       .flow-icon.flow2 { background: color-mix(in srgb, var(--success-color) 14%, transparent); color: var(--success-color); }
+      .flow-icon.flow3 { background: color-mix(in srgb, #f59e0b 14%, transparent); color: #f59e0b; }
+      .flow-icon.flow4 { background: color-mix(in srgb, #a855f7 14%, transparent); color: #a855f7; }
       .flow-icon ha-icon { --mdc-icon-size: 22px; color: currentColor; }
 
       .flow-name { font-size: 14px; font-weight: 600; color: var(--primary-text-color); }
@@ -285,7 +354,7 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
   protected updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties);
-    if (changedProperties.has('hass') && this.hass && !this._config.flow1_flow_entity) {
+    if (changedProperties.has('hass') && this.hass && !this._detected) {
       this._autoDetectEntities();
     }
   }
@@ -295,31 +364,23 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
     const entities = Object.keys(this.hass.states);
     const updates: Partial<WaterFlowKitConfig> = {};
+    // A chosen Flow1 sensor pins the kit, so a second kit cannot fill the other pipes.
+    const kitPrefix = this._config.flow1_flow_entity?.split('flow1')[0];
 
-    // Find WaterFlowKit entities by searching for "waterflowkit" and "flow1/flow2"
+    // Find WaterFlowKit entities by searching for "waterflowkit" and "flow1" to "flow4"
     for (const entityId of entities) {
       const lower = entityId.toLowerCase();
       if (!lower.includes('waterflowkit')) continue;
+      if (kitPrefix && !entityId.startsWith(kitPrefix)) continue;
 
-      // Flow1 entities
-      if (lower.includes('flow1')) {
+      for (const num of FLOW_NUMS) {
+        if (!lower.includes(`flow${num}`)) continue;
         if (lower.includes('current') && lower.includes('usage')) {
-          updates.flow1_flow_entity = entityId;
+          this._fillEntity(updates, `flow${num}_flow_entity` as const, entityId);
         } else if (lower.includes('total') && lower.includes('consumption')) {
-          updates.flow1_total_entity = entityId;
+          this._fillEntity(updates, `flow${num}_total_entity` as const, entityId);
         } else if (lower.includes('temperature')) {
-          updates.flow1_temp_entity = entityId;
-        }
-      }
-
-      // Flow2 entities
-      if (lower.includes('flow2')) {
-        if (lower.includes('current') && lower.includes('usage')) {
-          updates.flow2_flow_entity = entityId;
-        } else if (lower.includes('total') && lower.includes('consumption')) {
-          updates.flow2_total_entity = entityId;
-        } else if (lower.includes('temperature')) {
-          updates.flow2_temp_entity = entityId;
+          this._fillEntity(updates, `flow${num}_temp_entity` as const, entityId);
         }
       }
     }
@@ -328,18 +389,23 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
       this._config = { ...this._config, ...updates };
       debugLog('WaterFlowKit: Auto-detected entities:', updates);
     }
+    this._detected = Boolean(this._config.flow1_flow_entity);
   }
 
-  private _getFlowData(sensorNum: 1 | 2): {
-    flow: number;
-    total: number;
-    temp: number | null;
-    hasTemp: boolean;
-    isFlowing: boolean;
-  } {
-    const flowEntity = sensorNum === 1 ? this._config.flow1_flow_entity : this._config.flow2_flow_entity;
-    const totalEntity = sensorNum === 1 ? this._config.flow1_total_entity : this._config.flow2_total_entity;
-    const tempEntity = sensorNum === 1 ? this._config.flow1_temp_entity : this._config.flow2_temp_entity;
+  private _fillEntity(
+    updates: Partial<WaterFlowKitConfig>,
+    key: `flow${FlowNum}_${'flow' | 'total' | 'temp'}_entity`,
+    entityId: string
+  ): void {
+    if (!this._config[key]) {
+      updates[key] = entityId;
+    }
+  }
+
+  private _getFlowData(sensorNum: FlowNum): FlowData {
+    const flowEntity = this._config[`flow${sensorNum}_flow_entity` as const];
+    const totalEntity = this._config[`flow${sensorNum}_total_entity` as const];
+    const tempEntity = this._config[`flow${sensorNum}_temp_entity` as const];
 
     const flow = getEntityValue(this.hass, flowEntity) ?? 0;
     const total = getEntityValue(this.hass, totalEntity) ?? 0;
@@ -351,6 +417,22 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
     const isFlowing = flow > 0.01;
 
     return { flow, total, temp, hasTemp, isFlowing };
+  }
+
+  // Flow 3 and 4 exist on every V2 board, also without a sensor connected. They
+  // stay out of sight until they measure water, unless the card setting says otherwise.
+  private _isFlowVisible(num: FlowNum): boolean {
+    const setting = this._config[`show_flow${num}` as const];
+    if (num <= 2 || setting !== undefined) return setting !== false;
+    const data = this._getFlowData(num);
+    return data.total > 0 || data.isFlowing;
+  }
+
+  private _getFlowName(num: FlowNum): string {
+    return (
+      this._config[`flow${num}_name` as const] ||
+      getTranslations(this.hass).waterflowkit[`pipe${num}` as const]
+    );
   }
 
   private _getTempClass(temp: number | null): string {
@@ -370,18 +452,15 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
     if (!this.hass) return nothing;
 
     const t = getTranslations(this.hass);
-    const showFlow1 = this._config.show_flow1 !== false;
-    const showFlow2 = this._config.show_flow2 !== false;
-    const showFlow1Temp = this._config.flow1_show_temp !== false;
-    const showFlow2Temp = this._config.flow2_show_temp !== false;
+    const flows = FLOW_NUMS.filter(num => this._isFlowVisible(num)).map(num => ({
+      num,
+      data: this._getFlowData(num),
+      name: this._getFlowName(num),
+      showTemp: this._config[`flow${num}_show_temp` as const] !== false,
+    }));
 
-    const flow1 = this._getFlowData(1);
-    const flow2 = this._getFlowData(2);
-    const flow1Name = this._config.flow1_name || t.waterflowkit.pipe1;
-    const flow2Name = this._config.flow2_name || t.waterflowkit.pipe2;
-
-    const activeFlows = (showFlow1 && flow1.isFlowing ? 1 : 0) + (showFlow2 && flow2.isFlowing ? 1 : 0);
-    const totalFlow = (showFlow1 ? flow1.flow : 0) + (showFlow2 ? flow2.flow : 0);
+    const activeFlows = flows.filter(flow => flow.data.isFlowing).length;
+    const totalFlow = flows.reduce((sum, flow) => sum + flow.data.flow, 0);
 
     return html`
       <ha-card>
@@ -412,15 +491,12 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
 
           ${this._config.show_pipe_visualization !== false ? html`
             <div class="pipe-container">
-              ${this._renderPipesSVG(flow1, flow2, showFlow1, showFlow2, showFlow1Temp, showFlow2Temp)}
+              ${this._renderPipesSVG(flows)}
             </div>
           ` : nothing}
 
-          ${this._config.show_flow_cards !== false && showFlow1
-            ? this._renderFlowCard(1, flow1, flow1Name, showFlow1Temp)
-            : nothing}
-          ${this._config.show_flow_cards !== false && showFlow2
-            ? this._renderFlowCard(2, flow2, flow2Name, showFlow2Temp)
+          ${this._config.show_flow_cards !== false
+            ? flows.map(flow => this._renderFlowCard(flow.num, flow.data, flow.name, flow.showTemp))
             : nothing}
         </div>
       </ha-card>
@@ -428,35 +504,26 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
   }
 
   private _renderPipesSVG(
-    flow1: ReturnType<typeof this._getFlowData>,
-    flow2: ReturnType<typeof this._getFlowData>,
-    showFlow1: boolean,
-    showFlow2: boolean,
-    showFlow1Temp: boolean,
-    showFlow2Temp: boolean
+    flows: {
+      num: FlowNum;
+      data: FlowData;
+      name: string;
+      showTemp: boolean;
+    }[]
   ) {
-    const t = getTranslations(this.hass);
-    const flow1Active = showFlow1 && flow1.isFlowing;
-    const flow2Active = showFlow2 && flow2.isFlowing;
-    const showBoth = showFlow1 && showFlow2;
-    const height = showBoth ? 140 : 70;
-    const flow1Y = showBoth ? 35 : 35;
-    const flow2Y = showBoth ? 105 : 35;
+    const height = Math.max(flows.length, 1) * PIPE_ROW_HEIGHT;
 
     return svg`
       <svg class="pipes-svg" viewBox="0 0 360 ${height}" preserveAspectRatio="xMidYMid meet">
         <defs>
           <!-- Water flow gradients -->
-          <linearGradient id="waterGradient1" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" style="stop-color:#0ea5e9;stop-opacity:0.9" />
-            <stop offset="50%" style="stop-color:#38bdf8;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#0ea5e9;stop-opacity:0.9" />
-          </linearGradient>
-          <linearGradient id="waterGradient2" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" style="stop-color:#22c55e;stop-opacity:0.9" />
-            <stop offset="50%" style="stop-color:#4ade80;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#22c55e;stop-opacity:0.9" />
-          </linearGradient>
+          ${FLOW_NUMS.map(num => svg`
+            <linearGradient id="waterGradient${num}" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" style="stop-color:${FLOW_COLORS[num].main};stop-opacity:0.9" />
+              <stop offset="50%" style="stop-color:${FLOW_COLORS[num].light};stop-opacity:1" />
+              <stop offset="100%" style="stop-color:${FLOW_COLORS[num].main};stop-opacity:0.9" />
+            </linearGradient>
+          `)}
           <!-- Brass/copper gradient for sensor body -->
           <linearGradient id="brassGradient" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" style="stop-color:#d4a853" />
@@ -471,82 +538,71 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
           </linearGradient>
         </defs>
 
-        <!-- Flow 1 -->
-        ${showFlow1 ? svg`
-          <!-- Pipe -->
-          <path class="pipe" d="M 0 ${flow1Y} L 360 ${flow1Y}" />
-          <path class="pipe-inner" d="M 0 ${flow1Y} L 360 ${flow1Y}" />
-
-          <!-- Animated water flow -->
-          <path class="water-flow flow1 ${flow1Active ? 'active' : ''} ${this._getFlowSpeed(flow1.flow)}" d="M 0 ${flow1Y} L 360 ${flow1Y}" />
-
-          <!-- Water bubbles animation when flowing -->
-          ${flow1Active ? svg`
-            <circle class="water-bubble" cx="80" cy="${flow1Y}" r="3" fill="#38bdf8" opacity="0.6">
-              <animate attributeName="cx" from="80" to="360" dur="1.5s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.6;0.8;0.4;0.6" dur="1.5s" repeatCount="indefinite" />
-            </circle>
-            <circle class="water-bubble" cx="120" cy="${flow1Y - 2}" r="2" fill="#7dd3fc" opacity="0.5">
-              <animate attributeName="cx" from="120" to="400" dur="1.8s" repeatCount="indefinite" />
-            </circle>
-            <circle class="water-bubble" cx="160" cy="${flow1Y + 2}" r="2.5" fill="#38bdf8" opacity="0.5">
-              <animate attributeName="cx" from="160" to="440" dur="2s" repeatCount="indefinite" />
-            </circle>
-          ` : ''}
-
-          <!-- YF-Sensor SVG -->
-          ${this._renderYFSensor(55, flow1Y, flow1Active, 1)}
-
-          <!-- Labels -->
-          <text class="pipe-label" x="110" y="${flow1Y - 15}">${(this._config.flow1_name || t.waterflowkit.pipe1).toUpperCase()}</text>
-          <text class="pipe-value" x="220" y="${flow1Y + 5}">${formatNumber(flow1.flow, 2)}</text>
-          <text class="pipe-unit" x="265" y="${flow1Y + 5}">L/min</text>
-          ${showFlow1Temp && flow1.hasTemp ? svg`
-            <text class="temp-badge ${this._getTempClass(flow1.temp)}" x="320" y="${flow1Y + 5}">${formatNumber(flow1.temp!, 1)}°C</text>
-          ` : ''}
-        ` : ''}
-
-        <!-- Flow 2 -->
-        ${showFlow2 ? svg`
-          <!-- Pipe -->
-          <path class="pipe" d="M 0 ${flow2Y} L 360 ${flow2Y}" />
-          <path class="pipe-inner" d="M 0 ${flow2Y} L 360 ${flow2Y}" />
-
-          <!-- Animated water flow -->
-          <path class="water-flow flow2 ${flow2Active ? 'active' : ''} ${this._getFlowSpeed(flow2.flow)}" d="M 0 ${flow2Y} L 360 ${flow2Y}" />
-
-          <!-- Water bubbles animation when flowing -->
-          ${flow2Active ? svg`
-            <circle class="water-bubble" cx="90" cy="${flow2Y}" r="3" fill="#4ade80" opacity="0.6">
-              <animate attributeName="cx" from="90" to="370" dur="1.6s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.6;0.8;0.4;0.6" dur="1.6s" repeatCount="indefinite" />
-            </circle>
-            <circle class="water-bubble" cx="140" cy="${flow2Y + 2}" r="2" fill="#86efac" opacity="0.5">
-              <animate attributeName="cx" from="140" to="420" dur="1.9s" repeatCount="indefinite" />
-            </circle>
-            <circle class="water-bubble" cx="180" cy="${flow2Y - 2}" r="2.5" fill="#4ade80" opacity="0.5">
-              <animate attributeName="cx" from="180" to="460" dur="2.1s" repeatCount="indefinite" />
-            </circle>
-          ` : ''}
-
-          <!-- YF-Sensor SVG -->
-          ${this._renderYFSensor(55, flow2Y, flow2Active, 2)}
-
-          <!-- Labels -->
-          <text class="pipe-label" x="110" y="${flow2Y - 15}">${(this._config.flow2_name || t.waterflowkit.pipe2).toUpperCase()}</text>
-          <text class="pipe-value flow2" x="220" y="${flow2Y + 5}">${formatNumber(flow2.flow, 2)}</text>
-          <text class="pipe-unit" x="265" y="${flow2Y + 5}">L/min</text>
-          ${showFlow2Temp && flow2.hasTemp ? svg`
-            <text class="temp-badge ${this._getTempClass(flow2.temp)}" x="320" y="${flow2Y + 5}">${formatNumber(flow2.temp!, 1)}°C</text>
-          ` : ''}
-        ` : ''}
+        ${flows.map((flow, index) => this._renderPipe(
+          flow.num,
+          flow.data,
+          flow.name,
+          flow.showTemp,
+          PIPE_ROW_HEIGHT / 2 + index * PIPE_ROW_HEIGHT
+        ))}
       </svg>
     `;
   }
 
+  private _renderPipe(
+    num: FlowNum,
+    data: FlowData,
+    name: string,
+    showTemp: boolean,
+    y: number
+  ) {
+    return svg`
+      <!-- Pipe -->
+      <path class="pipe" d="M 0 ${y} L 360 ${y}" />
+      <path class="pipe-inner" d="M 0 ${y} L 360 ${y}" />
+
+      <!-- Animated water flow -->
+      <path class="water-flow flow${num} ${data.isFlowing ? 'active' : ''} ${this._getFlowSpeed(data.flow)}" d="M 0 ${y} L 360 ${y}" />
+
+      <!-- Water bubbles animation when flowing -->
+      ${data.isFlowing ? this._renderBubbles(num, y) : ''}
+
+      <!-- YF-Sensor SVG -->
+      ${this._renderYFSensor(55, y, data.isFlowing, num)}
+
+      <!-- Labels -->
+      <text class="pipe-label" x="110" y="${y - 15}">${name.toUpperCase()}</text>
+      <text class="pipe-value flow${num}" x="220" y="${y + 5}">${formatNumber(data.flow, 2)}</text>
+      <text class="pipe-unit" x="265" y="${y + 5}">L/min</text>
+      ${showTemp && data.hasTemp ? svg`
+        <text class="temp-badge ${this._getTempClass(data.temp)}" x="320" y="${y + 5}">${formatNumber(data.temp!, 1)}°C</text>
+      ` : ''}
+    `;
+  }
+
+  private _renderBubbles(num: FlowNum, y: number) {
+    const { light, pale } = FLOW_COLORS[num];
+    const [start1, start2, start3] = BUBBLE_STARTS[num];
+    const [seconds1, seconds2, seconds3] = BUBBLE_SECONDS[num];
+    const drift = num % 2 === 0 ? 2 : -2;
+
+    return svg`
+      <circle class="water-bubble" cx="${start1}" cy="${y}" r="3" fill="${light}" opacity="0.6">
+        <animate attributeName="cx" from="${start1}" to="${start1 + 280}" dur="${seconds1}s" repeatCount="indefinite" />
+        <animate attributeName="opacity" values="0.6;0.8;0.4;0.6" dur="${seconds1}s" repeatCount="indefinite" />
+      </circle>
+      <circle class="water-bubble" cx="${start2}" cy="${y + drift}" r="2" fill="${pale}" opacity="0.5">
+        <animate attributeName="cx" from="${start2}" to="${start2 + 280}" dur="${seconds2}s" repeatCount="indefinite" />
+      </circle>
+      <circle class="water-bubble" cx="${start3}" cy="${y - drift}" r="2.5" fill="${light}" opacity="0.5">
+        <animate attributeName="cx" from="${start3}" to="${start3 + 280}" dur="${seconds3}s" repeatCount="indefinite" />
+      </circle>
+    `;
+  }
+
   // Render YF-Sensor icon (brass flow sensor with red module)
-  private _renderYFSensor(x: number, y: number, isActive: boolean, flowNum: 1 | 2) {
-    const activeColor = flowNum === 1 ? '#0ea5e9' : '#22c55e';
+  private _renderYFSensor(x: number, y: number, isActive: boolean, flowNum: FlowNum) {
+    const activeColor = FLOW_COLORS[flowNum].main;
 
     return svg`
       <g transform="translate(${x - 20}, ${y - 12})">
@@ -583,9 +639,9 @@ export class SmartHomeShopWaterFlowKitCard extends LitElement {
     `;
   }
 
-  private _renderFlowCard(num: 1 | 2, data: ReturnType<typeof this._getFlowData>, name: string, showTemp: boolean) {
+  private _renderFlowCard(num: FlowNum, data: FlowData, name: string, showTemp: boolean) {
     const t = getTranslations(this.hass);
-    const flowEntity = num === 1 ? this._config.flow1_flow_entity : this._config.flow2_flow_entity;
+    const flowEntity = this._config[`flow${num}_flow_entity` as const];
     const tempClass = this._getTempClass(data.temp);
     const showTotal = this._config.show_total_consumption !== false;
     const showTemperature = showTemp && data.hasTemp;
@@ -763,6 +819,8 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
     }
     .pipe-title.flow1 ha-icon { color: #0ea5e9; }
     .pipe-title.flow2 ha-icon { color: #22c55e; }
+    .pipe-title.flow3 ha-icon { color: #f59e0b; }
+    .pipe-title.flow4 ha-icon { color: #a855f7; }
     .info-banner {
       background: color-mix(in srgb, var(--primary-color) 8%, var(--card-background-color));
       border: 1px solid color-mix(in srgb, var(--primary-color) 28%, var(--divider-color));
@@ -909,120 +967,84 @@ export class SmartHomeShopWaterFlowKitCardEditor extends LitElement {
 
       <div class="divider"></div>
 
-      <!-- Pipe 1 Section -->
-      <div class="pipe-section">
-        <div class="pipe-header">
-          <div class="pipe-title flow1">
-            <ha-icon icon="mdi:pipe"></ha-icon>
-            ${t.waterflowkit.pipe1}
-          </div>
-          <div class="checkbox-row">
-            <input type="checkbox" id="show_flow1"
-              .checked=${this._config.show_flow1 !== false}
-              @change=${(e: Event) => this._valueChanged('show_flow1', (e.target as HTMLInputElement).checked)} />
-            <label for="show_flow1">${t.common.show}</label>
-          </div>
-        </div>
-        <div class="form-row">
-          <label>${t.common.name}</label>
-          <input type="text"
-            .value=${this._config.flow1_name || ''}
-            placeholder="Hot water"
-            @input=${(e: Event) => this._valueChanged('flow1_name', (e.target as HTMLInputElement).value || undefined)} />
-        </div>
-        <div class="form-row">
-          <label>Flow sensor</label>
-          <select @change=${(e: Event) => this._valueChanged('flow1_flow_entity', (e.target as HTMLSelectElement).value || undefined)}>
-            <option value="">-- Select entity --</option>
-            ${flowEntities.map(entity => html`
-              <option value=${entity} ?selected=${entity === this._config.flow1_flow_entity}>${entity}</option>
-            `)}
-          </select>
-        </div>
-        <div class="form-row">
-          <label>Total consumption sensor</label>
-          <select @change=${(e: Event) => this._valueChanged('flow1_total_entity', (e.target as HTMLSelectElement).value || undefined)}>
-            <option value="">-- Select entity --</option>
-            ${totalEntities.map(entity => html`
-              <option value=${entity} ?selected=${entity === this._config.flow1_total_entity}>${entity}</option>
-            `)}
-          </select>
-        </div>
-        <div class="form-row">
-          <div class="checkbox-row">
-            <input type="checkbox" id="flow1_show_temp"
-              .checked=${this._config.flow1_show_temp !== false}
-              @change=${(e: Event) => this._valueChanged('flow1_show_temp', (e.target as HTMLInputElement).checked)} />
-            <label for="flow1_show_temp">${t.waterflowkit.showTemperature}</label>
-          </div>
-        </div>
-        ${this._config.flow1_show_temp !== false ? html`
-          <div class="form-row">
-            <label>Temperature sensor</label>
-            <select @change=${(e: Event) => this._valueChanged('flow1_temp_entity', (e.target as HTMLSelectElement).value || undefined)}>
-              <option value="">-- Select entity --</option>
-              ${tempEntities.map(entity => html`
-                <option value=${entity} ?selected=${entity === this._config.flow1_temp_entity}>${entity}</option>
-              `)}
-            </select>
-          </div>
-        ` : ''}
-      </div>
+      ${FLOW_NUMS.filter(num => this._hasLine(num)).map(num => this._renderPipeSection(num, flowEntities, totalEntities, tempEntities))}
+    `;
+  }
 
-      <!-- Pipe 2 Section -->
+  // Flow 3 and 4 only exist on the V2 board.
+  private _hasLine(num: FlowNum): boolean {
+    return num <= 2 || Object.keys(this.hass?.states ?? {}).some(entityId => entityId.includes(`flow${num}`));
+  }
+
+  private _renderPipeSection(
+    num: FlowNum,
+    flowEntities: string[],
+    totalEntities: string[],
+    tempEntities: string[]
+  ) {
+    const t = getTranslations(this.hass);
+    const showKey = `show_flow${num}` as const;
+    const nameKey = `flow${num}_name` as const;
+    const flowKey = `flow${num}_flow_entity` as const;
+    const totalKey = `flow${num}_total_entity` as const;
+    const tempKey = `flow${num}_temp_entity` as const;
+    const showTempKey = `flow${num}_show_temp` as const;
+    const placeholders: Partial<Record<FlowNum, string>> = { 1: 'Hot water', 2: 'Cold water' };
+
+    return html`
       <div class="pipe-section">
         <div class="pipe-header">
-          <div class="pipe-title flow2">
+          <div class="pipe-title flow${num}">
             <ha-icon icon="mdi:pipe"></ha-icon>
-            ${t.waterflowkit.pipe2}
+            ${t.waterflowkit[`pipe${num}` as const]}
           </div>
           <div class="checkbox-row">
-            <input type="checkbox" id="show_flow2"
-              .checked=${this._config.show_flow2 !== false}
-              @change=${(e: Event) => this._valueChanged('show_flow2', (e.target as HTMLInputElement).checked)} />
-            <label for="show_flow2">${t.common.show}</label>
+            <input type="checkbox" id=${showKey}
+              .checked=${this._config[showKey] !== false}
+              @change=${(e: Event) => this._valueChanged(showKey, (e.target as HTMLInputElement).checked)} />
+            <label for=${showKey}>${t.common.show}</label>
           </div>
         </div>
         <div class="form-row">
           <label>${t.common.name}</label>
           <input type="text"
-            .value=${this._config.flow2_name || ''}
-            placeholder="Cold water"
-            @input=${(e: Event) => this._valueChanged('flow2_name', (e.target as HTMLInputElement).value || undefined)} />
+            .value=${this._config[nameKey] || ''}
+            placeholder=${placeholders[num] ?? ''}
+            @input=${(e: Event) => this._valueChanged(nameKey, (e.target as HTMLInputElement).value || undefined)} />
         </div>
         <div class="form-row">
           <label>Flow sensor</label>
-          <select @change=${(e: Event) => this._valueChanged('flow2_flow_entity', (e.target as HTMLSelectElement).value || undefined)}>
+          <select @change=${(e: Event) => this._valueChanged(flowKey, (e.target as HTMLSelectElement).value || undefined)}>
             <option value="">-- Select entity --</option>
             ${flowEntities.map(entity => html`
-              <option value=${entity} ?selected=${entity === this._config.flow2_flow_entity}>${entity}</option>
+              <option value=${entity} ?selected=${entity === this._config[flowKey]}>${entity}</option>
             `)}
           </select>
         </div>
         <div class="form-row">
           <label>Total consumption sensor</label>
-          <select @change=${(e: Event) => this._valueChanged('flow2_total_entity', (e.target as HTMLSelectElement).value || undefined)}>
+          <select @change=${(e: Event) => this._valueChanged(totalKey, (e.target as HTMLSelectElement).value || undefined)}>
             <option value="">-- Select entity --</option>
             ${totalEntities.map(entity => html`
-              <option value=${entity} ?selected=${entity === this._config.flow2_total_entity}>${entity}</option>
+              <option value=${entity} ?selected=${entity === this._config[totalKey]}>${entity}</option>
             `)}
           </select>
         </div>
         <div class="form-row">
           <div class="checkbox-row">
-            <input type="checkbox" id="flow2_show_temp"
-              .checked=${this._config.flow2_show_temp !== false}
-              @change=${(e: Event) => this._valueChanged('flow2_show_temp', (e.target as HTMLInputElement).checked)} />
-            <label for="flow2_show_temp">${t.waterflowkit.showTemperature}</label>
+            <input type="checkbox" id=${showTempKey}
+              .checked=${this._config[showTempKey] !== false}
+              @change=${(e: Event) => this._valueChanged(showTempKey, (e.target as HTMLInputElement).checked)} />
+            <label for=${showTempKey}>${t.waterflowkit.showTemperature}</label>
           </div>
         </div>
-        ${this._config.flow2_show_temp !== false ? html`
+        ${this._config[showTempKey] !== false ? html`
           <div class="form-row">
             <label>Temperature sensor</label>
-            <select @change=${(e: Event) => this._valueChanged('flow2_temp_entity', (e.target as HTMLSelectElement).value || undefined)}>
+            <select @change=${(e: Event) => this._valueChanged(tempKey, (e.target as HTMLSelectElement).value || undefined)}>
               <option value="">-- Select entity --</option>
               ${tempEntities.map(entity => html`
-                <option value=${entity} ?selected=${entity === this._config.flow2_temp_entity}>${entity}</option>
+                <option value=${entity} ?selected=${entity === this._config[tempKey]}>${entity}</option>
               `)}
             </select>
           </div>

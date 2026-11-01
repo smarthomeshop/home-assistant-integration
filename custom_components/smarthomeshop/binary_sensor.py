@@ -29,6 +29,7 @@ from .products.base.water import (
 # agree on which entry carries the account-wide entities.
 from .sensor import adopt_account_entities, claim_account_host
 from .energy_runtime import energy_runtime_enabled
+from .products.waterflowkit.lines import line_label
 
 
 async def async_setup_entry(
@@ -57,8 +58,10 @@ async def async_setup_entry(
     # are visible in HA and the one-click leak automations have an entity.
     if product_type == PRODUCT_WATERFLOWKIT:
         entities.extend(
-            WaterFlowKitLeakBinarySensor(coordinator, config_entry, line, label)
-            for line, label in (("flow1", "Flow 1"), ("flow2", "Flow 2"))
+            WaterFlowKitLeakBinarySensor(
+                coordinator, config_entry, line, line_label(line)
+            )
+            for line in coordinator.lines
         )
 
     # Account-wide controls are absent when the complete Smart Energy module

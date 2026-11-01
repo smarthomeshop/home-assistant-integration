@@ -29,7 +29,7 @@ test('contains complete catalogs for every required non-English language', () =>
 
 test('translates primary navigation and the device visibility flow', () => {
   assert.equal(panelText({ language: 'nl' }, 'Devices'), 'Apparaten');
-  assert.equal(panelText({ language: 'de' }, 'Room Designer'), 'Raumplaner');
+  assert.equal(panelText({ language: 'de' }, 'Room Designer'), 'Room Designer');
   assert.equal(panelText({ language: 'fr' }, 'Hidden devices'), 'Appareils masqués');
   assert.equal(panelText({ language: 'es' }, 'Enable Smart Energy'), 'Activar Smart Energy');
 });

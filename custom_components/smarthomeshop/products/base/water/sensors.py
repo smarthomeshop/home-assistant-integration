@@ -16,7 +16,12 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import PERCENTAGE, UnitOfVolume, UnitOfVolumeFlowRate
+from homeassistant.const import (
+    PERCENTAGE,
+    UnitOfTime,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+)
 from homeassistant.util import dt as dt_util
 
 from .coordinator import WaterUsageData
@@ -177,7 +182,7 @@ WATER_SENSORS: tuple[WaterSensorEntityDescription, ...] = (
         key="baseline_learning_days",
         name="Baseline learning days (CC)",
         icon="mdi:school",
-        native_unit_of_measurement="dagen",
+        native_unit_of_measurement=UnitOfTime.DAYS,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: data.baseline_status.get("learning_days", 0) if data.baseline_status else 0,
         attr_fn=lambda data: {

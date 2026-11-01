@@ -1,6 +1,6 @@
 """WaterFlowKit product module - Dual water flow monitoring.
 
-This product has 2 water flow sensors (Flow1 and Flow2).
+This product has up to 4 water flow sensors (Flow1 to Flow4).
 """
 
 from .coordinator import WaterFlowKitCoordinator

@@ -315,43 +315,6 @@ export class EnergyHub extends LitElement {
     .settings-intro-icon ha-icon { --mdc-icon-size: 21px; }
     .settings-intro-title { font-size: 16px; font-weight: 720; color: var(--primary-text-color); }
     .settings-intro-text { margin-top: 3px; font-size: 12.5px; line-height: 1.5; color: var(--secondary-text-color); }
-    .alpha-notice {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      margin: 14px 0 20px;
-      padding: 14px 16px;
-      border: 1px solid color-mix(in srgb, var(--shs-amber) 34%, var(--divider-color));
-      border-radius: 14px;
-      background: color-mix(in srgb, var(--shs-amber) 9%, var(--card-background-color));
-    }
-    .alpha-icon {
-      width: 36px;
-      height: 36px;
-      display: grid;
-      place-items: center;
-      flex: 0 0 auto;
-      border-radius: 9px;
-      color: var(--shs-amber);
-      background: color-mix(in srgb, var(--shs-amber) 15%, var(--card-background-color));
-    }
-    .alpha-icon ha-icon { --mdc-icon-size: 20px; }
-    .alpha-copy { flex: 1; min-width: 0; }
-    .alpha-title { font-size: 14px; font-weight: 700; color: var(--primary-text-color); }
-    .alpha-text { margin-top: 3px; color: var(--secondary-text-color); font-size: 12.5px; line-height: 1.5; }
-    .alpha-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 10px;
-      color: var(--shs-blue);
-      font-size: 12.5px;
-      font-weight: 700;
-      text-decoration: none;
-    }
-    .alpha-link:hover { text-decoration: underline; }
-    .alpha-link:focus-visible { outline: 2px solid var(--shs-blue); outline-offset: 3px; border-radius: 3px; }
-    .alpha-link ha-icon { --mdc-icon-size: 16px; }
     .p1-card { border: 1px solid var(--divider-color); border-radius: 14px; padding: 14px 16px; background: var(--card-background-color); }
     .p1-head { display: flex; align-items: flex-start; gap: 10px; }
     .p1-head ha-icon { color: var(--shs-primary); --mdc-icon-size: 20px; margin-top: 1px; }
@@ -924,7 +887,6 @@ export class EnergyHub extends LitElement {
       .smart-list { grid-template-columns: 1fr; }
       .smart-item { border-right: 0; border-bottom: 1px solid var(--shs-border); }
       .smart-item:last-child { border-bottom: 0; }
-      .alpha-notice { padding: 13px 14px; }
       .settings-tabs-shell { margin-inline: -4px; }
       .settings-tab { min-width: 118px; }
       .settings-page-head { margin-bottom: 16px; }
@@ -3319,26 +3281,6 @@ export class EnergyHub extends LitElement {
             <div>
               <div class="settings-intro-title">Smart energy automations</div>
               <div class="settings-intro-text">Configure price, solar, EV and inverter automations once for the whole home.</div>
-            </div>
-          </div>
-          <div class="alpha-notice" role="note" aria-label="Smart Energy alpha notice">
-            <div class="alpha-icon"><ha-icon icon="mdi:flask-outline"></ha-icon></div>
-            <div class="alpha-copy">
-              <div class="alpha-title">Smart Energy is in alpha</div>
-              <div class="alpha-text">
-                These features are still in active development. If you use or test them, join us on Discord.
-                Tell us what you are setting up, what works, what does not, and share feedback to help shape the next release.
-              </div>
-              <a
-                class="alpha-link"
-                href="https://smarthomeshop.io/discord"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <ha-icon icon="mdi:discord"></ha-icon>
-                Join the SmartHomeShop Discord
-                <ha-icon icon="mdi:open-in-new"></ha-icon>
-              </a>
             </div>
           </div>
           ${selectedP1 ? html`
