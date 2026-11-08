@@ -1,18 +1,18 @@
 {
   "domain": "smarthomeshop",
   "name": "SmartHomeShop.io",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@smarthomeshop"
   ],
   "config_flow": true,
-  "after_dependencies": [
-    "recorder"
-  ],
   "dependencies": [
     "energy",
     "esphome",
-    "http",
     "frontend",
+    "http",
     "panel_custom",
     "websocket_api"
   ],
