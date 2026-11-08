@@ -2250,6 +2250,88 @@ const CARD_TRANSLATIONS = {
   }
 } as Record<string, Record<string, string>>;
 
+const LIVE_HOME_CARD_TRANSLATIONS: Record<'nl' | 'de' | 'fr' | 'es', Record<string, string>> = {
+  nl: {
+    'Live Home': 'Live Huis', 'Whole-home presence from SmartHomeShop radar sensors': 'Aanwezigheid in het hele huis via SmartHomeShop-radarsensoren',
+    'tracked now': 'nu gevolgd', 'Room level only': 'alleen kamerniveau', 'Data unavailable': 'gegevens niet beschikbaar', Degraded: 'Beperkt', '{offline} of {total} sensors offline': '{offline} van {total} sensoren offline',
+    'people now': 'personen nu', 'active rooms': 'actieve kamers', 'Shown floor': 'Getoonde verdieping', 'All floors': 'Alle verdiepingen',
+    'Ground floor': 'Begane grond', Basement: 'Kelder', 'First floor': 'Eerste verdieping', 'Exact position': 'Exacte positie', 'Room presence': 'Aanwezigheid per kamer', 'Rotate view': 'Weergave draaien',
+    'Building your live home...': 'Je live huis wordt opgebouwd...', 'Live Home unavailable': 'Live Huis niet beschikbaar', 'Create your first room': 'Maak je eerste kamer',
+    'Draw or import rooms in SmartHomeShop Room Designer. This card combines them automatically.': 'Teken of importeer kamers in SmartHomeShop Room Designer. Deze kaart voegt ze automatisch samen.',
+    'Could not load Live Home. Open the SmartHomeShop panel and check Room Designer.': 'Live Huis kon niet worden geladen. Open het SmartHomeShop-paneel en controleer Room Designer.',
+    present: 'aanwezig', 'View height (px)': 'Weergavehoogte (px)', 'Choose one floor or show the complete home.': 'Kies één verdieping of toon het volledige huis.',
+    'Show room names': 'Kamernamen tonen', 'Show empty rooms': 'Lege kamers tonen', 'Show live summary': 'Live samenvatting tonen',
+    'Show room status': 'Kamerstatus tonen', 'Room status': 'Kamerstatus', 'Floor separation': 'Afstand tussen verdiepingen', 'Use less separation for a larger whole-home view.': 'Gebruik minder afstand voor een grotere weergave van het hele huis.', 'Rooms are ready, but no compatible radar sensor is linked yet. Open SmartHomeShop Room Designer to link a sensor.': 'De kamers zijn gereed, maar er is nog geen compatibele radarsensor gekoppeld. Open SmartHomeShop Room Designer om een sensor te koppelen.', 'Live 3D home presence view': 'Live 3D-weergave van aanwezigheid in huis',
+    'Rooms and radar sensors are managed in SmartHomeShop Room Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.': 'Kamers en radarsensoren beheer je in SmartHomeShop Room Designer. Exacte posities verschijnen wanneer de radar coördinaten levert; anders toont de kaart eerlijk aanwezigheid op kamerniveau.',
+  },
+  de: {
+    'Live Home': 'Live-Zuhause', 'Whole-home presence from SmartHomeShop radar sensors': 'Anwesenheit im ganzen Haus mit SmartHomeShop-Radarsensoren', 'people now': 'Personen jetzt', 'active rooms': 'aktive Räume', 'Shown floor': 'Angezeigte Etage', 'All floors': 'Alle Etagen', 'Ground floor': 'Erdgeschoss', Basement: 'Keller', 'First floor': 'Erste Etage', 'Exact position': 'Exakte Position', 'Room presence': 'Raumanwesenheit', 'Rotate view': 'Ansicht drehen',
+    'tracked now': 'jetzt erfasst', 'Room level only': 'nur Raumebene', 'Data unavailable': 'Daten nicht verfügbar', Degraded: 'Eingeschränkt', '{offline} of {total} sensors offline': '{offline} von {total} Sensoren offline',
+    'Building your live home...': 'Ihr Live-Zuhause wird aufgebaut...', 'Live Home unavailable': 'Live-Zuhause nicht verfügbar', 'Create your first room': 'Ersten Raum erstellen', 'Draw or import rooms in SmartHomeShop Room Designer. This card combines them automatically.': 'Zeichnen oder importieren Sie Räume im SmartHomeShop Room Designer. Diese Karte kombiniert sie automatisch.', 'Could not load Live Home. Open the SmartHomeShop panel and check Room Designer.': 'Live-Zuhause konnte nicht geladen werden. Öffnen Sie das SmartHomeShop-Panel und prüfen Sie Room Designer.', present: 'anwesend', 'View height (px)': 'Ansichtshöhe (px)', 'Choose one floor or show the complete home.': 'Eine Etage wählen oder das ganze Haus anzeigen.', 'Show room names': 'Raumnamen anzeigen', 'Show empty rooms': 'Leere Räume anzeigen', 'Show live summary': 'Live-Zusammenfassung anzeigen', 'Show room status': 'Raumstatus anzeigen', 'Room status': 'Raumstatus', 'Floor separation': 'Etagenabstand', 'Use less separation for a larger whole-home view.': 'Weniger Abstand vergrößert die Gesamtansicht des Hauses.', 'Rooms are ready, but no compatible radar sensor is linked yet. Open SmartHomeShop Room Designer to link a sensor.': 'Die Räume sind bereit, aber noch kein kompatibler Radarsensor ist verknüpft. Öffnen Sie SmartHomeShop Room Designer, um einen Sensor zu verknüpfen.', 'Live 3D home presence view': 'Live-3D-Ansicht der Anwesenheit im Haus', 'Rooms and radar sensors are managed in SmartHomeShop Room Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.': 'Räume und Radarsensoren werden im SmartHomeShop Room Designer verwaltet. Exakte Positionen erscheinen bei verfügbaren Koordinaten; andernfalls zeigt die Karte ehrlich die Anwesenheit pro Raum.',
+  },
+  fr: {
+    'Live Home': 'Maison en direct', 'Whole-home presence from SmartHomeShop radar sensors': 'Présence dans toute la maison via les radars SmartHomeShop', 'people now': 'personnes maintenant', 'active rooms': 'pièces actives', 'Shown floor': 'Étage affiché', 'All floors': 'Tous les étages', 'Ground floor': 'Rez-de-chaussée', Basement: 'Sous-sol', 'First floor': 'Premier étage', 'Exact position': 'Position exacte', 'Room presence': 'Présence dans la pièce', 'Rotate view': 'Faire pivoter la vue',
+    'tracked now': 'suivies maintenant', 'Room level only': 'niveau pièce uniquement', 'Data unavailable': 'données indisponibles', Degraded: 'Dégradé', '{offline} of {total} sensors offline': '{offline} capteur(s) hors ligne sur {total}',
+    'Building your live home...': 'Création de votre maison en direct...', 'Live Home unavailable': 'Maison en direct indisponible', 'Create your first room': 'Créez votre première pièce', 'Draw or import rooms in SmartHomeShop Room Designer. This card combines them automatically.': 'Dessinez ou importez les pièces dans SmartHomeShop Room Designer. Cette carte les combine automatiquement.', 'Could not load Live Home. Open the SmartHomeShop panel and check Room Designer.': 'Impossible de charger la maison en direct. Ouvrez le panneau SmartHomeShop et vérifiez Room Designer.', present: 'présent', 'View height (px)': 'Hauteur de la vue (px)', 'Choose one floor or show the complete home.': 'Choisissez un étage ou affichez toute la maison.', 'Show room names': 'Afficher les noms des pièces', 'Show empty rooms': 'Afficher les pièces vides', 'Show live summary': 'Afficher le résumé en direct', 'Show room status': 'Afficher l’état des pièces', 'Room status': 'État des pièces', 'Floor separation': 'Espacement des étages', 'Use less separation for a larger whole-home view.': 'Réduisez l’espacement pour agrandir la vue de toute la maison.', 'Rooms are ready, but no compatible radar sensor is linked yet. Open SmartHomeShop Room Designer to link a sensor.': 'Les pièces sont prêtes, mais aucun radar compatible n’est encore lié. Ouvrez SmartHomeShop Room Designer pour lier un capteur.', 'Live 3D home presence view': 'Vue 3D en direct de la présence dans la maison', 'Rooms and radar sensors are managed in SmartHomeShop Room Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.': 'Les pièces et radars sont gérés dans SmartHomeShop Room Designer. Les positions exactes apparaissent avec les coordonnées du radar ; sinon la carte indique honnêtement la présence au niveau de la pièce.',
+  },
+  es: {
+    'Live Home': 'Casa en directo', 'Whole-home presence from SmartHomeShop radar sensors': 'Presencia en toda la casa mediante radares SmartHomeShop', 'people now': 'personas ahora', 'active rooms': 'habitaciones activas', 'Shown floor': 'Planta mostrada', 'All floors': 'Todas las plantas', 'Ground floor': 'Planta baja', Basement: 'Sótano', 'First floor': 'Primera planta', 'Exact position': 'Posición exacta', 'Room presence': 'Presencia en la habitación', 'Rotate view': 'Girar vista',
+    'tracked now': 'seguidas ahora', 'Room level only': 'solo a nivel de habitación', 'Data unavailable': 'datos no disponibles', Degraded: 'Degradado', '{offline} of {total} sensors offline': '{offline} de {total} sensores sin conexión',
+    'Building your live home...': 'Creando su casa en directo...', 'Live Home unavailable': 'Casa en directo no disponible', 'Create your first room': 'Cree su primera habitación', 'Draw or import rooms in SmartHomeShop Room Designer. This card combines them automatically.': 'Dibuje o importe habitaciones en SmartHomeShop Room Designer. Esta tarjeta las combina automáticamente.', 'Could not load Live Home. Open the SmartHomeShop panel and check Room Designer.': 'No se pudo cargar Casa en directo. Abra el panel SmartHomeShop y compruebe Room Designer.', present: 'presente', 'View height (px)': 'Altura de vista (px)', 'Choose one floor or show the complete home.': 'Elija una planta o muestre la casa completa.', 'Show room names': 'Mostrar nombres de habitaciones', 'Show empty rooms': 'Mostrar habitaciones vacías', 'Show live summary': 'Mostrar resumen en directo', 'Show room status': 'Mostrar estado de habitaciones', 'Room status': 'Estado de habitaciones', 'Floor separation': 'Separación entre plantas', 'Use less separation for a larger whole-home view.': 'Use menos separación para ampliar la vista de toda la casa.', 'Rooms are ready, but no compatible radar sensor is linked yet. Open SmartHomeShop Room Designer to link a sensor.': 'Las habitaciones están listas, pero aún no hay un radar compatible vinculado. Abra SmartHomeShop Room Designer para vincular un sensor.', 'Live 3D home presence view': 'Vista 3D en directo de presencia en la casa', 'Rooms and radar sensors are managed in SmartHomeShop Room Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.': 'Las habitaciones y radares se gestionan en SmartHomeShop Room Designer. Se muestran posiciones exactas cuando el radar proporciona coordenadas; en caso contrario, la tarjeta indica honestamente la presencia por habitación.',
+  },
+};
+
+for (const language of ['nl', 'de', 'fr', 'es'] as const) {
+  Object.assign(CARD_TRANSLATIONS[language], LIVE_HOME_CARD_TRANSLATIONS[language]);
+}
+
+const LIVE_HOME_RELIABILITY_TRANSLATIONS: Record<'nl' | 'de' | 'fr' | 'es', Record<string, string>> = {
+  nl: {
+    'Try again': 'Probeer opnieuw', 'Presence': 'Aanwezigheid', 'Presence detected': 'Aanwezigheid gedetecteerd', 'person now': 'persoon nu',
+    'Live Home is showing the last known layout. Refreshing failed; it will try again automatically.': 'Live Huis toont de laatst bekende indeling. Vernieuwen is mislukt; er wordt automatisch opnieuw geprobeerd.',
+    '{count} radar sensors are offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radarsensoren zijn offline of niet beschikbaar. Vrije kamers blijven duidelijk onderscheiden van kamers zonder sensorgegevens.',
+    'No linked sensor': 'Geen gekoppelde sensor', Clear: 'Vrij', 'Room-level presence': 'Aanwezigheid per kamer', '{count} person present': '{count} persoon aanwezig', '{count} people present': '{count} personen aanwezig', 'Floor {count}': 'Verdieping {count}', 'Basement {count}': 'Kelder {count}',
+    'active room': 'actieve kamer', '{count} radar sensor is offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radarsensor is offline of niet beschikbaar. Vrije kamers blijven duidelijk onderscheiden van kamers zonder sensorgegevens.',
+    'Radar sensors are linked, but no live data is available. Check that the devices are online.': 'Radarsensoren zijn gekoppeld, maar er zijn geen live gegevens beschikbaar. Controleer of de apparaten online zijn.',
+    'tracked now': 'nu gevolgd', 'Room level only': 'alleen kamerniveau', 'Data unavailable': 'gegevens niet beschikbaar', Degraded: 'Beperkt',
+    '{offline} of {total} sensors offline': '{offline} van {total} sensoren offline',
+  },
+  de: {
+    'Try again': 'Erneut versuchen', 'Presence': 'Anwesenheit', 'Presence detected': 'Anwesenheit erkannt', 'person now': 'Person jetzt',
+    'Live Home is showing the last known layout. Refreshing failed; it will try again automatically.': 'Live-Zuhause zeigt das zuletzt bekannte Layout. Die Aktualisierung ist fehlgeschlagen; sie wird automatisch erneut versucht.',
+    '{count} radar sensors are offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} Radarsensoren sind offline oder nicht verfügbar. Freie Räume bleiben klar von Räumen ohne Sensordaten getrennt.',
+    'No linked sensor': 'Kein verknüpfter Sensor', Clear: 'Frei', 'Room-level presence': 'Anwesenheit auf Raumebene', '{count} person present': '{count} Person anwesend', '{count} people present': '{count} Personen anwesend', 'Floor {count}': 'Etage {count}', 'Basement {count}': 'Keller {count}',
+    'active room': 'aktiver Raum', '{count} radar sensor is offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} Radarsensor ist offline oder nicht verfügbar. Freie Räume bleiben klar von Räumen ohne Sensordaten getrennt.',
+    'Radar sensors are linked, but no live data is available. Check that the devices are online.': 'Radarsensoren sind verknüpft, aber es sind keine Live-Daten verfügbar. Prüfen Sie, ob die Geräte online sind.',
+    'tracked now': 'jetzt erfasst', 'Room level only': 'nur Raumebene', 'Data unavailable': 'Daten nicht verfügbar', Degraded: 'Eingeschränkt',
+    '{offline} of {total} sensors offline': '{offline} von {total} Sensoren offline',
+  },
+  fr: {
+    'Try again': 'Réessayer', 'Presence': 'Présence', 'Presence detected': 'Présence détectée', 'person now': 'personne maintenant',
+    'Live Home is showing the last known layout. Refreshing failed; it will try again automatically.': 'Maison en direct affiche le dernier plan connu. L’actualisation a échoué ; une nouvelle tentative sera faite automatiquement.',
+    '{count} radar sensors are offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radars sont hors ligne ou indisponibles. Les pièces libres restent clairement distinctes des pièces sans données capteur.',
+    'No linked sensor': 'Aucun capteur lié', Clear: 'Libre', 'Room-level presence': 'Présence au niveau de la pièce', '{count} person present': '{count} personne présente', '{count} people present': '{count} personnes présentes', 'Floor {count}': 'Étage {count}', 'Basement {count}': 'Sous-sol {count}',
+    'active room': 'pièce active', '{count} radar sensor is offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radar est hors ligne ou indisponible. Les pièces libres restent clairement distinctes des pièces sans données capteur.',
+    'Radar sensors are linked, but no live data is available. Check that the devices are online.': 'Des capteurs radar sont liés, mais aucune donnée en direct n’est disponible. Vérifiez que les appareils sont en ligne.',
+    'tracked now': 'suivies maintenant', 'Room level only': 'niveau pièce uniquement', 'Data unavailable': 'données indisponibles', Degraded: 'Dégradé',
+    '{offline} of {total} sensors offline': '{offline} capteur(s) hors ligne sur {total}',
+  },
+  es: {
+    'Try again': 'Intentar de nuevo', 'Presence': 'Presencia', 'Presence detected': 'Presencia detectada', 'person now': 'persona ahora',
+    'Live Home is showing the last known layout. Refreshing failed; it will try again automatically.': 'Casa en directo muestra la última distribución conocida. La actualización falló; se volverá a intentar automáticamente.',
+    '{count} radar sensors are offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radares están sin conexión o no disponibles. Las habitaciones libres permanecen claramente separadas de las habitaciones sin datos del sensor.',
+    'No linked sensor': 'Sin sensor vinculado', Clear: 'Libre', 'Room-level presence': 'Presencia por habitación', '{count} person present': '{count} persona presente', '{count} people present': '{count} personas presentes', 'Floor {count}': 'Planta {count}', 'Basement {count}': 'Sótano {count}',
+    'active room': 'habitación activa', '{count} radar sensor is offline or unavailable. Clear rooms remain separate from unavailable rooms.': '{count} radar está sin conexión o no disponible. Las habitaciones libres permanecen claramente separadas de las habitaciones sin datos del sensor.',
+    'Radar sensors are linked, but no live data is available. Check that the devices are online.': 'Hay sensores radar vinculados, pero no hay datos en directo. Compruebe que los dispositivos estén en línea.',
+    'tracked now': 'seguidas ahora', 'Room level only': 'solo a nivel de habitación', 'Data unavailable': 'datos no disponibles', Degraded: 'Degradado',
+    '{offline} of {total} sensors offline': '{offline} de {total} sensores sin conexión',
+  },
+};
+
+for (const language of ['nl', 'de', 'fr', 'es'] as const) {
+  Object.assign(CARD_TRANSLATIONS[language], LIVE_HOME_RELIABILITY_TRANSLATIONS[language]);
+}
+
 export const cardText = (hass: unknown, source: string): string => {
   const language = getLanguageFromHass(hass);
   return CARD_TRANSLATIONS[language]?.[source] || source;

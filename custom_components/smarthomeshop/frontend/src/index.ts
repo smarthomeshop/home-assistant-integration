@@ -7,6 +7,7 @@
  * - smarthomeshop-ultimatesensor-card: Presence detection & environment (UltimateSensor, UltimateSensor Mini)
  * - smarthomeshop-p1meterkit-card: Electricity, tariff and phase monitoring (P1MeterKit)
  * - smarthomeshop-ceilsense-card: Ceiling presence, zones and room climate (CeilSense)
+ * - smarthomeshop-home-presence-card: Whole-home live 3D presence
  * - smarthomeshop-energy-*-card: Live energy, prices, history and savings
  */
 
@@ -38,6 +39,10 @@ import { SmartHomeShopEnergyCostCard } from './components/energy-cost-card';
 import { SmartHomeShopEnergySavingsCard } from './components/energy-savings-card';
 import { SmartHomeShopEnergyAutomationsCard } from './components/energy-automations-card';
 import { SmartHomeShopEnergyCardEditor } from './components/energy-card-editor';
+import {
+  SmartHomeShopHomePresenceCard,
+  SmartHomeShopHomePresenceCardEditor,
+} from './components/home-presence-card';
 
 // @ts-ignore - VERSION is replaced by rollup at build time
 const VERSION = '__VERSION__';
@@ -153,6 +158,7 @@ const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
   ['smarthomeshop-energy-cost-card', SmartHomeShopEnergyCostCard],
   ['smarthomeshop-energy-savings-card', SmartHomeShopEnergySavingsCard],
   ['smarthomeshop-energy-automations-card', SmartHomeShopEnergyAutomationsCard],
+  ['smarthomeshop-home-presence-card', SmartHomeShopHomePresenceCard],
   ['smarthomeshop-water-card-editor', SmartHomeShopWaterCardEditor],
   ['smarthomeshop-waterp1-card-editor', SmartHomeShopWaterP1CardEditor],
   ['smarthomeshop-waterflowkit-card-editor', SmartHomeShopWaterFlowKitCardEditor],
@@ -160,6 +166,7 @@ const customElementRegistrations: Array<[string, CustomElementConstructor]> = [
   ['smarthomeshop-p1meterkit-card-editor', SmartHomeShopP1MeterKitCardEditor],
   ['smarthomeshop-ceilsense-card-editor', SmartHomeShopCeilSenseCardEditor],
   ['smarthomeshop-energy-card-editor', SmartHomeShopEnergyCardEditor],
+  ['smarthomeshop-home-presence-card-editor', SmartHomeShopHomePresenceCardEditor],
   ['smarthomeshop-sensor-settings', SmartHomeShopSensorSettings],
   ['smarthomeshop-zone-editor', SmartHomeShopZoneEditor],
 ];
@@ -260,6 +267,14 @@ window.customCards.push({
 });
 
 window.customCards.push({
+  type: 'smarthomeshop-home-presence-card',
+  name: 'SmartHomeShop Live Home Card',
+  description: 'Live whole-home 3D presence for UltimateSensor, CeilSense and WallSense',
+  preview: true,
+  documentationURL: 'https://smarthomeshop.io',
+});
+
+window.customCards.push({
   type: 'smarthomeshop-energy-live-card',
   name: 'SmartHomeShop Live Energy Card',
   description: 'Live home consumption, grid, solar and battery power',
@@ -327,6 +342,8 @@ export {
   SmartHomeShopEnergySavingsCard,
   SmartHomeShopEnergyAutomationsCard,
   SmartHomeShopEnergyCardEditor,
+  SmartHomeShopHomePresenceCard,
+  SmartHomeShopHomePresenceCardEditor,
   SmartHomeShopSensorSettings,
   SmartHomeShopZoneEditor
 };

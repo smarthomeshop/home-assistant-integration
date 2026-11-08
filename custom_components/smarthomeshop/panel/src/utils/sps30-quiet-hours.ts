@@ -23,6 +23,7 @@ export const SPS30_IDLE_INTERVAL_CHOICES = Object.freeze([0, 5, 10, 15, 30]);
 export const SPS30_IDLE_INTERVAL_DEFAULT = 5;
 
 export const parseQuietHour = (value: unknown): number | null => {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
   const hour = Number(value);
   return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : null;
 };

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime
 from typing import Any
 
+from homeassistant.components.recorder.statistics import (
+    async_list_statistic_ids,
+    async_update_statistics_metadata,
+)
 from homeassistant.components.sensor import RestoreSensor, SensorEntity
 from homeassistant.config_entries import (
     SIGNAL_CONFIG_ENTRY_CHANGED,
@@ -12,26 +18,28 @@ from homeassistant.config_entries import (
     ConfigEntryChange,
     ConfigEntryState,
 )
+from homeassistant.const import UnitOfTime
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util.unit_conversion import DurationConverter
 
 from .const import (
-    DOMAIN,
     CONF_PRODUCT_TYPE,
+    DOMAIN,
+    PRODUCT_CEILSENSE,
     PRODUCT_P1METERKIT,
-    PRODUCT_WATERMETERKIT,
-    PRODUCT_WATERP1METERKIT,
     PRODUCT_ULTIMATESENSOR,
     PRODUCT_ULTIMATESENSOR_MINI,
-    PRODUCT_CEILSENSE,
+    PRODUCT_WATERMETERKIT,
+    PRODUCT_WATERP1METERKIT,
 )
+from .energy_runtime import energy_runtime_enabled
 from .products.base.p1 import P1_SENSORS, P1SensorDescription
 
 # Import shared water sensors from base module
-
 from .products.base.water import (
     WATER_SENSORS,
     WaterCoordinator,
@@ -44,11 +52,75 @@ from .products.ultimatesensor import (
     RoomQualitySensorDescription,
     UltimateSensorCoordinator,
 )
-from .energy_runtime import energy_runtime_enabled
 
 # Key under hass.data[DOMAIN] holding the entry that carries the account-wide
 # entities (prices, savings, battery plan, deadline schedules).
 ACCOUNT_HOST = "account_host"
+LEGACY_BASELINE_LEARNING_DAYS_UNIT = "dagen"
+
+_LOGGER = logging.getLogger(__name__)
+
+
+async def async_migrate_baseline_learning_days_statistics(
+    hass: HomeAssistant, config_entry: ConfigEntry
+) -> None:
+    """Migrate the legacy Dutch statistics unit to Home Assistant's day unit.
+
+    Releases through 1.14 accidentally published the Dutch word ``dagen`` as
+    the native unit. The values were already counts of days, so only the
+    recorder metadata needs to be normalised; the historical numbers must not
+    be converted or deleted.
+    """
+    if "recorder" not in hass.config.components:
+        return
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(
+        "sensor",
+        DOMAIN,
+        f"{config_entry.entry_id}_baseline_learning_days",
+    )
+    if entity_id is None:
+        return
+
+    try:
+        metadata = await async_list_statistic_ids(hass, {entity_id})
+    except Exception:  # Recorder must never prevent the device from loading.
+        _LOGGER.debug(
+            "Could not inspect legacy statistics metadata for %s",
+            entity_id,
+            exc_info=True,
+        )
+        return
+
+    statistic = next(
+        (item for item in metadata if item.get("statistic_id") == entity_id),
+        None,
+    )
+    if (
+        statistic is None
+        or statistic.get("unit_of_measurement") != LEGACY_BASELINE_LEARNING_DAYS_UNIT
+    ):
+        return
+
+    migrated = asyncio.Event()
+
+    def _migration_done() -> None:
+        hass.loop.call_soon_threadsafe(migrated.set)
+
+    async_update_statistics_metadata(
+        hass,
+        entity_id,
+        new_unit_class=DurationConverter.UNIT_CLASS,
+        new_unit_of_measurement=UnitOfTime.DAYS,
+        on_done=_migration_done,
+    )
+    try:
+        await asyncio.wait_for(migrated.wait(), timeout=10)
+    except TimeoutError:
+        _LOGGER.warning(
+            "Timed out while migrating statistics metadata for %s", entity_id
+        )
 
 
 @callback
@@ -162,6 +234,7 @@ async def async_setup_entry(
         PRODUCT_WATERP1METERKIT,
         PRODUCT_WATERMETERKIT,
     ):
+        await async_migrate_baseline_learning_days_statistics(hass, config_entry)
         entities.extend(
             SmartHomeShopWaterSensor(coordinator, description, config_entry)
             for description in WATER_SENSORS
@@ -299,7 +372,10 @@ class SmartHomeShopWaterSensor(CoordinatorEntity[WaterCoordinator], SensorEntity
     @property
     def last_reset(self) -> datetime | None:
         """Start of the period a total that restarts every period counts from."""
-        if self.coordinator.data is None or self.entity_description.last_reset_fn is None:
+        if (
+            self.coordinator.data is None
+            or self.entity_description.last_reset_fn is None
+        ):
             return None
         return self.entity_description.last_reset_fn(self.coordinator.data)
 
@@ -357,7 +433,9 @@ class SmartHomeShopP1Sensor(CoordinatorEntity, RestoreSensor):
     entity_description: P1SensorDescription
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator, description: P1SensorDescription, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self, coordinator, description: P1SensorDescription, config_entry: ConfigEntry
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
         self._config_entry = config_entry
@@ -383,7 +461,9 @@ class SmartHomeShopP1Sensor(CoordinatorEntity, RestoreSensor):
         if self.entity_description.key == "month_peak":
             tracker.restore_month_peak(value, last_state.attributes.get("month", ""))
         elif self.entity_description.key == "standby_power":
-            tracker.restore_standby(value, last_state.attributes.get("measured_night", ""))
+            tracker.restore_standby(
+                value, last_state.attributes.get("measured_night", "")
+            )
 
     @property
     def _p1_data(self):

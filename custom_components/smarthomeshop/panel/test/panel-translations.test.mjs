@@ -34,6 +34,23 @@ test('translates primary navigation and the device visibility flow', () => {
   assert.equal(panelText({ language: 'es' }, 'Enable Smart Energy'), 'Activar Smart Energy');
 });
 
+test('translates the searchable device overview in every supported language', () => {
+  const keys = [
+    'Device filters',
+    'Search devices',
+    'Refresh devices',
+    'Filter devices by status',
+    'Showing {shown} of {total} devices',
+    'No devices match these filters',
+    'Clear search and filters',
+  ];
+  for (const language of REQUIRED.slice(1)) {
+    for (const key of keys) {
+      assert.notEqual(panelText({ language }, key, { shown: 2, total: 5 }), key);
+    }
+  }
+});
+
 test('translates mirror reflection protection in every supported language', () => {
   for (const language of REQUIRED.slice(1)) {
     assert.notEqual(panelText({ language }, 'Reflection protection'), 'Reflection protection');
@@ -42,6 +59,66 @@ test('translates mirror reflection protection in every supported language', () =
       panelText({ language }, '{used}/2 radar exclusion slots used.', { used: 2 }),
       /2\/2/,
     );
+  }
+});
+
+test('translates the polished Room Designer workspace in every supported language', () => {
+  const keys = [
+    'Rooms',
+    'Layout',
+    'Room summary',
+    'Area',
+    'Corners',
+    'Fit room to screen',
+    'Drag to rotate • Scroll to zoom',
+    'Import room',
+    'Export selected room',
+    'Import as new room',
+    'Room backup contents',
+    'Import room backup or LiDAR scan',
+    'Apple RoomPlan (LiDAR scan)',
+    'Room from scan',
+    'RoomPlan measurements are converted from metres to millimetres. Check the walls, doors, windows and furniture after import because LiDAR scans can contain small gaps.',
+  ];
+  for (const language of REQUIRED.slice(1)) {
+    for (const key of keys) assert.notEqual(panelText({ language }, key), key);
+  }
+});
+
+test('translates the whole-home presence experience in every supported language', () => {
+  const keys = [
+    'Live Home',
+    'Whole-home presence',
+    'Arrange rooms',
+    'Exact radar position',
+    'Room presence only',
+    'Home setup',
+    'Auto-arrange rooms',
+    'Save home layout',
+    'tracked now',
+    'Data unavailable',
+    'Partial sensor outage',
+    '{offline} of {total} sensors offline',
+    'Select a room and use the arrow keys or move buttons to position it. Hold Shift with an arrow key for fine movement.',
+  ];
+  for (const language of REQUIRED.slice(1)) {
+    for (const key of keys) assert.notEqual(panelText({ language }, key), key);
+  }
+});
+
+test('translates Smart Energy safety, simulation and learning in every supported language', () => {
+  const keys = [
+    'Live grid and fuse guard',
+    'Capacity tariff & peak shaving',
+    'Safe self-learning',
+    'Execution mode',
+    'Advice only',
+    'Simulation / shadow mode',
+    'Automatic execution',
+    'Decision journal',
+  ];
+  for (const language of REQUIRED.slice(1)) {
+    for (const key of keys) assert.notEqual(panelText({ language }, key), key);
   }
 });
 

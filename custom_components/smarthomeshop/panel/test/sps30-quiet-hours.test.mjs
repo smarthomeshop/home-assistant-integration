@@ -29,6 +29,9 @@ test('formats and parses integer firmware hours', () => {
 test('equal start and end means a 24-hour quiet schedule', () => {
   assert.equal(isQuietScheduleAllDay(7, 7), true);
   assert.equal(isQuietScheduleAllDay(7, 8), false);
+  assert.equal(isQuietScheduleAllDay('unavailable', 'unavailable'), false);
+  assert.equal(isQuietScheduleAllDay('unknown', 'unknown'), false);
+  assert.equal(isQuietScheduleAllDay(null, null), false);
   assert.match(settingsText({ language: 'en' }, 'quiet.equal_note'), /24 hours/);
   assert.match(settingsText({ language: 'nl' }, 'quiet.equal_note'), /24 uur/);
 });

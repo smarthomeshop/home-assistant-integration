@@ -38,6 +38,20 @@ import {
   createMirrorReflectionPolygons,
   pointInPolygon,
 } from '../utils/reflection-protection';
+import {
+  MAX_ROOM_IMPORT_BYTES,
+  RoomTransferError,
+  createRoomExportDocument,
+  makeImportedRoom,
+  parseRoomExportText,
+  roomExportFilename,
+  summarizeRoom,
+} from '../utils/room-transfer';
+import {
+  RoomPlanImportError,
+  parseAppleRoomPlanText,
+  type RoomPlanWarning,
+} from '../utils/roomplan-import';
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -338,6 +352,15 @@ export class ZonesPage extends LitElement {
   @state() private _deleteRoomId: string | null = null;
   @state() private _roomActionBusy = false;
   @state() private _roomActionError = '';
+  @state() private _pendingImportedRoom: Room | null = null;
+  @state() private _pendingImportedRoomOptions: Room[] = [];
+  @state() private _selectedImportedRoomIndex = 0;
+  @state() private _importRoomSource: 'backup' | 'apple_roomplan' = 'backup';
+  @state() private _importRoomWarnings: RoomPlanWarning[] = [];
+  @state() private _importRoomName = '';
+  @state() private _showImportRoomDialog = false;
+  @state() private _roomTransferBusy = false;
+  @state() private _roomTransferNotice: { tone: 'success' | 'error'; text: string } | null = null;
 
   // Trail history per sensor per target, in sensor-local coordinates
   private _targetTrails: Record<string, Array<Array<{ x: number; y: number }>>> = {};
@@ -345,6 +368,7 @@ export class ZonesPage extends LitElement {
   private _targetUpdateInterval: number | null = null;
   @query('svg') private _svg!: SVGSVGElement;
   @query('#canvas3d') private _canvas3d!: HTMLCanvasElement;
+  @query('#room-import-file') private _roomImportFile!: HTMLInputElement;
 
   // 3D View state
   @state() private _viewMode: ViewMode = '2d';
@@ -366,17 +390,21 @@ export class ZonesPage extends LitElement {
       --rd-dim: var(--secondary-text-color, #64748b);
       --rd-dim2: var(--secondary-text-color, #94a3b8);
       --rd-text: var(--primary-text-color, #e2e8f0);
+      --rd-accent: var(--primary-color, #4361ee);
+      --rd-canvas: color-mix(in srgb, var(--rd-deep) 92%, var(--rd-panel));
+      --rd-shadow: 0 12px 32px color-mix(in srgb, #000 12%, transparent);
     }
-    :host { display: grid; grid-template-columns: 280px 1fr 280px; gap: 16px; padding: 20px; height: calc(100vh - 100px); box-sizing: border-box; background: var(--rd-deep); }
-    .sidebar { background: var(--rd-panel); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
-    .section-title { font-size: 11px; font-weight: 600; color: var(--rd-dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    :host { display: grid; grid-template-columns: 280px minmax(420px, 1fr) 280px; gap: 16px; padding: 20px; height: calc(100vh - 100px); box-sizing: border-box; background: var(--primary-background-color, var(--rd-deep)); }
+    .sidebar { background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; box-shadow: var(--rd-shadow); }
+    .section-title { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; color: var(--rd-text); letter-spacing: -0.01em; margin-bottom: 10px; }
+    .section-title ha-icon { --mdc-icon-size: 17px; color: var(--rd-accent); }
     .room-list { display: flex; flex-direction: column; gap: 6px; }
-    .room-item { display: flex; align-items: center; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; transition: all 0.15s; }
+    .room-item { display: flex; align-items: center; min-height: 48px; background: color-mix(in srgb, var(--rd-deep) 72%, transparent); border: 1px solid var(--rd-line); border-radius: 10px; overflow: hidden; transition: border-color 0.15s, background 0.15s, box-shadow 0.15s; }
     .room-item:hover { border-color: var(--rd-line-strong); }
-    .room-item.selected { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
+    .room-item.selected { border-color: var(--rd-accent); background: color-mix(in srgb, var(--rd-accent) 9%, var(--rd-panel)); box-shadow: inset 3px 0 var(--rd-accent); }
     .room-select { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; padding: 10px 8px 10px 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
     .room-select:focus-visible { outline: 2px solid #4361ee; outline-offset: -2px; }
-    .room-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: var(--rd-line); border-radius: 6px; }
+    .room-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--rd-accent) 10%, var(--rd-deep)); border-radius: 8px; }
     .room-icon ha-icon { --mdc-icon-size: 18px; color: var(--rd-dim2); }
     .room-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--rd-text); font-weight: 500; }
     .room-actions { display: flex; align-items: center; gap: 2px; padding-right: 6px; }
@@ -384,38 +412,42 @@ export class ZonesPage extends LitElement {
     .room-action:hover, .room-action:focus-visible { color: #4361ee; background: color-mix(in srgb, #4361ee 12%, transparent); outline: none; }
     .room-action.delete:hover, .room-action.delete:focus-visible { color: #ef4444; background: color-mix(in srgb, #ef4444 12%, transparent); }
     .room-action ha-icon { --mdc-icon-size: 17px; }
-    .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .tool-btn { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 8px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; transition: all 0.15s; }
-    .tool-btn:hover { border-color: var(--rd-line-strong); background: var(--rd-panel); }
-    .tool-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.15); }
-    .tool-btn ha-icon { --mdc-icon-size: 24px; color: var(--rd-dim2); }
-    .tool-btn.active ha-icon { color: #4361ee; }
-    .tool-btn span { font-size: 11px; color: var(--rd-dim2); }
-    .tool-btn.active span { color: #4361ee; }
-    .canvas-area { background: var(--rd-panel); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
-    .canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: var(--rd-deep); border-bottom: 1px solid var(--rd-line); }
+    .tool-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .tool-btn { min-height: 66px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 10px 8px; background: color-mix(in srgb, var(--rd-deep) 72%, transparent); border: 1px solid var(--rd-line); border-radius: 10px; color: var(--rd-dim2); cursor: pointer; transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.15s; }
+    .tool-btn:hover { border-color: var(--rd-line-strong); background: color-mix(in srgb, var(--rd-accent) 5%, var(--rd-panel)); color: var(--rd-text); transform: translateY(-1px); }
+    .tool-btn.active { border-color: var(--rd-accent); background: color-mix(in srgb, var(--rd-accent) 12%, var(--rd-panel)); color: var(--rd-accent); }
+    .tool-btn:focus-visible, .mode-btn:focus-visible, .view-toggle-btn:focus-visible, .control-btn:focus-visible, .save-btn:focus-visible, .push-btn:focus-visible { outline: 2px solid var(--rd-accent); outline-offset: 2px; }
+    .tool-btn ha-icon { --mdc-icon-size: 22px; color: currentColor; }
+    .tool-btn span { font-size: 11px; font-weight: 650; color: currentColor; }
+    .canvas-area { min-width: 0; background: var(--rd-canvas); border: 1px solid var(--rd-line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; box-shadow: var(--rd-shadow); }
+    .canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; background: var(--rd-panel); border-bottom: 1px solid var(--rd-line); }
     .header-group { display: flex; align-items: center; gap: 8px; }
+    .canvas-context { min-width: 0; flex-wrap: wrap; }
+    .workspace-heading { min-width: 132px; padding-right: 12px; border-right: 1px solid var(--rd-line); }
+    .workspace-heading strong { display: block; max-width: 230px; overflow: hidden; color: var(--rd-text); font-size: 14px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace-heading span { display: block; margin-top: 2px; color: var(--rd-dim); font-size: 10.5px; }
     .room-label { font-size: 13px; color: var(--rd-dim2); }
     .room-label span { color: var(--rd-text); font-weight: 600; }
-    .save-btn { display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: var(--rd-line); border: none; border-radius: 8px; color: var(--rd-dim2); font-size: 13px; font-weight: 600; cursor: default; }
+    .save-btn { min-height: 38px; display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: color-mix(in srgb, #22c55e 10%, var(--rd-panel)); border: 1px solid color-mix(in srgb, #22c55e 30%, var(--rd-line)); border-radius: 9px; color: #16844a; font-size: 12px; font-weight: 700; cursor: default; }
     .save-btn.dirty { background: #22c55e; color: white; cursor: pointer; }
     .save-btn.dirty:hover { background: #16a34a; }
-    .push-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: 1px solid #3b82f6; border-radius: 8px; color: #3b82f6; font-size: 13px; font-weight: 600; cursor: pointer; }
+    .push-btn { min-height: 38px; display: flex; align-items: center; gap: 6px; padding: 8px 13px; background: transparent; border: 1px solid var(--rd-accent); border-radius: 9px; color: var(--rd-accent); font-size: 12px; font-weight: 700; cursor: pointer; }
     .push-btn:disabled { border-color: var(--rd-line-strong); color: var(--rd-dim); cursor: not-allowed; }
     .push-btn:hover:not(:disabled) { background: rgba(59, 130, 246, 0.12); }
-    svg { flex: 1; background: var(--rd-deep); cursor: crosshair; }
+    svg { flex: 1; min-height: 0; background: var(--rd-canvas); cursor: crosshair; }
     .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--rd-dim); }
     .empty-state ha-icon { --mdc-icon-size: 64px; margin-bottom: 16px; opacity: 0.5; }
     .empty-state h3 { margin: 0 0 8px 0; color: var(--rd-dim2); }
     .grid-line { stroke: var(--rd-line); stroke-width: 0.5; opacity: 0.6; }
     .grid-line.major { stroke: var(--rd-panel); stroke-width: 1; }
     .wall-line { stroke: var(--rd-line-strong); stroke-width: 3; stroke-linecap: round; }
-    .canvas-controls { position: absolute; bottom: 16px; left: 16px; display: flex; gap: 8px; }
-    .control-group { display: flex; background: var(--rd-panel); border-radius: 8px; overflow: hidden; border: 1px solid var(--rd-line); }
-    .control-btn { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: var(--rd-dim2); cursor: pointer; }
+    .canvas-controls { position: absolute; bottom: 16px; left: 16px; display: flex; gap: 8px; z-index: 5; }
+    .control-group { display: flex; align-items: center; background: var(--rd-panel); border-radius: 10px; overflow: hidden; border: 1px solid var(--rd-line); box-shadow: 0 6px 18px color-mix(in srgb, #000 14%, transparent); }
+    .control-btn { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: none; border: none; color: var(--rd-dim2); cursor: pointer; }
     .control-btn:hover { background: var(--rd-line); color: var(--rd-text); }
-    .instructions { background: var(--rd-deep); border-radius: 10px; padding: 14px; }
-    .instructions-title { font-size: 13px; font-weight: 600; color: #4361ee; margin-bottom: 6px; }
+    .zoom-value { min-width: 44px; padding: 0 8px; color: var(--rd-dim2); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; border-inline: 1px solid var(--rd-line); }
+    .instructions { border: 1px solid color-mix(in srgb, var(--rd-accent) 22%, var(--rd-line)); border-radius: 10px; padding: 13px; background: color-mix(in srgb, var(--rd-accent) 6%, var(--rd-panel)); }
+    .instructions-title { font-size: 13px; font-weight: 700; color: var(--rd-accent); margin-bottom: 6px; }
     .instructions-text { font-size: 12px; color: var(--rd-dim2); line-height: 1.5; }
     .setting-item { margin-bottom: 12px; }
     .setting-item label { display: block; font-size: 12px; color: var(--rd-dim2); margin-bottom: 4px; }
@@ -445,6 +477,23 @@ export class ZonesPage extends LitElement {
     .calibration-details summary { cursor: pointer; }
     select { width: 100%; padding: 8px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 6px; color: var(--rd-text); font-size: 13px; }
     .info-text { color: var(--rd-dim); font-size: 12px; line-height: 1.5; }
+    .room-summary { overflow: hidden; border: 1px solid var(--rd-line); border-radius: 11px; background: color-mix(in srgb, var(--rd-deep) 68%, transparent); }
+    .room-summary-hero { display: flex; align-items: center; gap: 11px; padding: 13px; border-bottom: 1px solid var(--rd-line); }
+    .room-summary-hero .icon { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 9px; color: var(--rd-accent); background: color-mix(in srgb, var(--rd-accent) 11%, var(--rd-panel)); }
+    .room-summary-hero .icon ha-icon { --mdc-icon-size: 21px; }
+    .room-summary-hero strong, .room-summary-hero span { display: block; }
+    .room-summary-hero strong { color: var(--rd-text); font-size: 19px; font-weight: 750; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .room-summary-hero span { margin-top: 3px; color: var(--rd-dim); font-size: 10.5px; }
+    .room-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .room-summary-item { display: grid; grid-template-columns: 24px minmax(0, 1fr); align-items: center; gap: 7px; min-width: 0; padding: 10px 11px; border-bottom: 1px solid var(--rd-line); }
+    .room-summary-item:nth-child(odd) { border-right: 1px solid var(--rd-line); }
+    .room-summary-item:last-child:nth-child(odd) { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+    .room-summary-item ha-icon { --mdc-icon-size: 17px; color: var(--rd-dim2); }
+    .room-summary-item strong, .room-summary-item span { display: block; min-width: 0; }
+    .room-summary-item strong { color: var(--rd-text); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .room-summary-item span { overflow: hidden; margin-top: 1px; color: var(--rd-dim); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .room-summary-empty { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; align-items: start; padding: 13px; color: var(--rd-dim2); font-size: 11px; line-height: 1.5; }
+    .room-summary-empty ha-icon { --mdc-icon-size: 20px; color: var(--rd-accent); }
     .firmware-status { margin-top: 10px; padding: 11px; border: 1px solid var(--rd-line); border-radius: 9px; background: var(--rd-deep); }
     .profile-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--rd-line); }
     .radar-model { color: var(--rd-text); font-size: 13px; font-weight: 750; letter-spacing: 0.025em; }
@@ -532,6 +581,15 @@ export class ZonesPage extends LitElement {
     .add-room-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed var(--rd-line-strong); border-radius: 8px; background: transparent; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
     .add-room-btn:hover { border-color: #4361ee; color: #4361ee; }
     .add-room-btn ha-icon { --mdc-icon-size: 16px; }
+    .room-transfer-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 2px; }
+    .room-transfer-btn { min-height: 40px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border: 1px solid var(--rd-line); border-radius: 8px; background: color-mix(in srgb, var(--rd-deep) 72%, transparent); color: var(--rd-dim2); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+    .room-transfer-btn:hover:not(:disabled), .room-transfer-btn:focus-visible { border-color: var(--rd-accent); color: var(--rd-accent); outline: none; }
+    .room-transfer-btn:disabled { opacity: 0.48; cursor: not-allowed; }
+    .room-transfer-btn ha-icon { --mdc-icon-size: 17px; }
+    .visually-hidden { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0, 0, 0, 0) !important; white-space: nowrap !important; border: 0 !important; }
+    .room-transfer-notice { display: flex; align-items: flex-start; gap: 6px; margin: 8px 0 0; padding: 8px 9px; border-radius: 7px; background: color-mix(in srgb, #22c55e 9%, var(--rd-panel)); color: #16844a; font-size: 11px; line-height: 1.4; }
+    .room-transfer-notice.error { background: color-mix(in srgb, #ef4444 8%, var(--rd-panel)); color: #dc2626; }
+    .room-transfer-notice ha-icon { --mdc-icon-size: 16px; flex: 0 0 auto; }
     .furniture-grid { display: flex; flex-direction: column; gap: 6px; }
     .furniture-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
     .furniture-item:hover { border-color: #4361ee; }
@@ -573,10 +631,25 @@ export class ZonesPage extends LitElement {
     .dialog-warning { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0; padding: 11px 12px; border: 1px solid color-mix(in srgb, #ef4444 35%, var(--rd-line)); border-radius: 9px; background: color-mix(in srgb, #ef4444 8%, var(--rd-panel)); color: var(--rd-dim2); font-size: 12px; line-height: 1.45; }
     .dialog-warning ha-icon { --mdc-icon-size: 19px; flex: 0 0 auto; color: #ef4444; }
     .dialog-error { margin-top: 10px; color: #ef4444; font-size: 12px; }
+    .import-description { margin: -7px 0 14px; color: var(--rd-dim2); font-size: 12px; line-height: 1.5; }
+    .import-source { display: flex; align-items: center; gap: 9px; margin: 0 0 13px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--rd-accent) 24%, var(--rd-line)); border-radius: 9px; background: color-mix(in srgb, var(--rd-accent) 6%, var(--rd-panel)); }
+    .import-source ha-icon { --mdc-icon-size: 19px; color: var(--rd-accent); }
+    .import-source strong, .import-source span { display: block; }
+    .import-source strong { color: var(--rd-text); font-size: 12px; }
+    .import-source span { margin-top: 2px; color: var(--rd-dim); font-size: 10px; }
+    .import-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin: 14px 0; }
+    .import-summary-item { padding: 9px 6px; border: 1px solid var(--rd-line); border-radius: 8px; background: color-mix(in srgb, var(--rd-deep) 72%, transparent); text-align: center; }
+    .import-summary-item strong { display: block; color: var(--rd-text); font-size: 15px; font-variant-numeric: tabular-nums; }
+    .import-summary-item span { display: block; margin-top: 2px; color: var(--rd-dim); font-size: 9px; text-transform: uppercase; }
+    .import-note { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 0; padding: 10px; border-radius: 8px; background: color-mix(in srgb, var(--rd-accent) 7%, var(--rd-panel)); color: var(--rd-dim2); font-size: 11px; line-height: 1.45; }
+    .import-note ha-icon { --mdc-icon-size: 17px; flex: 0 0 auto; color: var(--rd-accent); }
+    .import-warning { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0 0; padding: 9px 10px; border: 1px solid color-mix(in srgb, #f59e0b 28%, var(--rd-line)); border-radius: 8px; background: color-mix(in srgb, #f59e0b 7%, var(--rd-panel)); color: var(--rd-dim2); font-size: 11px; line-height: 1.45; }
+    .import-warning ha-icon { --mdc-icon-size: 17px; flex: 0 0 auto; color: #d97706; }
     .remove-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 8px; margin-top: 4px; background: transparent; border: 1px solid var(--rd-line); border-radius: 6px; color: #ef4444; font-size: 12px; cursor: pointer; }
     .remove-sensor-btn:hover { border-color: #ef4444; }
     .remove-sensor-btn ha-icon { --mdc-icon-size: 16px; }
-    .live-status { margin: 12px 0; padding: 12px; background: var(--rd-deep); border-radius: 8px; }
+    .live-status { margin: 12px 0; padding: 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; }
+    .live-status.occupied { border-color: color-mix(in srgb, #22c55e 55%, var(--rd-line)); }
     .live-status .header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
     .live-status .dot { width: 10px; height: 10px; border-radius: 50%; }
     .live-status .dot.active { background: #22c55e; animation: pulse 1s infinite; }
@@ -643,16 +716,41 @@ export class ZonesPage extends LitElement {
     .zone-type-btn.active { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
     .zone-type-btn span { display: block; font-size: 12px; color: var(--rd-dim2); margin-top: 4px; }
     .zone-type-btn.active span { color: #4361ee; }
-    @media (max-width: 1200px) { :host { grid-template-columns: 240px 1fr; height: auto; min-height: calc(100vh - 100px); } .sidebar-right { grid-column: 1 / -1; max-height: none; overflow-y: visible; } .canvas-area { min-height: 620px; } }
-    @media (max-width: 760px) { :host { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; } .sidebar { border-radius: 10px; } .canvas-area { min-height: min(78vh, 680px); order: 2; } .sidebar-right { grid-column: auto; order: 3; } .canvas-header { align-items: flex-start; flex-wrap: wrap; } .header-group { max-width: 100%; flex-wrap: wrap; } .mode-btn, .view-toggle-btn { padding: 8px 10px; } }
+    @media (max-width: 1200px) { :host { grid-template-columns: 240px minmax(0, 1fr); height: auto; min-height: calc(100vh - 100px); } .sidebar-right { grid-column: 1 / -1; max-height: none; overflow-y: visible; } .canvas-area { min-height: 620px; } }
+    @media (max-width: 760px) {
+      :host { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+      .sidebar { border-radius: 12px; box-shadow: none; }
+      .canvas-area { min-height: min(72vh, 640px); order: 2; box-shadow: none; }
+      .sidebar-right { grid-column: auto; order: 3; }
+      .canvas-header { align-items: stretch; flex-direction: column; }
+      .header-group { max-width: 100%; flex-wrap: wrap; }
+      .header-group:last-child { justify-content: space-between; }
+      .canvas-context { align-items: stretch; flex-direction: column; }
+      .workspace-heading { padding: 0 0 9px; border: 0; border-bottom: 1px solid var(--rd-line); }
+      .workspace-heading strong { max-width: 100%; }
+      .mode-toggle { width: 100%; }
+      .mode-btn { flex: 1; justify-content: center; }
+      .mode-btn, .view-toggle-btn { padding: 9px 10px; }
+      .tool-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .tool-btn { min-height: 62px; }
+      .canvas-controls { bottom: 10px; left: 10px; }
+      .zoom-value { display: none; }
+      .dialog { width: calc(100vw - 32px); min-width: 0; max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; }
+      .import-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .room-item, .tool-btn, .mode-btn, .view-toggle-btn { transition: none; }
+      .tool-btn:hover { transform: none; }
+    }
     .view-toggle { display: flex; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; overflow: hidden; }
     .view-toggle-btn { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: transparent; border: none; color: var(--rd-dim2); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
     .view-toggle-btn.active { background: #4361ee; color: white; }
     .view-toggle-btn ha-icon { --mdc-icon-size: 16px; }
-    .canvas3d { flex: 1; display: block; cursor: grab; background: var(--rd-deep); }
+    .canvas3d { flex: 1; display: block; cursor: grab; background: var(--rd-canvas); }
     .canvas3d:active { cursor: grabbing; }
-    .view3d-info { position: absolute; bottom: 16px; left: 16px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 8px; padding: 10px 14px; z-index: 10; font-size: 12px; color: var(--rd-dim2); }
+    .view3d-info { position: absolute; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 8px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 9px; padding: 10px 12px; z-index: 10; font-size: 12px; color: var(--rd-dim2); box-shadow: 0 6px 18px color-mix(in srgb, #000 14%, transparent); }
+    .view3d-info ha-icon { --mdc-icon-size: 18px; color: var(--rd-accent); }
   `;
 
   connectedCallback() {
@@ -1511,6 +1609,193 @@ export class ZonesPage extends LitElement {
     }
   }
 
+  private _currentRoomSnapshot(room: Room): Room {
+    const firstSensor = this._sensors[0];
+    const sensor = firstSensor ? {
+      x: firstSensor.x,
+      y: firstSensor.y,
+      rotation: firstSensor.rotation,
+      range: firstSensor.range,
+      fov: firstSensor.fov,
+      deviceId: firstSensor.deviceId,
+      heightMm: firstSensor.heightMm,
+      mountingMode: firstSensor.mountingMode,
+    } : null;
+    const walls = this._roomPoints.map((point, index) => {
+      const next = this._roomPoints[(index + 1) % this._roomPoints.length];
+      return { x1: point.x, y1: point.y, x2: next.x, y2: next.y };
+    });
+    const furniture = this._furniture.map(item => ({
+      id: item.id,
+      typeId: item.type,
+      name: item.name,
+      x: item.x,
+      y: item.y,
+      width: item.width,
+      height: item.height,
+      rotationDeg: item.rotation,
+    }));
+
+    return {
+      ...room,
+      walls,
+      furniture,
+      doors: this._doors,
+      windows: this._windows,
+      mirrors: this._mirrors,
+      sensor,
+      sensors: this._sensors,
+      zones: this._zones,
+      calibration: this._calibration,
+      tracking: this._tracking,
+    } as unknown as Room;
+  }
+
+  private _openRoomImport(): void {
+    this._roomTransferNotice = null;
+    this._roomImportFile?.click();
+  }
+
+  private _prepareImportedRooms(
+    rooms: Room[],
+    source: 'backup' | 'apple_roomplan',
+    warnings: RoomPlanWarning[] = [],
+  ): void {
+    this._pendingImportedRoomOptions = rooms;
+    this._selectedImportedRoomIndex = 0;
+    this._importRoomSource = source;
+    this._importRoomWarnings = warnings;
+    this._selectImportedRoomOption(0);
+    this._roomActionError = '';
+    this._showImportRoomDialog = true;
+  }
+
+  private _selectImportedRoomOption(index: number): void {
+    const room = this._pendingImportedRoomOptions[index];
+    if (!room) return;
+    this._selectedImportedRoomIndex = index;
+    this._pendingImportedRoom = room;
+    const duplicateName = this.rooms.some(existing =>
+      existing.name.trim().toLocaleLowerCase() === room.name.trim().toLocaleLowerCase());
+    this._importRoomName = duplicateName
+      ? panelText(this.hass, '{name} (imported)', { name: room.name })
+      : room.name;
+  }
+
+  private async _handleRoomImportFile(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    this._roomTransferNotice = null;
+
+    if (file.size > MAX_ROOM_IMPORT_BYTES) {
+      this._roomTransferNotice = {
+        tone: 'error',
+        text: panelText(this.hass, 'That file is too large. Choose a room backup smaller than 2 MB.'),
+      };
+      return;
+    }
+
+    const contents = await file.text();
+    try {
+      this._prepareImportedRooms([parseRoomExportText(contents)], 'backup');
+      return;
+    } catch (backupError) {
+      if (backupError instanceof RoomTransferError && backupError.code === 'unsupported_version') {
+        this._roomTransferNotice = {
+          tone: 'error',
+          text: panelText(this.hass, 'This backup was created by a newer SmartHomeShop version. Update the integration before importing it.'),
+        };
+        return;
+      }
+      try {
+        const lidar = parseAppleRoomPlanText(contents, panelText(this.hass, 'LiDAR room'));
+        this._prepareImportedRooms(lidar.rooms, 'apple_roomplan', lidar.warnings);
+        return;
+      } catch (lidarError) {
+        const incompleteScan = lidarError instanceof RoomPlanImportError && lidarError.code === 'no_room_boundary';
+        this._roomTransferNotice = {
+          tone: 'error',
+          text: panelText(
+            this.hass,
+            incompleteScan
+              ? 'The LiDAR scan does not contain a complete room boundary. Scan every wall and export it as Apple RoomPlan JSON.'
+              : 'That file is neither a SmartHomeShop room backup nor an Apple RoomPlan LiDAR scan.',
+          ),
+        };
+      }
+    }
+  }
+
+  private _exportSelectedRoom(): void {
+    const room = this.rooms.find(item => item.id === this._selectedRoomId);
+    if (!room) return;
+    this._roomTransferNotice = null;
+    try {
+      const currentRoom = this._currentRoomSnapshot(room);
+      const contents = JSON.stringify(createRoomExportDocument(currentRoom), null, 2);
+      const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = roomExportFilename(currentRoom.name);
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      this._roomTransferNotice = {
+        tone: 'success',
+        text: panelText(this.hass, 'Exported {name}.', { name: currentRoom.name }),
+      };
+    } catch (error) {
+      console.error('Failed to export room:', error);
+      this._roomTransferNotice = {
+        tone: 'error',
+        text: panelText(this.hass, 'Could not export the room.'),
+      };
+    }
+  }
+
+  private _closeImportRoomDialog(): void {
+    if (this._roomTransferBusy) return;
+    this._showImportRoomDialog = false;
+    this._pendingImportedRoom = null;
+    this._pendingImportedRoomOptions = [];
+    this._importRoomWarnings = [];
+    this._roomActionError = '';
+  }
+
+  private async _importRoom(): Promise<void> {
+    const name = this._importRoomName.trim();
+    if (!this._pendingImportedRoom || !name || this._roomTransferBusy) return;
+    if (this._dirty && !confirm(panelText(this.hass, 'Discard the unsaved changes in the current room and import this room?'))) return;
+
+    this._roomTransferBusy = true;
+    this._roomActionError = '';
+    try {
+      const suffix = Math.random().toString(36).slice(2, 8);
+      const importedRoom = makeImportedRoom(this._pendingImportedRoom, `room_${Date.now()}_${suffix}`, name);
+      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: importedRoom });
+      this._dirty = false;
+      this.rooms = [...this.rooms, importedRoom];
+      this._showImportRoomDialog = false;
+      this._pendingImportedRoom = null;
+      this._pendingImportedRoomOptions = [];
+      this._importRoomWarnings = [];
+      this._selectRoom(importedRoom.id);
+      this._roomTransferNotice = {
+        tone: 'success',
+        text: panelText(this.hass, '{name} was imported as a new room.', { name }),
+      };
+    } catch (error: any) {
+      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
+      this._roomActionError = `${panelText(this.hass, 'Could not import the room. Check that you are an administrator and try again.')}${detail}`;
+    } finally {
+      this._roomTransferBusy = false;
+    }
+  }
+
   private _openRenameRoom(roomId: string): void {
     const room = this.rooms.find(item => item.id === roomId);
     if (!room) return;
@@ -2101,48 +2386,10 @@ export class ZonesPage extends LitElement {
     if (!room) return;
     this._saving = true;
 
-    // Keep the legacy single-sensor field in sync for older readers (cards)
-    const firstSensor = this._sensors[0];
-    const sensor = firstSensor ? {
-      x: firstSensor.x,
-      y: firstSensor.y,
-      rotation: firstSensor.rotation,
-      range: firstSensor.range,
-      fov: firstSensor.fov,
-      deviceId: firstSensor.deviceId,
-      heightMm: firstSensor.heightMm,
-      mountingMode: firstSensor.mountingMode,
-    } : null;
-
     try {
-      const walls = this._roomPoints.map((pt, i) => {
-        const next = this._roomPoints[(i + 1) % this._roomPoints.length];
-        return { x1: pt.x, y1: pt.y, x2: next.x, y2: next.y };
-      });
-      const furniture = this._furniture.map(f => ({
-        id: f.id,
-        typeId: f.type,
-        x: f.x,
-        y: f.y,
-        width: f.width,
-        height: f.height,
-        rotationDeg: f.rotation,
-      }));
-      const updatedRoom = {
-        ...room,
-        walls,
-        furniture,
-        doors: this._doors,
-        windows: this._windows,
-        mirrors: this._mirrors,
-        sensor,
-        sensors: this._sensors,
-        zones: this._zones,
-        calibration: this._calibration,
-        tracking: this._tracking,
-      };
+      const updatedRoom = this._currentRoomSnapshot(room);
       await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
-      this.rooms = this.rooms.map(r => r.id === this._selectedRoomId ? updatedRoom as any : r);
+      this.rooms = this.rooms.map(r => r.id === this._selectedRoomId ? updatedRoom : r);
       this._dirty = false;
     } catch (err) {
       console.error('Failed to save room:', err);
@@ -2834,7 +3081,7 @@ export class ZonesPage extends LitElement {
     // Dragging a door along its wall
     if (this._draggingDoorIndex !== null) {
       const door = this._doors[this._draggingDoorIndex];
-      if (door && door.wallIndex < this._roomPoints.length) {
+      if (door && Number.isInteger(door.wallIndex) && door.wallIndex >= 0 && door.wallIndex < this._roomPoints.length) {
         const p1 = this._roomPoints[door.wallIndex];
         const p2 = this._roomPoints[(door.wallIndex + 1) % this._roomPoints.length];
         const dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -2851,7 +3098,7 @@ export class ZonesPage extends LitElement {
     // Dragging a window along its wall
     if (this._draggingWindowIndex !== null) {
       const win = this._windows[this._draggingWindowIndex];
-      if (win && win.wallIndex < this._roomPoints.length) {
+      if (win && Number.isInteger(win.wallIndex) && win.wallIndex >= 0 && win.wallIndex < this._roomPoints.length) {
         const p1 = this._roomPoints[win.wallIndex];
         const p2 = this._roomPoints[(win.wallIndex + 1) % this._roomPoints.length];
         const dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -2868,7 +3115,7 @@ export class ZonesPage extends LitElement {
     // Dragging a mirror along its wall
     if (this._draggingMirrorIndex !== null) {
       const mirror = this._mirrors[this._draggingMirrorIndex];
-      if (mirror && mirror.wallIndex < this._roomPoints.length) {
+      if (mirror && Number.isInteger(mirror.wallIndex) && mirror.wallIndex >= 0 && mirror.wallIndex < this._roomPoints.length) {
         const p1 = this._roomPoints[mirror.wallIndex];
         const p2 = this._roomPoints[(mirror.wallIndex + 1) % this._roomPoints.length];
         const dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -3762,7 +4009,7 @@ export class ZonesPage extends LitElement {
     const depth = 80; // Door thickness
 
     for (const door of this._doors) {
-      if (door.wallIndex >= this._roomPoints.length) continue;
+      if (!Number.isInteger(door.wallIndex) || door.wallIndex < 0 || door.wallIndex >= this._roomPoints.length) continue;
 
       // Get wall endpoints
       const p1 = this._roomPoints[door.wallIndex];
@@ -3837,7 +4084,7 @@ export class ZonesPage extends LitElement {
     const depth = 50; // Window frame thickness
 
     for (const win of this._windows) {
-      if (win.wallIndex >= this._roomPoints.length) continue;
+      if (!Number.isInteger(win.wallIndex) || win.wallIndex < 0 || win.wallIndex >= this._roomPoints.length) continue;
 
       // Get wall endpoints
       const p1 = this._roomPoints[win.wallIndex];
@@ -4582,7 +4829,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const canDrag = this._designMode === 'layout' && (this._toolMode === 'door' || this._toolMode === 'window' || this._toolMode === 'mirror' || this._toolMode === 'select');
 
     this._doors.forEach((door, index) => {
-      if (door.wallIndex >= this._roomPoints.length) return;
+      if (!Number.isInteger(door.wallIndex) || door.wallIndex < 0 || door.wallIndex >= this._roomPoints.length) return;
       const p1 = this._roomPoints[door.wallIndex];
       const p2 = this._roomPoints[(door.wallIndex + 1) % this._roomPoints.length];
       const doorX = p1.x + (p2.x - p1.x) * door.position;
@@ -4621,7 +4868,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     });
 
     this._windows.forEach((win, index) => {
-      if (win.wallIndex >= this._roomPoints.length) return;
+      if (!Number.isInteger(win.wallIndex) || win.wallIndex < 0 || win.wallIndex >= this._roomPoints.length) return;
       const p1 = this._roomPoints[win.wallIndex];
       const p2 = this._roomPoints[(win.wallIndex + 1) % this._roomPoints.length];
       const winX = p1.x + (p2.x - p1.x) * win.position;
@@ -4648,7 +4895,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     });
 
     this._mirrors.forEach((mirror, index) => {
-      if (mirror.wallIndex >= this._roomPoints.length) return;
+      if (!Number.isInteger(mirror.wallIndex) || mirror.wallIndex < 0 || mirror.wallIndex >= this._roomPoints.length) return;
       const p1 = this._roomPoints[mirror.wallIndex];
       const p2 = this._roomPoints[(mirror.wallIndex + 1) % this._roomPoints.length];
       const mirrorX = p1.x + (p2.x - p1.x) * mirror.position;
@@ -5381,15 +5628,55 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     return html`
       ${this._renderSelectedFurniturePanel()}
       <div>
-        <div class="section-title">ROOM INFO</div>
-        <div class="info-text">
+        <div class="section-title">
+          <ha-icon icon="mdi:chart-box-outline"></ha-icon>
+          ${panelText(this.hass, 'Room summary')}
+        </div>
+        <div class="room-summary">
           ${this._roomPoints.length >= 3 ? html`
-            <p>Area: <span class="info-value">${area.toFixed(1)} m²</span></p>
-            <p>Corners: <span class="info-value">${this._roomPoints.length}</span></p>
-            <p>Furniture: <span class="info-value">${this._furniture.length}</span></p>
-            <p>Doors: <span class="info-value">${this._doors.length}</span> · Windows: <span class="info-value">${this._windows.length}</span> · Mirrors: <span class="info-value">${this._mirrors.length}</span></p>
-            <p>Sensors: <span class="info-value">${this._sensors.length}</span> · Zones: <span class="info-value">${this._zones.length}</span></p>
-          ` : html`<p>Draw walls to see measurements. Use the Walls tool to start.</p>`}
+            <div class="room-summary-hero">
+              <span class="icon"><ha-icon icon="mdi:vector-square"></ha-icon></span>
+              <div>
+                <strong>${area.toFixed(1)} m²</strong>
+                <span>${panelText(this.hass, 'Area')}</span>
+              </div>
+            </div>
+            <div class="room-summary-grid">
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:vector-polyline"></ha-icon>
+                <div><strong>${this._roomPoints.length}</strong><span>${panelText(this.hass, 'Corners')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:sofa-outline"></ha-icon>
+                <div><strong>${this._furniture.length}</strong><span>${panelText(this.hass, 'Furniture')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:door"></ha-icon>
+                <div><strong>${this._doors.length}</strong><span>${panelText(this.hass, 'Doors')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:window-closed-variant"></ha-icon>
+                <div><strong>${this._windows.length}</strong><span>${panelText(this.hass, 'Windows')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:radar"></ha-icon>
+                <div><strong>${this._sensors.length}</strong><span>${panelText(this.hass, 'Sensors')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:mirror-rectangle"></ha-icon>
+                <div><strong>${this._mirrors.length}</strong><span>${panelText(this.hass, 'Mirrors')}</span></div>
+              </div>
+              <div class="room-summary-item">
+                <ha-icon icon="mdi:vector-polygon"></ha-icon>
+                <div><strong>${this._zones.length}</strong><span>${panelText(this.hass, 'Zones')}</span></div>
+              </div>
+            </div>
+          ` : html`
+            <div class="room-summary-empty">
+              <ha-icon icon="mdi:wall"></ha-icon>
+              <span>${panelText(this.hass, 'Draw walls to see measurements. Use the Walls tool to start.')}</span>
+            </div>
+          `}
         </div>
       </div>
     `;
@@ -5397,6 +5684,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
   render() {
     const selectedRoom = this.rooms.find(r => r.id === this._selectedRoomId);
+    const importSummary = this._pendingImportedRoom ? summarizeRoom(this._pendingImportedRoom) : null;
     const instr = this._getInstructions();
     const radarDevices = this._getRadarDevices();
     const selectedRadar = this._findRadarDevice(this._selectedSensor?.deviceId ?? null)
@@ -5467,16 +5755,16 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     return html`
       <div class="sidebar">
         <div>
-          <div class="section-title">SELECT ROOM</div>
+          <div class="section-title"><ha-icon icon="mdi:floor-plan"></ha-icon>${panelText(this.hass, 'Rooms')}</div>
           <div class="room-list">
             ${this._roomsError ? html`
-              <p class="info-text">${this._roomsError} Your saved rooms are still there.</p>
+              <p class="info-text">${this._roomsError} ${panelText(this.hass, 'Your saved rooms are still there.')}</p>
               <button class="add-room-btn" @click="${() => this._loadRooms()}">
-                <ha-icon icon="mdi:refresh"></ha-icon>Try again
+                <ha-icon icon="mdi:refresh"></ha-icon>${panelText(this.hass, 'Try again')}
               </button>
             ` : html`
               ${this.rooms.length === 0 ? html`
-                <p class="info-text">No rooms yet. Create your first room with "Add Room" below.</p>
+                <p class="info-text">${panelText(this.hass, 'No rooms yet. Create your first room with "Add Room" below.')}</p>
               ` : this.rooms.map(room => html`
                 <div class="room-item ${room.id === this._selectedRoomId ? 'selected' : ''}">
                   <button class="room-select" @click=${() => this._selectRoom(room.id)}
@@ -5484,103 +5772,128 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     <span class="room-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></span>
                     <span class="room-name" data-i18n-ignore>${room.name}</span>
                   </button>
-                  <div class="room-actions" aria-label="Room actions">
+                  <div class="room-actions" aria-label="${panelText(this.hass, 'Room actions')}">
                     <button class="room-action" @click=${() => this._openRenameRoom(room.id)}
-                      title="Rename room" aria-label=${panelText(this.hass, 'Rename {name}', { name: room.name })}>
+                      title="${panelText(this.hass, 'Rename room')}" aria-label=${panelText(this.hass, 'Rename {name}', { name: room.name })}>
                       <ha-icon icon="mdi:pencil-outline"></ha-icon>
                     </button>
                     <button class="room-action delete" @click=${() => this._openDeleteRoom(room.id)}
-                      title="Delete room" aria-label=${panelText(this.hass, 'Delete {name}', { name: room.name })}>
+                      title="${panelText(this.hass, 'Delete room')}" aria-label=${panelText(this.hass, 'Delete {name}', { name: room.name })}>
                       <ha-icon icon="mdi:trash-can-outline"></ha-icon>
                     </button>
                   </div>
                 </div>
               `)}
               <button class="add-room-btn" @click="${() => { this._newRoomName = ''; this._newRoomWidth = 0; this._newRoomLength = 0; this._showNewRoomDialog = true; }}">
-                <ha-icon icon="mdi:plus"></ha-icon>Add Room
+                <ha-icon icon="mdi:plus"></ha-icon>${panelText(this.hass, 'Add Room')}
               </button>
+              <div class="room-transfer-actions">
+                <button class="room-transfer-btn" @click=${this._openRoomImport}
+                  title=${panelText(this.hass, 'Import room backup or LiDAR scan')} aria-label=${panelText(this.hass, 'Import room backup or LiDAR scan')}>
+                  <ha-icon icon="mdi:upload-outline"></ha-icon>${panelText(this.hass, 'Import')}
+                </button>
+                <button class="room-transfer-btn" @click=${this._exportSelectedRoom} ?disabled=${!selectedRoom}
+                  title=${panelText(this.hass, 'Export selected room')} aria-label=${panelText(this.hass, 'Export selected room')}>
+                  <ha-icon icon="mdi:download-outline"></ha-icon>${panelText(this.hass, 'Export')}
+                </button>
+              </div>
+              <input id="room-import-file" class="visually-hidden" type="file" accept=".json,application/json"
+                aria-label=${panelText(this.hass, 'Choose a SmartHomeShop room backup or Apple RoomPlan scan (.json).')}
+                @change=${this._handleRoomImportFile} />
+              ${this._roomTransferNotice ? html`
+                <div class="room-transfer-notice ${this._roomTransferNotice.tone}" role=${this._roomTransferNotice.tone === 'error' ? 'alert' : 'status'}>
+                  <ha-icon icon=${this._roomTransferNotice.tone === 'error' ? 'mdi:alert-circle-outline' : 'mdi:check-circle-outline'}></ha-icon>
+                  <span>${this._roomTransferNotice.text}</span>
+                </div>
+              ` : nothing}
             `}
           </div>
         </div>
 
         <div>
-          <div class="section-title">TOOLS</div>
+          <div class="section-title"><ha-icon icon="mdi:tools"></ha-icon>${panelText(this.hass, 'Tools')}</div>
           ${this._designMode === 'layout' ? html`
             <div class="tool-grid">
-              <button class="tool-btn ${this._toolMode === 'select' ? 'active' : ''}" @click="${() => this._setToolMode('select')}">
-                <ha-icon icon="mdi:cursor-default"></ha-icon><span>Select</span>
+              <button class="tool-btn ${this._toolMode === 'select' ? 'active' : ''}" aria-pressed="${this._toolMode === 'select'}" @click="${() => this._setToolMode('select')}">
+                <ha-icon icon="mdi:cursor-default"></ha-icon><span>${panelText(this.hass, 'Select')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'walls' ? 'active' : ''}" @click="${() => this._setToolMode('walls')}">
-                <ha-icon icon="mdi:wall"></ha-icon><span>Walls</span>
+              <button class="tool-btn ${this._toolMode === 'walls' ? 'active' : ''}" aria-pressed="${this._toolMode === 'walls'}" @click="${() => this._setToolMode('walls')}">
+                <ha-icon icon="mdi:wall"></ha-icon><span>${panelText(this.hass, 'Walls')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'door' ? 'active' : ''}" @click="${() => this._setToolMode('door')}">
-                <ha-icon icon="mdi:door"></ha-icon><span>Door</span>
+              <button class="tool-btn ${this._toolMode === 'door' ? 'active' : ''}" aria-pressed="${this._toolMode === 'door'}" @click="${() => this._setToolMode('door')}">
+                <ha-icon icon="mdi:door"></ha-icon><span>${panelText(this.hass, 'Door')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'window' ? 'active' : ''}" @click="${() => this._setToolMode('window')}">
-                <ha-icon icon="mdi:window-closed-variant"></ha-icon><span>Window</span>
+              <button class="tool-btn ${this._toolMode === 'window' ? 'active' : ''}" aria-pressed="${this._toolMode === 'window'}" @click="${() => this._setToolMode('window')}">
+                <ha-icon icon="mdi:window-closed-variant"></ha-icon><span>${panelText(this.hass, 'Window')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'mirror' ? 'active' : ''}" @click="${() => this._setToolMode('mirror')}">
+              <button class="tool-btn ${this._toolMode === 'mirror' ? 'active' : ''}" aria-pressed="${this._toolMode === 'mirror'}" @click="${() => this._setToolMode('mirror')}">
                 <ha-icon icon="mdi:mirror-rectangle"></ha-icon><span>${panelText(this.hass, 'Mirror')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'furniture' ? 'active' : ''}" @click="${() => this._setToolMode('furniture')}">
-                <ha-icon icon="mdi:sofa"></ha-icon><span>Furniture</span>
+              <button class="tool-btn ${this._toolMode === 'furniture' ? 'active' : ''}" aria-pressed="${this._toolMode === 'furniture'}" @click="${() => this._setToolMode('furniture')}">
+                <ha-icon icon="mdi:sofa"></ha-icon><span>${panelText(this.hass, 'Furniture')}</span>
               </button>
             </div>
           ` : html`
             <div class="tool-grid">
-              <button class="tool-btn ${this._toolMode === 'select' ? 'active' : ''}" @click="${() => this._setToolMode('select')}">
-                <ha-icon icon="mdi:cursor-default"></ha-icon><span>Select</span>
+              <button class="tool-btn ${this._toolMode === 'select' ? 'active' : ''}" aria-pressed="${this._toolMode === 'select'}" @click="${() => this._setToolMode('select')}">
+                <ha-icon icon="mdi:cursor-default"></ha-icon><span>${panelText(this.hass, 'Select')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'sensor' ? 'active' : ''}" @click="${() => this._setToolMode('sensor')}">
-                <ha-icon icon="mdi:radar"></ha-icon><span>Sensors</span>
+              <button class="tool-btn ${this._toolMode === 'sensor' ? 'active' : ''}" aria-pressed="${this._toolMode === 'sensor'}" @click="${() => this._setToolMode('sensor')}">
+                <ha-icon icon="mdi:radar"></ha-icon><span>${panelText(this.hass, 'Sensors')}</span>
               </button>
-              <button class="tool-btn ${this._toolMode === 'zone' ? 'active' : ''}" @click="${() => this._startDrawingAnyZone()}" style="grid-column: span 2;">
-                <ha-icon icon="mdi:vector-polygon"></ha-icon><span>Draw Zone</span>
+              <button class="tool-btn ${this._toolMode === 'zone' ? 'active' : ''}" aria-pressed="${this._toolMode === 'zone'}" @click="${() => this._startDrawingAnyZone()}" style="grid-column: span 2;">
+                <ha-icon icon="mdi:vector-polygon"></ha-icon><span>${panelText(this.hass, 'Draw Zone')}</span>
               </button>
             </div>
           `}
         </div>
 
         <div class="instructions">
-          <div class="instructions-title">${instr.title}</div>
-          <div class="instructions-text">${instr.text}</div>
+          <div class="instructions-title">${panelText(this.hass, instr.title)}</div>
+          <div class="instructions-text">${panelText(this.hass, instr.text)}</div>
         </div>
       </div>
 
       <div class="canvas-area" style="position: relative;">
           <div class="canvas-header">
-          <div class="header-group">
+          <div class="header-group canvas-context">
             ${selectedRoom ? html`
+              <div class="workspace-heading">
+                <strong data-i18n-ignore>${selectedRoom.name}</strong>
+                <span>${this._roomPoints.length >= 3
+                  ? `${this._calculateArea().toFixed(1)} m² · ${this._roomPoints.length} ${panelText(this.hass, 'Corners')}`
+                  : panelText(this.hass, 'Room layout')}</span>
+              </div>
               <div class="mode-toggle">
-                <button class="mode-btn ${this._designMode === 'layout' ? 'active' : ''}" @click="${() => this._setDesignMode('layout')}">
-                  <ha-icon icon="mdi:floor-plan"></ha-icon>Layout
+                <button class="mode-btn ${this._designMode === 'layout' ? 'active' : ''}" aria-pressed="${this._designMode === 'layout'}" @click="${() => this._setDesignMode('layout')}">
+                  <ha-icon icon="mdi:floor-plan"></ha-icon>${panelText(this.hass, 'Layout')}
                 </button>
-                <button class="mode-btn ${this._designMode === 'sensors' ? 'active' : ''}" @click="${() => this._setDesignMode('sensors')}">
-                  <ha-icon icon="mdi:radar"></ha-icon>Sensors & Zones
+                <button class="mode-btn ${this._designMode === 'sensors' ? 'active' : ''}" aria-pressed="${this._designMode === 'sensors'}" @click="${() => this._setDesignMode('sensors')}">
+                  <ha-icon icon="mdi:radar"></ha-icon>${panelText(this.hass, 'Sensors & Zones')}
                 </button>
               </div>
-            ` : html`<span class="room-label">No room selected</span>`}
+            ` : html`<span class="room-label">${panelText(this.hass, 'No room selected')}</span>`}
           </div>
           <div class="header-group">
             ${selectedRoom ? html`
               <div class="view-toggle">
-                <button class="view-toggle-btn ${this._viewMode === '2d' ? 'active' : ''}" @click="${() => this._viewMode = '2d'}" title="2D floor plan">
+                <button class="view-toggle-btn ${this._viewMode === '2d' ? 'active' : ''}" aria-pressed="${this._viewMode === '2d'}" @click="${() => this._viewMode = '2d'}" title="${panelText(this.hass, '2D floor plan')}">
                   <ha-icon icon="mdi:floor-plan"></ha-icon>2D
                 </button>
-                <button class="view-toggle-btn ${this._viewMode === '3d' ? 'active' : ''}" @click="${this._toggleViewMode}" title="3D view">
+                <button class="view-toggle-btn ${this._viewMode === '3d' ? 'active' : ''}" aria-pressed="${this._viewMode === '3d'}" @click="${this._toggleViewMode}" title="${panelText(this.hass, '3D view')}">
                   <ha-icon icon="mdi:cube-outline"></ha-icon>3D
                 </button>
               </div>
               ${this._designMode === 'sensors' ? html`
                 <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460}"
-                        title="${hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460 ? 'Wait for the LD2460 installation settings before pushing zones' : 'Push zones and entry lines to the linked sensors'}">
+                        title="${panelText(this.hass, hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460 ? 'Wait for the LD2460 installation settings before pushing zones' : 'Push zones and entry lines to the linked sensors')}">
                   <ha-icon icon="mdi:upload"></ha-icon>
-                  ${this._pushingToESPHome ? 'Pushing...' : 'Push'}
+                  ${panelText(this.hass, this._pushingToESPHome ? 'Pushing...' : 'Push')}
                 </button>
               ` : nothing}
-              <button class="save-btn ${this._dirty ? 'dirty' : ''}" @click="${this._saveRoom}" ?disabled="${this._saving || !this._dirty}">
+              <button class="save-btn ${this._dirty ? 'dirty' : ''}" title="${panelText(this.hass, this._dirty ? 'Save' : 'Saved')}" @click="${this._saveRoom}" ?disabled="${this._saving || !this._dirty}">
                 <ha-icon icon="mdi:content-save"></ha-icon>
-                ${this._saving ? 'Saving...' : this._dirty ? 'Save' : 'Saved'}
+                ${panelText(this.hass, this._saving ? 'Saving...' : this._dirty ? 'Save' : 'Saved')}
               </button>
             ` : nothing}
           </div>
@@ -5588,8 +5901,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         ${!selectedRoom ? html`
           <div class="empty-state">
             <ha-icon icon="mdi:floor-plan"></ha-icon>
-            <h3>Room Designer</h3>
-            <p>Select or create a room to draw the layout, place sensors and configure zones</p>
+            <h3>${panelText(this.hass, 'Room Designer')}</h3>
+            <p>${panelText(this.hass, 'Select or create a room to draw the layout, place sensors and configure zones')}</p>
           </div>
         ` : this._viewMode === '2d' ? html`
           <svg viewBox="0 0 ${CANVAS_SIZE} ${CANVAS_SIZE}"
@@ -5623,14 +5936,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           </svg>
           <div class="canvas-controls">
             <div class="control-group">
-              <button class="control-btn" @click="${() => this._zoom = Math.min(5, this._zoom * 1.25)}"><ha-icon icon="mdi:plus"></ha-icon></button>
-              <button class="control-btn" @click="${() => this._zoom = Math.max(0.2, this._zoom / 1.25)}"><ha-icon icon="mdi:minus"></ha-icon></button>
-              <button class="control-btn" @click="${() => this._autoZoom()}"><ha-icon icon="mdi:fit-to-screen"></ha-icon></button>
+              <button class="control-btn" title="${panelText(this.hass, 'Zoom in')}" aria-label="${panelText(this.hass, 'Zoom in')}" @click="${() => this._zoom = Math.min(5, this._zoom * 1.25)}"><ha-icon icon="mdi:plus"></ha-icon></button>
+              <span class="zoom-value">${Math.round(this._zoom * 100)}%</span>
+              <button class="control-btn" title="${panelText(this.hass, 'Zoom out')}" aria-label="${panelText(this.hass, 'Zoom out')}" @click="${() => this._zoom = Math.max(0.2, this._zoom / 1.25)}"><ha-icon icon="mdi:minus"></ha-icon></button>
+              <button class="control-btn" title="${panelText(this.hass, 'Fit room to screen')}" aria-label="${panelText(this.hass, 'Fit room to screen')}" @click="${() => this._autoZoom()}"><ha-icon icon="mdi:fit-to-screen"></ha-icon></button>
             </div>
             ${this._toolMode === 'walls' ? html`
               <div class="control-group">
-                <button class="control-btn" @click="${this._undoLastWallPoint}" title="Undo last corner"><ha-icon icon="mdi:undo"></ha-icon></button>
-                <button class="control-btn" @click="${this._clearWalls}" title="Clear walls"><ha-icon icon="mdi:delete"></ha-icon></button>
+                <button class="control-btn" @click="${this._undoLastWallPoint}" title="${panelText(this.hass, 'Undo last corner')}" aria-label="${panelText(this.hass, 'Undo last corner')}"><ha-icon icon="mdi:undo"></ha-icon></button>
+                <button class="control-btn" @click="${this._clearWalls}" title="${panelText(this.hass, 'Clear walls')}" aria-label="${panelText(this.hass, 'Clear walls')}"><ha-icon icon="mdi:delete"></ha-icon></button>
               </div>
             ` : nothing}
           </div>
@@ -5645,7 +5959,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             @wheel="${this._handle3DWheel}"
           ></canvas>
           <div class="view3d-info">
-            🎮 Drag to rotate • Scroll to zoom
+            <ha-icon icon="mdi:rotate-3d-variant"></ha-icon>
+            <span>${panelText(this.hass, 'Drag to rotate • Scroll to zoom')}</span>
           </div>
         `}
       </div>
@@ -6300,7 +6615,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
 
         ${this._sensors.some(sn => sn.deviceId) ? html`
-          <div class="live-status" style="border-left: 3px solid ${roomOccupied ? '#22c55e' : 'var(--rd-dim)'};">
+          <div class="live-status ${roomOccupied ? 'occupied' : ''}">
             <div class="header">
               <span class="dot ${roomOccupied ? 'active' : 'inactive'}"></span>
               <span style="font-weight: 600; color: var(--rd-text);">Live Tracking</span>
@@ -6428,6 +6743,105 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           </div>
         </div>
       ` : ''}
+
+      ${this._showImportRoomDialog && this._pendingImportedRoom && importSummary ? html`
+        <div class="dialog-overlay" @click=${this._closeImportRoomDialog}>
+          <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="import-room-title"
+            @click=${(event: Event) => event.stopPropagation()}>
+            <h3 id="import-room-title">${panelText(this.hass, this._importRoomSource === 'apple_roomplan' ? 'Import LiDAR scan' : 'Import room')}</h3>
+            <p class="import-description">
+              ${panelText(
+                this.hass,
+                this._importRoomSource === 'apple_roomplan'
+                  ? 'Apple RoomPlan scan detected. Review the converted room before adding it; the original scan and existing rooms are not changed.'
+                  : 'Review the backup before adding it. This creates a new room; existing rooms are not changed.',
+              )}
+            </p>
+            <div class="import-source">
+              <ha-icon icon=${this._importRoomSource === 'apple_roomplan' ? 'mdi:vector-polygon' : 'mdi:archive-arrow-up-outline'}></ha-icon>
+              <div>
+                <strong>${panelText(this.hass, this._importRoomSource === 'apple_roomplan' ? 'Apple RoomPlan (LiDAR scan)' : 'SmartHomeShop room backup')}</strong>
+                <span>${panelText(
+                  this.hass,
+                  this._importRoomSource === 'apple_roomplan'
+                    ? this._pendingImportedRoomOptions.length === 1
+                      ? 'One room detected with measurements in metres.'
+                      : '{count} rooms detected with measurements in metres.'
+                    : 'Complete Room Designer layout and settings.',
+                  { count: this._pendingImportedRoomOptions.length },
+                )}</span>
+              </div>
+            </div>
+            ${this._pendingImportedRoomOptions.length > 1 ? html`
+              <label for="import-room-choice">${panelText(this.hass, 'Room from scan')}</label>
+              <select id="import-room-choice" .value=${String(this._selectedImportedRoomIndex)}
+                ?disabled=${this._roomTransferBusy}
+                @change=${(event: Event) => this._selectImportedRoomOption(Number((event.target as HTMLSelectElement).value))}>
+                ${this._pendingImportedRoomOptions.map((room, index) => html`
+                  <option value=${String(index)}>${room.name}</option>
+                `)}
+              </select>
+            ` : nothing}
+            <label for="import-room-name">${panelText(this.hass, 'Room name')}</label>
+            <input id="import-room-name" type="text" maxlength="120" .value=${this._importRoomName}
+              @input=${(event: Event) => this._importRoomName = (event.target as HTMLInputElement).value}
+              @keydown=${(event: KeyboardEvent) => event.key === 'Enter' && this._importRoom()}
+              ?disabled=${this._roomTransferBusy} autofocus />
+            <div class="import-summary" aria-label=${panelText(this.hass, 'Imported room contents')}>
+              ${([
+                ['Walls', importSummary.walls],
+                ['Furniture', importSummary.furniture],
+                ['Doors', importSummary.doors],
+                ['Windows', importSummary.windows],
+                ['Mirrors', importSummary.mirrors],
+                ['Sensors', importSummary.sensors],
+                ['Zones', importSummary.zones],
+              ] as Array<[string, number]>).map(([label, count]) => html`
+                <div class="import-summary-item"><strong>${count}</strong><span>${panelText(this.hass, label)}</span></div>
+              `)}
+            </div>
+            ${this._importRoomSource === 'apple_roomplan' ? html`
+              <div class="import-note">
+                <ha-icon icon="mdi:ruler-square"></ha-icon>
+                <span>${panelText(this.hass, 'RoomPlan measurements are converted from metres to millimetres. Check the walls, doors, windows and furniture after import because LiDAR scans can contain small gaps.')}</span>
+              </div>
+            ` : html`
+              <div class="import-note">
+                <ha-icon icon="mdi:information-outline"></ha-icon>
+                <span>${panelText(this.hass, 'Device links are kept when the same devices exist in this Home Assistant. Missing devices can be linked again afterwards.')}</span>
+              </div>
+            `}
+            ${this._importRoomWarnings.map(warning => html`
+              <div class="import-warning" role="status">
+                <ha-icon icon="mdi:alert-outline"></ha-icon>
+                <span>${panelText(
+                  this.hass,
+                  warning === 'approximate_boundary'
+                    ? 'One or more scan edges did not meet exactly. The closest wall endpoints were joined; review the room shape.'
+                    : warning === 'skipped_opening'
+                      ? 'A scanned door or window was too far from a wall and was skipped.'
+                      : 'Some scanned objects do not match the Room Designer furniture library and were skipped.',
+                )}</span>
+              </div>
+            `)}
+            ${this._dirty ? html`
+              <div class="import-note">
+                <ha-icon icon="mdi:content-save-alert-outline"></ha-icon>
+                <span>${panelText(this.hass, 'Your current room has unsaved changes. You will be asked before those changes are discarded.')}</span>
+              </div>
+            ` : nothing}
+            ${this._roomActionError ? html`<div class="dialog-error" role="alert">${this._roomActionError}</div>` : nothing}
+            <div class="dialog-buttons">
+              <button class="dialog-btn cancel" ?disabled=${this._roomTransferBusy}
+                @click=${this._closeImportRoomDialog}>${panelText(this.hass, 'Cancel')}</button>
+              <button class="dialog-btn primary" ?disabled=${this._roomTransferBusy || !this._importRoomName.trim()}
+                @click=${this._importRoom}>
+                ${panelText(this.hass, this._roomTransferBusy ? 'Importing...' : 'Import as new room')}
+              </button>
+            </div>
+          </div>
+        </div>
+      ` : nothing}
 
       ${this._showRenameRoomDialog ? html`
         <div class="dialog-overlay" @click=${() => !this._roomActionBusy && (this._showRenameRoomDialog = false)}>

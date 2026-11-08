@@ -2,6 +2,12 @@ import { LitElement, html, css, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
 import { panelText } from '../utils/panel-translations';
+import {
+  chooseInitialDeviceFilter,
+  filterAndSortDevices,
+  summarizeDevices,
+  type DeviceFilter,
+} from '../utils/device-overview';
 import { volumeToLiters } from '../utils/water-units';
 import './settings-page';
 import './automations-page';
@@ -40,6 +46,7 @@ const PRODUCT_CONFIG: Record<string, ProductConfig> = {
   waterflowkit: { asset: `${PRODUCT_ICON_BASE}/icon-waterflowkit.svg`, icon: 'mdi:waves', category: 'water', color: '#0096c7' },
   p1meterkit: { asset: `${PRODUCT_ICON_BASE}/icon-p1meterkit.svg`, icon: 'mdi:flash', category: 'energy', color: '#f59e0b' },
   ceilsense: { asset: `${PRODUCT_ICON_BASE}/icon-ceilsense.svg`, icon: 'mdi:ceiling-light', category: 'sensor', color: '#7209b7' },
+  wallsense: { icon: 'mdi:wall', category: 'sensor', color: '#4361ee' },
 };
 
 @customElement('shs-dashboard-page')
@@ -49,6 +56,10 @@ export class DashboardPage extends LitElement {
   @state() private _devices: DeviceWithEntities[] = [];
   @state() private _hiddenDevices: SmartHomeShopDevice[] = [];
   @state() private _loading = true;
+  @state() private _refreshing = false;
+  @state() private _loadError = '';
+  @state() private _deviceQuery = '';
+  @state() private _deviceFilter: DeviceFilter | null = null;
   @state() private _detailDevice: DeviceWithEntities | null = null;
   @state() private _insights: any | null = null;
   @state() private _showMeterForm = false;
@@ -63,6 +74,7 @@ export class DashboardPage extends LitElement {
   @state() private _removeError = '';
   @state() private _removalNotice = '';
   private _insightsTimer?: number;
+  private _deviceLoadInFlight = false;
 
   static styles = css`
     :host {
@@ -112,6 +124,166 @@ export class DashboardPage extends LitElement {
       --mdc-icon-size: 14px;
     }
 
+    .device-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding: 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: var(--ha-card-border-radius, 12px);
+      background: var(--card-background-color);
+    }
+
+    .device-search {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .device-search ha-icon {
+      position: absolute;
+      left: 13px;
+      color: var(--secondary-text-color);
+      --mdc-icon-size: 19px;
+      pointer-events: none;
+    }
+
+    .device-search input {
+      width: 100%;
+      min-height: 44px;
+      box-sizing: border-box;
+      padding: 9px 13px 9px 42px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: var(--secondary-background-color);
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 14px;
+    }
+
+    .device-search input:focus-visible,
+    .device-filter:focus-visible,
+    .refresh-devices:focus-visible,
+    .clear-filters:focus-visible {
+      outline: 2px solid var(--shs-primary);
+      outline-offset: 2px;
+    }
+
+    .refresh-devices {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 44px;
+      padding: 8px 13px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--primary-text-color);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .refresh-devices:hover { border-color: var(--shs-primary); }
+    .refresh-devices:disabled { opacity: 0.55; cursor: wait; }
+    .refresh-devices ha-icon { --mdc-icon-size: 18px; }
+
+    .device-filter-row {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .device-filter {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 40px;
+      padding: 7px 12px;
+      border: 1px solid var(--divider-color);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--secondary-text-color);
+      font: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .device-filter:hover { color: var(--primary-text-color); border-color: var(--shs-primary); }
+    .device-filter[aria-pressed='true'] {
+      border-color: color-mix(in srgb, var(--shs-primary) 55%, var(--divider-color));
+      background: color-mix(in srgb, var(--shs-primary) 9%, var(--card-background-color));
+      color: var(--shs-primary);
+    }
+
+    .filter-count {
+      min-width: 20px;
+      padding: 1px 5px;
+      border-radius: 999px;
+      background: var(--secondary-background-color);
+      color: inherit;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 11px;
+    }
+
+    .filter-result {
+      margin-left: auto;
+      color: var(--secondary-text-color);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .active-first-note {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin: -2px 0 14px;
+      color: var(--secondary-text-color);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+
+    .active-first-note ha-icon { --mdc-icon-size: 17px; color: var(--shs-primary); flex: 0 0 auto; }
+
+    .load-warning {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 14px;
+      padding: 11px 13px;
+      border: 1px solid color-mix(in srgb, #f59e0b 28%, var(--divider-color));
+      border-radius: 10px;
+      background: color-mix(in srgb, #f59e0b 8%, var(--card-background-color));
+      color: var(--primary-text-color);
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+
+    .load-warning > ha-icon { color: #d97706; --mdc-icon-size: 19px; flex: 0 0 auto; }
+    .load-warning-copy { flex: 1; min-width: 0; }
+    .load-warning-copy strong { display: block; font-weight: 650; }
+    .load-warning-copy span { display: block; margin-top: 1px; color: var(--secondary-text-color); }
+    .load-warning button {
+      min-height: 36px;
+      padding: 6px 11px;
+      border: 1px solid var(--divider-color);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--primary-text-color);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .load-warning button:focus-visible { outline: 2px solid var(--shs-primary); outline-offset: 2px; }
+
     /* Device Grid */
     .devices-grid {
       display: grid;
@@ -127,7 +299,23 @@ export class DashboardPage extends LitElement {
       border: 1px solid var(--divider-color);
       border-radius: var(--ha-card-border-radius, 12px);
       overflow: hidden;
+      transition: border-color 160ms ease, box-shadow 160ms ease;
+    }
+
+    .device-open {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      border: 0;
+      border-radius: inherit;
+      background: transparent;
+      color: transparent;
       cursor: pointer;
+    }
+
+    .device-open:focus-visible {
+      outline: 3px solid var(--shs-primary);
+      outline-offset: -3px;
     }
 
     .device-card:hover,
@@ -140,7 +328,7 @@ export class DashboardPage extends LitElement {
     }
 
     .device-header {
-      padding: 14px 54px 14px 16px;
+      padding: 14px 62px 14px 16px;
       display: flex;
       align-items: center;
       gap: 12px;
@@ -223,11 +411,11 @@ export class DashboardPage extends LitElement {
     }
 
     .device-remove {
-      width: 32px;
-      height: 32px;
+      width: 40px;
+      height: 40px;
       position: absolute;
-      top: 13px;
-      right: 11px;
+      top: 9px;
+      right: 8px;
       z-index: 2;
       display: grid;
       place-items: center;
@@ -422,6 +610,27 @@ export class DashboardPage extends LitElement {
       font-size: 13.5px;
       max-width: 460px;
       line-height: 1.5;
+    }
+
+    .empty-state.compact {
+      padding: 32px 20px;
+      margin-bottom: 32px;
+    }
+
+    .empty-state.error ha-icon { color: var(--error-color, #ef4444); }
+
+    .clear-filters {
+      min-height: 42px;
+      margin-top: 16px;
+      padding: 8px 14px;
+      border: 1px solid var(--shs-primary);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--shs-primary);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
     }
 
     /* Device detail */
@@ -766,6 +975,14 @@ export class DashboardPage extends LitElement {
     }
 
     @media (max-width: 600px) {
+      .device-toolbar { grid-template-columns: 1fr; padding: 10px; }
+      .refresh-devices { width: 100%; }
+      .device-filter-row { gap: 6px; }
+      .device-filter { flex: 1 1 calc(50% - 6px); justify-content: space-between; min-height: 44px; }
+      .filter-result { width: 100%; margin: 4px 0 0; }
+      .load-warning { align-items: flex-start; flex-wrap: wrap; }
+      .load-warning button { width: 100%; min-height: 44px; }
+
       .sensor-grid {
         grid-template-columns: repeat(2, 1fr);
       }
@@ -784,7 +1001,7 @@ export class DashboardPage extends LitElement {
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .device-card, .device-remove { transition: none; }
+      .device-card, .device-remove, .refresh-devices { transition: none; }
     }
   `;
 
@@ -794,7 +1011,12 @@ export class DashboardPage extends LitElement {
   }
 
   private async _loadDevices(): Promise<void> {
-    this._loading = true;
+    if (this._deviceLoadInFlight) return;
+    this._deviceLoadInFlight = true;
+    const firstLoad = this._devices.length === 0;
+    if (firstLoad) this._loading = true;
+    else this._refreshing = true;
+    this._loadError = '';
     try {
       const result = await this.hass.callWS<{
         devices: SmartHomeShopDevice[];
@@ -818,10 +1040,29 @@ export class DashboardPage extends LitElement {
 
       this._devices = devicesWithEntities;
       this._hiddenDevices = result.hidden_devices || [];
+      if (this._deviceFilter === null) {
+        this._deviceFilter = chooseInitialDeviceFilter(devicesWithEntities);
+      }
     } catch (err) {
       console.error('Failed to load devices:', err);
+      this._loadError = panelText(
+        this.hass,
+        firstLoad ? 'Could not load devices' : 'Could not refresh devices',
+      );
+    } finally {
+      this._loading = false;
+      this._refreshing = false;
+      this._deviceLoadInFlight = false;
     }
-    this._loading = false;
+  }
+
+  private _setDeviceFilter(filter: DeviceFilter): void {
+    this._deviceFilter = filter;
+  }
+
+  private _clearDeviceFilters(): void {
+    this._deviceQuery = '';
+    this._deviceFilter = 'all';
   }
 
   private _selectDevice(device: SmartHomeShopDevice): void {
@@ -1701,6 +1942,7 @@ export class DashboardPage extends LitElement {
       case 'ultimatesensor':
       case 'ultimatesensor_mini':
       case 'ceilsense':
+      case 'wallsense':
         return 'device insights and automations';
       default:
         return 'product insights and automations';
@@ -1851,7 +2093,7 @@ export class DashboardPage extends LitElement {
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:water"></ha-icon>
             <span class="sensor-value">${this._formatValue(flow, ' L/m')}</span>
-            <div class="sensor-label">Flow</div>
+            <div class="sensor-label">${panelText(this.hass, 'Flow')}</div>
           </div>
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
@@ -1889,12 +2131,12 @@ export class DashboardPage extends LitElement {
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:counter"></ha-icon>
             <span class="sensor-value">${this._formatValue(total, ' L', 0)}</span>
-            <div class="sensor-label">Total</div>
+            <div class="sensor-label">${panelText(this.hass, 'Total')}</div>
           </div>
           <div class="sensor-item water-metric">
             <ha-icon class="sensor-icon" icon="mdi:calendar-today"></ha-icon>
             <span class="sensor-value">${this._formatWaterMetric(daily)}</span>
-            <div class="sensor-label">Today</div>
+            <div class="sensor-label">${panelText(this.hass, 'Today')}</div>
           </div>
         </div>
       `;
@@ -1914,11 +2156,11 @@ export class DashboardPage extends LitElement {
       const presence = this._getSensorValue(entities, 'presence') || this._getSensorValue(entities, 'occupancy');
 
       const sensors: { icon: string; value: string; label: string; metricClass: string }[] = [];
-      if (temp) sensors.push({ icon: 'mdi:thermometer', value: this._formatValue(temp, '°C'), label: 'Temp', metricClass: 'temperature-metric' });
-      if (humidity) sensors.push({ icon: 'mdi:water-percent', value: this._formatValue(humidity, '%', 0), label: 'Humidity', metricClass: 'humidity-metric' });
+      if (temp) sensors.push({ icon: 'mdi:thermometer', value: this._formatValue(temp, '°C'), label: panelText(this.hass, 'Temp'), metricClass: 'temperature-metric' });
+      if (humidity) sensors.push({ icon: 'mdi:water-percent', value: this._formatValue(humidity, '%', 0), label: panelText(this.hass, 'Humidity'), metricClass: 'humidity-metric' });
       if (co2) sensors.push({ icon: 'mdi:molecule-co2', value: this._formatValue(co2, ' ppm', 0), label: 'CO₂', metricClass: 'air-metric' });
-      if (illuminance) sensors.push({ icon: 'mdi:brightness-6', value: this._formatValue(illuminance, ' lx', 0), label: 'Light', metricClass: 'light-metric' });
-      if (presence) sensors.push({ icon: 'mdi:motion-sensor', value: presence === 'on' ? 'Yes' : 'No', label: 'Motion', metricClass: 'presence-metric' });
+      if (illuminance) sensors.push({ icon: 'mdi:brightness-6', value: this._formatValue(illuminance, ' lx', 0), label: panelText(this.hass, 'Light'), metricClass: 'light-metric' });
+      if (presence) sensors.push({ icon: 'mdi:motion-sensor', value: panelText(this.hass, presence === 'on' ? 'Yes' : 'No'), label: panelText(this.hass, 'Motion'), metricClass: 'presence-metric' });
 
       const displaySensors = sensors.slice(0, 3);
       if (displaySensors.length === 0) {
@@ -1926,7 +2168,7 @@ export class DashboardPage extends LitElement {
           <div class="sensor-grid">
             <div class="sensor-item" style="grid-column: span 3;">
               <span class="sensor-value">${device.entity_count}</span>
-              <div class="sensor-label">Entities</div>
+              <div class="sensor-label">${panelText(this.hass, 'Entities')}</div>
             </div>
           </div>
         `;
@@ -1961,17 +2203,17 @@ export class DashboardPage extends LitElement {
           <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:flash"></ha-icon>
             <span class="sensor-value">${this._formatPowerMetric(power)}</span>
-            <div class="sensor-label">${power !== null && power < 0 ? 'Export now' : 'Power'}</div>
+            <div class="sensor-label">${panelText(this.hass, power !== null && power < 0 ? 'Export now' : 'Power')}</div>
           </div>
           <div class="sensor-item energy-metric">
             <ha-icon class="sensor-icon" icon="mdi:lightning-bolt"></ha-icon>
             <span class="sensor-value">${this._formatValue(energy, ' kWh')}</span>
-            <div class="sensor-label">Energy</div>
+            <div class="sensor-label">${panelText(this.hass, 'Energy')}</div>
           </div>
           <div class="sensor-item voltage-metric">
             <ha-icon class="sensor-icon" icon="mdi:sine-wave"></ha-icon>
             <span class="sensor-value">${this._formatValue(voltage, ' V', 0)}</span>
-            <div class="sensor-label">Voltage</div>
+            <div class="sensor-label">${panelText(this.hass, 'Voltage')}</div>
           </div>
         </div>
       `;
@@ -1981,7 +2223,7 @@ export class DashboardPage extends LitElement {
       <div class="sensor-grid">
         <div class="sensor-item" style="grid-column: span 3;">
           <span class="sensor-value">${device.entity_count}</span>
-          <div class="sensor-label">Entities</div>
+          <div class="sensor-label">${panelText(this.hass, 'Entities')}</div>
         </div>
       </div>
     `;
@@ -2153,9 +2395,9 @@ export class DashboardPage extends LitElement {
   protected render() {
     if (this._loading) {
       return html`
-        <div class="loading">
+        <div class="loading" role="status" aria-live="polite">
           <ha-circular-progress active></ha-circular-progress>
-          <span class="loading-text">Loading devices...</span>
+          <span class="loading-text">${panelText(this.hass, 'Loading devices...')}</span>
         </div>
       `;
     }
@@ -2164,18 +2406,41 @@ export class DashboardPage extends LitElement {
       return this._renderDetail();
     }
 
+    if (this._loadError && this._devices.length === 0) {
+      return html`
+        <div class="empty-state error" role="alert">
+          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+          <h3>${this._loadError}</h3>
+          <p>${panelText(this.hass, 'Check the Home Assistant connection and try again.')}</p>
+          <button class="clear-filters" type="button" @click=${() => this._loadDevices()}>
+            ${panelText(this.hass, 'Try again')}
+          </button>
+        </div>
+      `;
+    }
+
+    const activeFilter = this._deviceFilter || 'all';
+    const deviceSummary = summarizeDevices(this._devices);
+    const visibleDevices = filterAndSortDevices(this._devices, this._deviceQuery, activeFilter);
+    const filterOptions: Array<{ value: DeviceFilter; label: string; count: number }> = [
+      { value: 'all', label: panelText(this.hass, 'All'), count: deviceSummary.total },
+      { value: 'online', label: panelText(this.hass, 'Online'), count: deviceSummary.online },
+      { value: 'offline', label: panelText(this.hass, 'Offline'), count: deviceSummary.offline },
+      { value: 'unlinked', label: panelText(this.hass, 'Not linked'), count: deviceSummary.unlinked },
+    ];
+
     return html`
       ${this._devices.length === 0 && this._hiddenDevices.length === 0 ? html`
         <div class="empty-state">
           <ha-icon icon="mdi:package-variant"></ha-icon>
-          <h3>No SmartHomeShop devices found</h3>
-          <p>Connect your SmartHomeShop.io devices via ESPHome, then add this integration via Settings → Devices & Services</p>
+          <h3>${panelText(this.hass, 'No SmartHomeShop devices found')}</h3>
+          <p>${panelText(this.hass, 'Connect your SmartHomeShop.io devices via ESPHome, then add this integration via Settings → Devices & Services')}</p>
         </div>
       ` : html`
         <!-- Devices Section -->
         <div class="section-header">
           <h2 class="section-title">
-            Devices
+            ${panelText(this.hass, 'Devices')}
             <span class="section-count">${this._devices.length}</span>
           </h2>
           <a href="https://smarthomeshop.io" target="_blank" rel="noopener" class="shop-link">
@@ -2194,14 +2459,83 @@ export class DashboardPage extends LitElement {
           </div>
         ` : nothing}
 
-        <div class="devices-grid">
-          ${this._devices.map(device => {
+        ${this._loadError ? html`
+          <div class="load-warning" role="alert">
+            <ha-icon icon="mdi:cloud-alert-outline" aria-hidden="true"></ha-icon>
+            <div class="load-warning-copy">
+              <strong>${this._loadError}</strong>
+              <span>${panelText(this.hass, 'Existing device data is still shown. Check the connection and try again.')}</span>
+            </div>
+            <button type="button" @click=${() => this._loadDevices()}>
+              ${panelText(this.hass, 'Try again')}
+            </button>
+          </div>
+        ` : nothing}
+
+        <div class="device-toolbar" aria-label=${panelText(this.hass, 'Device filters')}>
+          <label class="device-search">
+            <ha-icon icon="mdi:magnify" aria-hidden="true"></ha-icon>
+            <input
+              type="search"
+              autocomplete="off"
+              .value=${this._deviceQuery}
+              placeholder=${panelText(this.hass, 'Search devices')}
+              aria-label=${panelText(this.hass, 'Search devices')}
+              @input=${(event: Event) => { this._deviceQuery = (event.target as HTMLInputElement).value; }}
+            >
+          </label>
+          <button
+            class="refresh-devices"
+            type="button"
+            ?disabled=${this._refreshing}
+            aria-label=${panelText(this.hass, 'Refresh devices')}
+            @click=${() => this._loadDevices()}
+          >
+            ${this._refreshing
+              ? html`<ha-circular-progress active size="small"></ha-circular-progress>${panelText(this.hass, 'Refreshing...')}`
+              : html`<ha-icon icon="mdi:refresh"></ha-icon>${panelText(this.hass, 'Refresh')}`}
+          </button>
+          <div class="device-filter-row" role="group" aria-label=${panelText(this.hass, 'Filter devices by status')}>
+            ${filterOptions.map(option => html`
+              <button
+                class="device-filter"
+                type="button"
+                aria-pressed=${activeFilter === option.value ? 'true' : 'false'}
+                @click=${() => this._setDeviceFilter(option.value)}
+              >
+                <span>${option.label}</span>
+                <span class="filter-count">${option.count}</span>
+              </button>
+            `)}
+            <span class="filter-result" role="status" aria-live="polite">
+              ${panelText(this.hass, 'Showing {shown} of {total} devices', {
+                shown: visibleDevices.length,
+                total: deviceSummary.total,
+              })}
+            </span>
+          </div>
+        </div>
+
+        ${activeFilter === 'online' && !this._deviceQuery && deviceSummary.offline > 0 ? html`
+          <div class="active-first-note" role="note">
+            <ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon>
+            <span>${panelText(this.hass, 'Showing online devices first. {count} offline devices are hidden; choose All to view them.', { count: deviceSummary.offline })}</span>
+          </div>
+        ` : nothing}
+
+        ${visibleDevices.length ? html`<div class="devices-grid">
+          ${visibleDevices.map(device => {
             const config = this._getProductConfig(device.product_type);
             return html`
               <div
                 class="device-card ${this.selectedDeviceId === device.id ? 'selected' : ''} ${device.online === false ? 'offline' : ''}"
-                @click=${() => { this._selectDevice(device); this._openDetail(device); }}
               >
+                <button
+                  class="device-open"
+                  type="button"
+                  aria-label=${panelText(this.hass, 'Open {name}', { name: device.name })}
+                  @click=${() => { this._selectDevice(device); this._openDetail(device); }}
+                ></button>
                 <div class="device-header">
                   <div class="device-icon" style="background: ${config.color}1f; color: ${config.color}">
                     ${this._renderProductIcon(config)}
@@ -2209,26 +2543,26 @@ export class DashboardPage extends LitElement {
                   <div class="device-info">
                     <h3 class="device-name" data-i18n-ignore>${device.name}</h3>
                     <div class="device-type">
-                      <span class="device-type-badge ${config.category}">${config.category}</span>
+                      <span class="device-type-badge ${config.category}">${panelText(this.hass, config.category)}</span>
                       ${device.product_type === 'waterp1meterkit' ? html`
-                        <span class="device-type-badge energy">energy</span>
+                        <span class="device-type-badge energy">${panelText(this.hass, 'energy')}</span>
                       ` : nothing}
                       ${device.integration_linked === false ? html`
-                        <span class="device-type-badge unlinked">not linked</span>
+                        <span class="device-type-badge unlinked">${panelText(this.hass, 'not linked')}</span>
                       ` : nothing}
-                      ${device.product_name || 'Unknown'}
+                      ${device.product_name || panelText(this.hass, 'Unknown')}
                     </div>
                   </div>
                   ${device.online === false ? html`
                     <div style="text-align: right;">
-                      <span class="offline-badge">Offline</span>
+                      <span class="offline-badge">${panelText(this.hass, 'Offline')}</span>
                       ${device.last_seen ? html`
                         <div class="last-seen" title=${new Date(device.last_seen).toLocaleString()}>
                           ${this._relativeTime(device.last_seen)}
                         </div>
                       ` : nothing}
                     </div>
-                  ` : html`<span class="online-dot" title="Online"></span>`}
+                  ` : html`<span class="online-dot" title=${panelText(this.hass, 'Online')}></span>`}
                 </div>
                 ${this._renderDeviceSensors(device)}
                 ${this.hass.user?.is_admin ? html`
@@ -2243,7 +2577,16 @@ export class DashboardPage extends LitElement {
               </div>
             `;
           })}
-        </div>
+        </div>` : html`
+          <div class="empty-state compact">
+            <ha-icon icon="mdi:filter-off-outline"></ha-icon>
+            <h3>${panelText(this.hass, 'No devices match these filters')}</h3>
+            <p>${panelText(this.hass, 'Try another search or show all devices.')}</p>
+            <button class="clear-filters" type="button" @click=${this._clearDeviceFilters}>
+              ${panelText(this.hass, 'Clear search and filters')}
+            </button>
+          </div>
+        `}
 
         ${this.hass.user?.is_admin && this._hiddenDevices.length ? html`
           <details class="hidden-devices">
@@ -2274,22 +2617,30 @@ export class DashboardPage extends LitElement {
 
       <!-- Tools -->
       <div class="section-header">
-        <h2 class="section-title">Tools</h2>
+        <h2 class="section-title">${panelText(this.hass, 'Tools')}</h2>
       </div>
       <div class="tools-list">
+        <button class="tool-row" @click=${() => this._navigateTo('home')}>
+          <span class="tool-icon"><ha-icon icon="mdi:home-account"></ha-icon></span>
+          <span class="tool-text">
+            <span class="tool-title">${panelText(this.hass, 'Live Home')}</span>
+            <p class="tool-desc">${panelText(this.hass, 'See live presence across every room and floor')}</p>
+          </span>
+          <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
+        </button>
         <button class="tool-row" @click=${() => this._navigateTo('zones')}>
           <span class="tool-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></span>
           <span class="tool-text">
-            <span class="tool-title">Room Designer</span>
-            <p class="tool-desc">Draw your room, place sensors and configure zones and entry lines</p>
+            <span class="tool-title">${panelText(this.hass, 'Room Designer')}</span>
+            <p class="tool-desc">${panelText(this.hass, 'Draw your room, place sensors and configure zones and entry lines')}</p>
           </span>
           <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
         </button>
         <button class="tool-row" @click=${() => this._navigateTo('energy')}>
           <span class="tool-icon energy"><ha-icon icon="mdi:lightning-bolt"></ha-icon></span>
           <span class="tool-text">
-            <span class="tool-title">Energy</span>
-            <p class="tool-desc">Monitor live energy, dynamic prices, solar, batteries and smart control</p>
+            <span class="tool-title">${panelText(this.hass, 'Energy')}</span>
+            <p class="tool-desc">${panelText(this.hass, 'Monitor live energy, dynamic prices, solar, batteries and smart control')}</p>
           </span>
           <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
         </button>

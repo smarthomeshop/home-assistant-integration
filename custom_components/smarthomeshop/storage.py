@@ -1,9 +1,10 @@
 """Storage for SmartHomeShop room configurations."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
@@ -14,6 +15,10 @@ STORAGE_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.rooms"
 
 
+class RoomHouseConflictError(Exception):
+    """Raised when a Live Home save is based on stale room data."""
+
+
 class SmartHomeShopStore:
     """Store for SmartHomeShop room configurations."""
 
@@ -22,6 +27,14 @@ class SmartHomeShopStore:
         self.hass = hass
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._data: dict[str, Any] = {"rooms": {}}
+        self._room_lock = asyncio.Lock()
+
+    def _rooms_lock(self) -> asyncio.Lock:
+        """Return the shared room mutation lock, including lightweight tests."""
+        lock = getattr(self, "_room_lock", None)
+        if lock is None:
+            lock = self._room_lock = asyncio.Lock()
+        return lock
 
     async def async_load(self) -> None:
         """Load data from storage."""
@@ -39,6 +52,8 @@ class SmartHomeShopStore:
         self._data.setdefault("schedule_runtime", {})
         self._data.setdefault("savings", {})
         self._data.setdefault("hidden_devices", {})
+        self._data.setdefault("energy_learning", {"samples": [], "model": {}})
+        self._data.setdefault("energy_journal", [])
         LOGGER.debug("Loaded %d rooms from storage", len(self._data.get("rooms", {})))
 
     async def async_save(self) -> None:
@@ -64,26 +79,85 @@ class SmartHomeShopStore:
 
     async def async_save_room(self, room_data: dict[str, Any]) -> dict[str, Any]:
         """Save or update a room configuration."""
-        room_id = room_data.get("id")
-        if not room_id:
-            room_id = str(uuid.uuid4())
-            room_data["id"] = room_id
-            room_data["created_at"] = datetime.now().isoformat()
-        room_data["updated_at"] = datetime.now().isoformat()
-        if "rooms" not in self._data:
-            self._data["rooms"] = {}
-        self._data["rooms"][room_id] = room_data
-        await self.async_save()
-        LOGGER.info("Saved room: %s (%s)", room_data.get("name", "Unnamed"), room_id)
-        return room_data
+        async with self._rooms_lock():
+            room_data = dict(room_data)
+            rooms = self._data.setdefault("rooms", {})
+            room_id = room_data.get("id")
+            existing = rooms.get(room_id) if room_id else None
+            if not room_id:
+                room_id = str(uuid.uuid4())
+                room_data["id"] = room_id
+                room_data["created_at"] = datetime.now().isoformat()
+                room_data.pop("house", None)
+            elif existing is None:
+                # New/imported rooms receive a fresh non-overlapping Live Home
+                # suggestion; portable backups never own a house placement.
+                room_data.pop("house", None)
+            elif existing is not None:
+                # Room Designer owns the room contents; Live Home owns house.
+                # A stale designer tab must never restore or remove a placement.
+                if "house" in existing:
+                    room_data["house"] = existing["house"]
+                else:
+                    room_data.pop("house", None)
+            room_data["updated_at"] = datetime.now().isoformat()
+            rooms[room_id] = room_data
+            await self.async_save()
+            LOGGER.info("Saved room: %s (%s)", room_data.get("name", "Unnamed"), room_id)
+            return room_data
+
+    async def async_save_room_house(
+        self, room_id: str, house: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Update only a room's whole-home placement.
+
+        Live Home deliberately writes a narrow patch so a simultaneous Room
+        Designer save cannot be undone by an older copy of the room payload.
+        """
+        result = await self.async_save_room_houses([{"room_id": room_id, "house": house}])
+        return result[0] if result else None
+
+    async def async_save_room_houses(
+        self, placements: list[dict[str, Any]]
+    ) -> list[dict[str, Any]] | None:
+        """Atomically merge a complete set of Live Home placements."""
+        async with self._rooms_lock():
+            rooms = self._data.setdefault("rooms", {})
+            room_ids = [placement["room_id"] for placement in placements]
+            if len(room_ids) != len(set(room_ids)) or any(room_id not in rooms for room_id in room_ids):
+                return None
+            for placement in placements:
+                expected = placement.get("expected_updated_at")
+                if expected is not None and rooms[placement["room_id"]].get("updated_at") != expected:
+                    raise RoomHouseConflictError(placement["room_id"])
+            previous_rooms = rooms
+            next_rooms = dict(rooms)
+            updated_rooms: list[dict[str, Any]] = []
+            timestamp = datetime.now().isoformat()
+            for placement in placements:
+                room_id = placement["room_id"]
+                updated = dict(rooms[room_id])
+                updated["house"] = dict(placement["house"])
+                updated["updated_at"] = timestamp
+                next_rooms[room_id] = updated
+                updated_rooms.append(updated)
+            self._data["rooms"] = next_rooms
+            try:
+                await self.async_save()
+            except Exception:
+                self._data["rooms"] = previous_rooms
+                raise
+            LOGGER.info("Saved %d Live Home room placements", len(updated_rooms))
+            return updated_rooms
 
     async def async_delete_room(self, room_id: str) -> bool:
         """Delete a room configuration."""
-        if room_id in self._data.get("rooms", {}):
-            del self._data["rooms"][room_id]
-            await self.async_save()
-            return True
-        return False
+        async with self._rooms_lock():
+            if room_id in self._data.get("rooms", {}):
+                del self._data["rooms"][room_id]
+                await self.async_save()
+                return True
+            return False
 
     # ---- Smart-energy deadline schedules ----
 
@@ -181,6 +255,113 @@ class SmartHomeShopStore:
     async def async_set_savings(self, savings: dict[str, Any]) -> None:
         """Persist the accumulated smart-energy savings."""
         self._data["savings"] = savings
+        await self.async_save()
+
+    # ---- Smart Energy learning and explainable decision journal ----
+
+    def get_energy_learning(self) -> dict[str, Any]:
+        """Return local measurements and the last bounded learning model."""
+        learning = self._data.get("energy_learning", {})
+        return {
+            "samples": [dict(item) for item in learning.get("samples", [])],
+            "model": dict(learning.get("model", {})),
+            "updated_at": learning.get("updated_at"),
+        }
+
+    async def async_set_energy_learning(self, learning: dict[str, Any]) -> None:
+        """Persist local learning data without sending it outside Home Assistant."""
+        payload = dict(learning)
+        payload["samples"] = [dict(item) for item in payload.get("samples", [])]
+        payload["model"] = dict(payload.get("model", {}))
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._data["energy_learning"] = payload
+        await self.async_save()
+
+    def get_energy_journal(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Return newest Smart Energy decisions first."""
+        safe_limit = max(1, min(500, int(limit)))
+        rows = self._data.get("energy_journal", [])
+        return [dict(item) for item in reversed(rows[-safe_limit:])]
+
+    async def async_append_energy_journal(
+        self, entry: dict[str, Any], *, maximum: int = 300
+    ) -> dict[str, Any]:
+        """Append one explainable decision and keep storage bounded."""
+        row = dict(entry)
+        now = datetime.now(timezone.utc)
+        row.setdefault("id", str(uuid.uuid4()))
+        row.setdefault("timestamp", now.isoformat())
+        journal = self._data.setdefault("energy_journal", [])
+        target = row.get("target_power_w")
+        try:
+            target_bucket = round(float(target) / 100) if target is not None else None
+        except (TypeError, ValueError):
+            target_bucket = None
+        # Repeated successful decisions are intentionally collapsed, but a
+        # different failure/verification reason is operationally meaningful
+        # and must remain visible in the journal.
+        reason_key = (
+            row.get("reason")
+            if row.get("status") in {"failed", "not_following", "unavailable"}
+            else None
+        )
+        key = (
+            row.get("kind"),
+            row.get("mode"),
+            row.get("status"),
+            row.get("action"),
+            target_bucket,
+            row.get("control_entity"),
+            row.get("guard_status"),
+            reason_key,
+        )
+        for previous in reversed(journal[-20:]):
+            previous_target = previous.get("target_power_w")
+            try:
+                previous_bucket = (
+                    round(float(previous_target) / 100)
+                    if previous_target is not None
+                    else None
+                )
+            except (TypeError, ValueError):
+                previous_bucket = None
+            previous_reason_key = (
+                previous.get("reason")
+                if previous.get("status")
+                in {"failed", "not_following", "unavailable"}
+                else None
+            )
+            previous_key = (
+                previous.get("kind"),
+                previous.get("mode"),
+                previous.get("status"),
+                previous.get("action"),
+                previous_bucket,
+                previous.get("control_entity"),
+                previous.get("guard_status"),
+                previous_reason_key,
+            )
+            if previous_key != key:
+                continue
+            try:
+                previous_time = datetime.fromisoformat(
+                    str(previous.get("timestamp") or "").replace("Z", "+00:00")
+                )
+                if previous_time.tzinfo is None:
+                    previous_time = previous_time.replace(tzinfo=timezone.utc)
+            except ValueError:
+                break
+            if now - previous_time < timedelta(minutes=10):
+                return dict(previous)
+            break
+        journal.append(row)
+        self._data["energy_journal"] = journal[-max(10, min(1000, maximum)):]
+        await self.async_save()
+        return row
+
+    async def async_clear_energy_journal(self) -> None:
+        """Clear the local Smart Energy decision history."""
+        self._data["energy_journal"] = []
         await self.async_save()
 
     # ---- Devices hidden from the SmartHomeShop panel ----

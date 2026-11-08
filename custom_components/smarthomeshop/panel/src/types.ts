@@ -113,6 +113,17 @@ export interface DevicePlacement {
   deviceId?: string;
 }
 
+/** Position of one Room Designer room in the whole-home model. */
+export interface HousePlacement {
+  x: number;
+  y: number;
+  /** Zero-based storey; negative values are supported for basements. */
+  floor: number;
+  /** Rooms snap to quarter turns so neighbouring walls remain easy to align. */
+  rotationDeg: 0 | 90 | 180 | 270;
+  visible?: boolean;
+}
+
 export interface FurnitureInstance {
   id: string;
   typeId: string;
@@ -263,7 +274,7 @@ export interface FurnitureType {
   defaultHeight: number;
 }
 
-export type PageType = 'dashboard' | 'room-builder' | 'zones' | 'settings' | 'energy';
+export type PageType = 'dashboard' | 'home' | 'room-builder' | 'zones' | 'settings' | 'energy';
 
 // Aliases for backwards compatibility
 export interface Wall {
@@ -296,6 +307,9 @@ export interface Room {
   sensors?: Array<Record<string, unknown>>;
   calibration?: RoomCalibration;
   tracking?: RadarTrackingSettings;
+  house?: HousePlacement;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface FurnitureItem {

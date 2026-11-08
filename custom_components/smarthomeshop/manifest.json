@@ -5,6 +5,9 @@
     "@smarthomeshop"
   ],
   "config_flow": true,
+  "after_dependencies": [
+    "recorder"
+  ],
   "dependencies": [
     "energy",
     "esphome",
@@ -16,5 +19,5 @@
   "documentation": "https://docs.smarthomeshop.io/en/home-assistant-integration",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/smarthomeshop/home-assistant-integration/issues",
-  "version": "1.15.0"
+  "version": "1.16.0"
 }

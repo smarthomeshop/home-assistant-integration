@@ -9,7 +9,7 @@ from typing import Final
 LOGGER = logging.getLogger(__package__)
 
 DOMAIN: Final = "smarthomeshop"
-VERSION: Final = "1.15.0"
+VERSION: Final = "1.16.0"
 MANUFACTURER: Final = "SmartHomeShop.io"
 
 # Cloud API endpoint. Production/HACS installations use the public API by
@@ -36,6 +36,7 @@ PRODUCT_ULTIMATESENSOR: Final = "ultimatesensor"
 PRODUCT_ULTIMATESENSOR_MINI: Final = "ultimatesensor_mini"
 PRODUCT_P1METERKIT: Final = "p1meterkit"
 PRODUCT_CEILSENSE: Final = "ceilsense"
+PRODUCT_WALLSENSE: Final = "wallsense"
 
 # Product display names
 PRODUCT_NAMES: Final = {
@@ -46,6 +47,7 @@ PRODUCT_NAMES: Final = {
     PRODUCT_ULTIMATESENSOR_MINI: "UltimateSensor Mini",
     PRODUCT_P1METERKIT: "P1MeterKit",
     PRODUCT_CEILSENSE: "CeilSense",
+    PRODUCT_WALLSENSE: "WallSense",
 }
 
 # Product labels shown in Home Assistant's native config flow.
@@ -57,6 +59,7 @@ PRODUCT_SELECT_LABELS: Final = {
     PRODUCT_ULTIMATESENSOR_MINI: "UltimateSensor Mini - compact room sensor",
     PRODUCT_P1METERKIT: "P1MeterKit - energy meter gateway",
     PRODUCT_CEILSENSE: "CeilSense - ceiling presence sensor",
+    PRODUCT_WALLSENSE: "WallSense - wall-mounted presence sensor",
 }
 
 PRODUCT_DESCRIPTIONS: Final = {
@@ -75,6 +78,7 @@ PRODUCT_DESCRIPTIONS: Final = {
     ),
     PRODUCT_P1METERKIT: "Adds electricity and gas readings from your P1 smart meter.",
     PRODUCT_CEILSENSE: "Adds ceiling-mounted presence and room sensing.",
+    PRODUCT_WALLSENSE: "Adds wall-mounted presence and room sensing.",
 }
 
 # Product detection patterns (entity_id patterns)
@@ -86,6 +90,7 @@ PRODUCT_PATTERNS: Final = {
     PRODUCT_ULTIMATESENSOR_MINI: ["ultimatesensor_mini", "ultimatesensormini"],
     PRODUCT_P1METERKIT: ["p1meterkit"],
     PRODUCT_CEILSENSE: ["ceilsense"],
+    PRODUCT_WALLSENSE: ["wallsense", "wall_sense"],
 }
 
 # ESPHome project detection via the device registry. The ESPHome
@@ -102,6 +107,7 @@ PRODUCT_MODEL_PREFIXES: Final = (
     ("waterflowkit", PRODUCT_WATERFLOWKIT),
     ("p1meterkit", PRODUCT_P1METERKIT),
     ("ceilsense", PRODUCT_CEILSENSE),
+    ("wallsense", PRODUCT_WALLSENSE),
 )
 
 

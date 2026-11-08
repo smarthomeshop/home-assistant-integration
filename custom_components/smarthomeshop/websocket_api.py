@@ -1,6 +1,8 @@
 """WebSocket API for SmartHomeShop Configurator Panel."""
 from __future__ import annotations
 
+import math
+
 import asyncio
 import re
 from typing import Any
@@ -39,7 +41,7 @@ from .const import (
     DEFAULT_NIGHT_END,
     resolve_api_base_url,
 )
-from .storage import SmartHomeShopStore
+from .storage import RoomHouseConflictError, SmartHomeShopStore
 from .radar_profiles import discover_radar_device_profiles
 from .device_linking import (
     config_entries_for_device_domain,
@@ -163,6 +165,8 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_radar_profiles)
     websocket_api.async_register_command(hass, ws_get_rooms)
     websocket_api.async_register_command(hass, ws_save_room)
+    websocket_api.async_register_command(hass, ws_save_room_house)
+    websocket_api.async_register_command(hass, ws_save_room_houses)
     websocket_api.async_register_command(hass, ws_delete_room)
     websocket_api.async_register_command(hass, ws_get_device_entities)
     websocket_api.async_register_command(hass, ws_enable_device_entity)
@@ -183,6 +187,8 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_savings)
     websocket_api.async_register_command(hass, ws_get_battery)
     websocket_api.async_register_command(hass, ws_get_battery_plan)
+    websocket_api.async_register_command(hass, ws_get_energy_journal)
+    websocket_api.async_register_command(hass, ws_clear_energy_journal)
     websocket_api.async_register_command(hass, ws_set_battery)
     websocket_api.async_register_command(hass, ws_get_energy_sources)
     websocket_api.async_register_command(hass, ws_set_energy_sources)
@@ -347,7 +353,37 @@ def ws_get_rooms(
 _ROOM_SCHEMA = vol.Schema({
     vol.Optional("id"): str,
     vol.Required("name"): vol.All(str, vol.Length(min=1, max=120)),
+    vol.Optional("walls"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("furniture"): vol.All(list, vol.Length(max=500), [dict]),
+    vol.Optional("devices"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("doors"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("windows"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("mirrors"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("sensors"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("zones"): vol.All(list, vol.Length(max=100), [dict]),
+    vol.Optional("sensor"): vol.Any(None, dict),
 }, extra=vol.ALLOW_EXTRA)
+
+def _finite_number(value: Any) -> float:
+    """Coerce a finite numeric placement value."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise vol.Invalid("must be a finite number")
+    return number
+
+
+_HOUSE_PLACEMENT_SCHEMA = vol.Schema({
+    vol.Required("x"): _finite_number,
+    vol.Required("y"): _finite_number,
+    vol.Required("floor"): vol.All(vol.Coerce(int), vol.Range(min=-5, max=20)),
+    vol.Required("rotationDeg"): vol.In((0, 90, 180, 270)),
+    vol.Required("visible"): bool,
+})
+_HOUSE_PLACEMENT_UPDATE_SCHEMA = vol.Schema({
+    vol.Required("room_id"): str,
+    vol.Required("house"): _HOUSE_PLACEMENT_SCHEMA,
+    vol.Optional("expected_updated_at"): vol.Any(None, str),
+})
 
 
 @websocket_api.websocket_command({
@@ -367,7 +403,7 @@ async def ws_save_room(
     store: SmartHomeShopStore = hass.data[DOMAIN]["store"]
     try:
         room_data = _ROOM_SCHEMA(msg["room"])
-    except vol.Invalid as err:
+    except (vol.Invalid, TypeError, ValueError) as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     try:
@@ -375,6 +411,75 @@ async def ws_save_room(
         connection.send_result(msg["id"], {"room": room})
     except Exception as err:
         LOGGER.error("Failed to save room: %s", err)
+        connection.send_error(msg["id"], "save_failed", str(err))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/room/house/save",
+    vol.Required("room_id"): str,
+    vol.Required("house"): dict,
+})
+@websocket_api.async_response
+async def ws_save_room_house(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Update only the Live Home placement of an existing room."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    try:
+        house = _HOUSE_PLACEMENT_SCHEMA(msg["house"])
+    except (vol.Invalid, TypeError, ValueError) as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    store: SmartHomeShopStore = hass.data[DOMAIN]["store"]
+    try:
+        room = await store.async_save_room_house(msg["room_id"], house)
+        if room is None:
+            connection.send_error(msg["id"], "not_found", "Room not found")
+            return
+        connection.send_result(msg["id"], {"room": room})
+    except RoomHouseConflictError:
+        connection.send_error(msg["id"], "conflict", "A room changed since Live Home loaded")
+    except Exception as err:
+        LOGGER.error("Failed to save Live Home placement: %s", err)
+        connection.send_error(msg["id"], "save_failed", str(err))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/room/house/save_many",
+    vol.Required("placements"): list,
+})
+@websocket_api.async_response
+async def ws_save_room_houses(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Atomically update all supplied Live Home placements."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    try:
+        placements = [_HOUSE_PLACEMENT_UPDATE_SCHEMA(item) for item in msg["placements"]]
+        if not placements:
+            raise vol.Invalid("at least one room placement is required")
+    except (vol.Invalid, TypeError, ValueError) as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    store: SmartHomeShopStore = hass.data[DOMAIN]["store"]
+    try:
+        rooms = await store.async_save_room_houses(placements)
+        if rooms is None:
+            connection.send_error(msg["id"], "not_found", "A room is missing or duplicated")
+            return
+        connection.send_result(msg["id"], {"rooms": rooms})
+    except RoomHouseConflictError:
+        connection.send_error(msg["id"], "conflict", "A room changed since Live Home loaded")
+    except Exception as err:
+        LOGGER.error("Failed to save Live Home placements: %s", err)
         connection.send_error(msg["id"], "save_failed", str(err))
 
 
@@ -1453,6 +1558,40 @@ def ws_get_battery_plan(hass: HomeAssistant, connection, msg: dict) -> None:
     )
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/energy/journal",
+    vol.Optional("limit", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+})
+@callback
+def ws_get_energy_journal(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Return local Smart Energy decisions and learning metadata."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    connection.send_result(
+        msg["id"],
+        {
+            "entries": store.get_energy_journal(msg["limit"]) if store else [],
+            "learning": store.get_energy_learning() if store else {},
+        },
+    )
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/energy/journal/clear",
+})
+@websocket_api.async_response
+async def ws_clear_energy_journal(hass: HomeAssistant, connection, msg: dict) -> None:
+    """Clear the local Smart Energy decision journal."""
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        connection.send_error(msg["id"], "not_ready", "Store not loaded")
+        return
+    await store.async_clear_energy_journal()
+    connection.send_result(msg["id"], {"ok": True})
+
+
 _BATTERY_SCHEMA = vol.Schema({
     vol.Optional("enabled"): bool,
     vol.Optional("control_kind"): vol.In(["switch", "number", "select"]),
@@ -1495,6 +1634,28 @@ _BATTERY_SCHEMA = vol.Schema({
         None, vol.All(vol.Coerce(int), vol.Range(min=6, max=48))
     ),
     vol.Optional("automatic_control"): bool,
+    vol.Optional("execution_mode"): vol.In(["advice", "shadow", "automatic"]),
+    vol.Optional("grid_guard_enabled"): bool,
+    vol.Optional("grid_power_sensor"): vol.Any(None, str),
+    vol.Optional("grid_safety_margin"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0, max=10000))
+    ),
+    vol.Optional("grid_data_max_age"): vol.Any(
+        None, vol.All(vol.Coerce(int), vol.Range(min=15, max=600))
+    ),
+    vol.Optional("capacity_tariff_enabled"): bool,
+    vol.Optional("capacity_tariff_top_n"): vol.Any(
+        None, vol.All(vol.Coerce(int), vol.Range(min=1, max=5))
+    ),
+    vol.Optional("capacity_tariff_steps"): vol.Any(
+        None,
+        [vol.All(vol.Coerce(float), vol.Range(min=0.1, max=250))],
+    ),
+    vol.Optional("capacity_tariff_target_kw"): vol.Any(
+        None, vol.All(vol.Coerce(float), vol.Range(min=0.1, max=250))
+    ),
+    vol.Optional("learning_enabled"): bool,
+    vol.Optional("learning_use_for_planning"): bool,
 }, extra=vol.REMOVE_EXTRA)
 
 
@@ -1517,6 +1678,11 @@ async def ws_set_battery(hass: HomeAssistant, connection, msg: dict) -> None:
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
+    if "execution_mode" not in config:
+        config["execution_mode"] = (
+            "automatic" if config.get("automatic_control") else "advice"
+        )
+    config["automatic_control"] = config["execution_mode"] == "automatic"
     saved = await store.async_set_battery(config)
     planner = hass.data.get(DOMAIN, {}).get("battery_plan")
     if planner is not None:

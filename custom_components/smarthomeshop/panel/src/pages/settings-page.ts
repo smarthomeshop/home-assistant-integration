@@ -118,6 +118,7 @@ export class SettingsPage extends LitElement {
   @state() private _entities: DeviceEntity[] = [];
   @state() private _loading = true;
   @state() private _filter = '';
+  @state() private _advancedOpen = false;
   @state() private _expandedGroups: Set<string> = new Set();
   @state() private _configFields: any[] = [];
   @state() private _configValues: Record<string, any> = {};
@@ -324,10 +325,18 @@ export class SettingsPage extends LitElement {
     .quiet-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 18px 15px; padding: 10px 11px; border-radius: 8px; color: var(--error-color, #dc2626); background: color-mix(in srgb, var(--error-color, #dc2626) 8%, transparent); font-size: 11.5px; line-height: 1.45; }
     .quiet-error ha-icon { --mdc-icon-size: 17px; flex: 0 0 auto; }
     .quiet-upgrade { margin-top: 0; }
-    .advanced-intro { display: flex; align-items: flex-start; gap: 10px; margin: 2px 0 12px; }
-    .advanced-intro ha-icon { --mdc-icon-size: 19px; color: var(--secondary-text-color); }
-    .advanced-title { margin: 0; color: var(--primary-text-color); font-size: 14px; font-weight: 650; }
+    .advanced-section { margin-top: 4px; }
+    .advanced-toggle { box-sizing: border-box; width: 100%; min-height: 58px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 11px; padding: 12px 14px; border: 1px solid var(--divider-color); border-radius: var(--ha-card-border-radius, 12px); background: var(--card-background-color); color: var(--primary-text-color); text-align: left; font: inherit; cursor: pointer; }
+    .advanced-toggle:hover { border-color: color-mix(in srgb, var(--shs-primary) 45%, var(--divider-color)); background: color-mix(in srgb, var(--shs-primary) 3%, var(--card-background-color)); }
+    .advanced-toggle:focus-visible { outline: 2px solid var(--shs-primary); outline-offset: 2px; }
+    .advanced-toggle > ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); }
+    .advanced-toggle .advanced-chevron { transition: transform .18s ease; }
+    .advanced-toggle[aria-expanded="true"] .advanced-chevron { transform: rotate(180deg); }
+    .advanced-copy { min-width: 0; }
+    .advanced-title { display: block; margin: 0; color: var(--primary-text-color); font-size: 14px; font-weight: 650; }
     .advanced-description { margin: 3px 0 0; color: var(--secondary-text-color); font-size: 12px; line-height: 1.45; }
+    .advanced-count { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 12px; color: var(--secondary-text-color); background: var(--secondary-background-color); font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .advanced-content { margin-top: 12px; }
     .empty-state { text-align: center; padding: 48px 24px; border: 1px dashed var(--divider-color); border-radius: var(--ha-card-border-radius, 12px); }
     .empty-state ha-icon { --mdc-icon-size: 40px; color: var(--secondary-text-color); margin-bottom: 12px; }
     .empty-state h3 { font-size: 16px; color: var(--primary-text-color); margin: 0 0 8px 0; }
@@ -369,6 +378,8 @@ export class SettingsPage extends LitElement {
       .confirm-actions { display: grid; grid-template-columns: 1fr; }
       .confirm-actions button { width: 100%; }
       .confirm-accept { order: -1; }
+      .advanced-toggle { min-height: 64px; padding: 12px; }
+      .advanced-count { display: none; }
       .feature-header { padding: 15px 14px 13px; }
       .feature-status { margin: 0 14px 14px; }
       .calibration-channel { padding: 15px 14px 16px; }
@@ -455,6 +466,8 @@ export class SettingsPage extends LitElement {
   private async _selectDevice(device: SmartHomeShopDevice): Promise<void> {
     this._closeBackgroundCorrectionProgress();
     this._selectedDevice = device;
+    this._advancedOpen = false;
+    this._filter = '';
     this._expandedGroups = new Set();
     this.dispatchEvent(new CustomEvent('device-select', { detail: { deviceId: device.id } }));
     await this._loadEntities(device.id);
@@ -1333,7 +1346,7 @@ export class SettingsPage extends LitElement {
     const unknown = requiredStatuses.some(status => status === 'unknown')
       || startHour === null
       || endHour === null;
-    const allDay = isQuietScheduleAllDay(startHour, endHour);
+    const allDay = !unavailable && !unknown && isQuietScheduleAllDay(startHour, endHour);
     const loading = !!this._quietHoursPending;
     const selectorsDisabled = !enabled || unavailable || unknown || loading;
     const idleAvailability = sps30IdleIntervalAvailability(capability.status, !!idleEntity);
@@ -1996,17 +2009,38 @@ export class SettingsPage extends LitElement {
     const total = Array.from(grouped.values()).reduce((sum, entities) => sum + entities.length, 0);
     if (total === 0) return nothing;
     return html`
-      <div class="advanced-intro">
-        <ha-icon icon="mdi:tune-variant"></ha-icon>
-        <div>
-          <h2 class="advanced-title">${this._text('advanced.title')}</h2>
-          <p class="advanced-description">${this._text('advanced.description')}</p>
-        </div>
-      </div>
-      <input type="search" class="search-box" placeholder=${this._text('search.placeholder')}
-        .value=${this._filter}
-        @input=${(e: Event) => this._filter = (e.target as HTMLInputElement).value} />
-      ${GROUPS.map(group => this._renderGroup(group, grouped.get(group.key) || []))}
+      <section class="advanced-section">
+        <button
+          type="button"
+          class="advanced-toggle"
+          aria-expanded=${this._advancedOpen ? 'true' : 'false'}
+          aria-controls="advanced-device-controls"
+          @click=${() => {
+            this._advancedOpen = !this._advancedOpen;
+            if (!this._advancedOpen) this._filter = '';
+          }}
+        >
+          <ha-icon icon="mdi:tune-variant"></ha-icon>
+          <span class="advanced-copy">
+            <span class="advanced-title">${this._text('advanced.title')}</span>
+            <span class="advanced-description">
+              ${this._text(this._advancedOpen ? 'advanced.hide' : 'advanced.show')}
+            </span>
+          </span>
+          <span class="advanced-count" aria-label=${this._text('advanced.count', { count: total })}>${total}</span>
+          <ha-icon class="advanced-chevron" icon="mdi:chevron-down" aria-hidden="true"></ha-icon>
+        </button>
+        ${this._advancedOpen ? html`
+          <div class="advanced-content" id="advanced-device-controls">
+            <p class="advanced-description">${this._text('advanced.description')}</p>
+            <input type="search" class="search-box" placeholder=${this._text('search.placeholder')}
+              aria-label=${this._text('search.placeholder')}
+              .value=${this._filter}
+              @input=${(e: Event) => this._filter = (e.target as HTMLInputElement).value} />
+            ${GROUPS.map(group => this._renderGroup(group, grouped.get(group.key) || []))}
+          </div>
+        ` : nothing}
+      </section>
     `;
   }
 

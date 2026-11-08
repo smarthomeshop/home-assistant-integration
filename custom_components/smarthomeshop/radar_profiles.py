@@ -16,6 +16,7 @@ from .const import (
     PRODUCT_CEILSENSE,
     PRODUCT_ULTIMATESENSOR,
     PRODUCT_ULTIMATESENSOR_MINI,
+    PRODUCT_WALLSENSE,
     product_for_device,
 )
 from .device_linking import iter_esphome_source_devices, resolve_source_device
@@ -26,6 +27,7 @@ RADAR_PRODUCTS = {
     PRODUCT_CEILSENSE,
     PRODUCT_ULTIMATESENSOR,
     PRODUCT_ULTIMATESENSOR_MINI,
+    PRODUCT_WALLSENSE,
 }
 
 
@@ -332,6 +334,8 @@ def _legacy_product(identity: str, manufacturer: str | None, model: str | None) 
         return detected
     if "ceilsense" in identity or "ceil sense" in identity:
         return PRODUCT_CEILSENSE
+    if "wallsense" in identity or "wall sense" in identity:
+        return PRODUCT_WALLSENSE
     if "ultimatesensor mini" in identity or "ultimate sensor mini" in identity:
         return PRODUCT_ULTIMATESENSOR_MINI
     if "ultimatesensor" in identity or "ultimate sensor" in identity:
@@ -344,7 +348,7 @@ def _legacy_model(identity: str, product: str | None, target_pairs: int) -> str:
         return "ld6002b"
     if "ld2460" in identity:
         return "ld2460"
-    if product == PRODUCT_CEILSENSE and "ld2412" in identity and target_pairs == 0:
+    if product in {PRODUCT_CEILSENSE, PRODUCT_WALLSENSE} and "ld2412" in identity and target_pairs == 0:
         return "ld2412"
     if "ld2450" in identity:
         return "ld2450"
@@ -646,6 +650,13 @@ def resolve_radar_device_profile(
         original_names=("Tracking Presence",),
         suffixes=("tracking_presence",),
     )
+    if tracking_presence_entity is None and radar_model == "ld2412":
+        tracking_presence_entity = _tracking_entity(
+            snapshots,
+            domain="binary_sensor",
+            original_names=("LD2412 Presence",),
+            suffixes=("ld2412_presence",),
+        )
     tracking_target_count_entity = _tracking_entity(
         snapshots,
         domain="sensor",
@@ -754,7 +765,14 @@ def discover_radar_device_profiles(hass: Any) -> list[RadarDeviceProfile]:
         )
         has_known_identity = any(
             marker in identity
-            for marker in ("ceilsense", "ceil sense", "ultimatesensor", "ultimate sensor")
+            for marker in (
+                "ceilsense",
+                "ceil sense",
+                "wallsense",
+                "wall sense",
+                "ultimatesensor",
+                "ultimate sensor",
+            )
         )
         if not known_product and not has_metadata and not has_known_identity:
             continue

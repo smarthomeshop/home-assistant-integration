@@ -3,6 +3,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, PanelConfig, PageType } from './types';
 import { installPanelLocalization, panelText } from './utils/panel-translations';
 import './pages/dashboard-page';
+import './pages/home-presence-page';
 import './pages/zones-page';
 import './pages/settings-page';
 import './pages/energy-hub';
@@ -172,7 +173,7 @@ export class SmartHomeShopPanel extends LitElement {
   // A reload, a closed tab or a typed URL never passes through _navigateTo,
   // so the browser has to do the asking there.
   private _handleBeforeUnload = (event: BeforeUnloadEvent): void => {
-    if (!this._zonesDirty()) return;
+    if (!this._hasUnsavedChanges()) return;
     event.preventDefault();
     event.returnValue = '';
   };
@@ -200,6 +201,15 @@ export class SmartHomeShopPanel extends LitElement {
     return !!zones?.isDirty;
   }
 
+  private _homeDirty(): boolean {
+    const home = this.renderRoot?.querySelector('shs-home-presence-page') as (HTMLElement & { isDirty?: boolean }) | null;
+    return !!home?.isDirty;
+  }
+
+  private _hasUnsavedChanges(): boolean {
+    return this._zonesDirty() || this._homeDirty();
+  }
+
   protected firstUpdated(_changedProperties: PropertyValues): void {
     console.log(`SmartHomeShop Panel v${VERSION} initialized`);
     this._startLocalization();
@@ -224,6 +234,10 @@ export class SmartHomeShopPanel extends LitElement {
       && page !== 'zones' && page !== 'room-builder';
     if (leavingZones && this._zonesDirty()
       && !window.confirm(panelText(this.hass, 'You have unsaved changes in the Room Designer. Discard them?'))) {
+      return;
+    }
+    if (this._currentPage === 'home' && page !== 'home' && this._homeDirty()
+      && !window.confirm(panelText(this.hass, 'You have unsaved changes in Live Home. Discard them?'))) {
       return;
     }
     this._currentPage = page;
@@ -260,6 +274,9 @@ export class SmartHomeShopPanel extends LitElement {
           <button class="nav-tab ${this._currentPage === 'zones' || this._currentPage === 'room-builder' ? 'active' : ''}" @click=${() => this._navigateTo('zones')}>
             <ha-icon icon="mdi:floor-plan"></ha-icon>Room Designer
           </button>
+          <button class="nav-tab ${this._currentPage === 'home' ? 'active' : ''}" @click=${() => this._navigateTo('home')}>
+            <ha-icon icon="mdi:home-account"></ha-icon>${panelText(this.hass, 'Live Home')}
+          </button>
           <button class="nav-tab ${this._currentPage === 'energy' ? 'active' : ''}" @click=${() => this._navigateTo('energy')}>
             <ha-icon icon="mdi:lightning-bolt"></ha-icon>Energy
           </button>
@@ -288,6 +305,11 @@ export class SmartHomeShopPanel extends LitElement {
           .hass=${this.hass}
           .selectedDeviceId=${this._selectedDeviceId}
         ></shs-zones-page>`;
+      case 'home':
+        return html`<shs-home-presence-page
+          .hass=${this.hass}
+          @navigate=${(e: CustomEvent) => this._navigateTo(e.detail.page)}
+        ></shs-home-presence-page>`;
       case 'energy':
         return html`<shs-energy-hub .hass=${this.hass}></shs-energy-hub>`;
       case 'settings':

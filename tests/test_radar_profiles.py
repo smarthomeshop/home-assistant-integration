@@ -277,6 +277,37 @@ def test_ceilsense_ld2412_never_invents_positioning_targets() -> None:
     assert radar.targets == ()
 
 
+def test_wallsense_ld2450_is_available_to_room_designer_and_live_home() -> None:
+    entries = _metadata("wallsense", mounting="wall", model="ld2450")
+    entries += _targets("wallsense", 3, tracking=True)
+    entries += [
+        _entity("binary_sensor.any_wallsense_presence", "Tracking Presence", "on"),
+        _entity("sensor.any_wallsense_count", "Tracking Target Count", "1"),
+    ]
+    radar = _resolve("WallSense Hall", "wallsense_v1_ld2450", entries)
+
+    assert radar.profile.detected_product == "wallsense"
+    assert radar.profile.mounting_mode == "wall"
+    assert radar.profile.coordinate_projection == "forward_xy"
+    assert radar.profile.positioning_available is True
+    assert len(radar.targets) == 3
+
+
+def test_wallsense_ld2412_reports_room_presence_without_fake_coordinates() -> None:
+    entries = [
+        _entity("binary_sensor.hall_ld2412_presence", "LD2412 Presence", "on"),
+    ]
+    radar = _resolve("WallSense Hall", "wallsense_v1_ld2412", entries)
+
+    assert radar.profile.detected_product == "wallsense"
+    assert radar.profile.radar_model == "ld2412"
+    assert radar.profile.positioning_available is False
+    assert radar.profile.tracking_presence_entity_id == (
+        "binary_sensor.hall_ld2412_presence"
+    )
+    assert radar.targets == ()
+
+
 def test_ld6002b_maps_xyz_targets_but_uses_floor_xy_projection() -> None:
     entries = _metadata("ceilsense", mounting="ceiling", model="ld6002b")
     entries += _targets("ceilsense", 3, z=True)

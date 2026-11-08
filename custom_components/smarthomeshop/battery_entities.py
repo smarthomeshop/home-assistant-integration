@@ -66,6 +66,32 @@ BATTERY_SENSORS: tuple[BatterySensorDescription, ...] = (
         native_unit_of_measurement="%",
         data_key="confidence",
     ),
+    BatterySensorDescription(
+        key="battery_execution_mode",
+        name="Execution mode",
+        icon="mdi:shield-play-outline",
+        data_key="execution_mode",
+    ),
+    BatterySensorDescription(
+        key="battery_grid_guard_status",
+        name="Grid guard status",
+        icon="mdi:shield-home-outline",
+        data_key="guard_status",
+    ),
+    BatterySensorDescription(
+        key="battery_capacity_limit",
+        name="Capacity tariff limit",
+        icon="mdi:transmission-tower",
+        native_unit_of_measurement="W",
+        data_key="capacity_limit_w",
+    ),
+    BatterySensorDescription(
+        key="battery_learned_efficiency",
+        name="Learned round-trip efficiency",
+        icon="mdi:chart-bell-curve-cumulative",
+        native_unit_of_measurement="%",
+        data_key="learned_roundtrip_efficiency",
+    ),
 )
 
 
@@ -90,7 +116,10 @@ class SmartHomeShopBatterySensor(
     @property
     def native_value(self) -> Any:
         value = (self.coordinator.data or {}).get(self.entity_description.data_key)
-        if self.entity_description.data_key == "confidence" and value is not None:
+        if self.entity_description.data_key in (
+            "confidence",
+            "learned_roundtrip_efficiency",
+        ) and value is not None:
             return round(float(value) * 100, 1)
         return value
 
@@ -105,6 +134,11 @@ class SmartHomeShopBatterySensor(
             "uses_predicted_prices": data.get("uses_predicted_prices", False),
             "forecast_hours": data.get("forecast_hours", 0),
             "timeline": data.get("timeline", []),
+            "execution_mode": data.get("execution_mode"),
+            "requested_power_w": data.get("requested_power_w"),
+            "guard": data.get("guard", {}),
+            "capacity_tariff": data.get("capacity_tariff", {}),
+            "learning_summary": data.get("learning_summary"),
         }
 
 
