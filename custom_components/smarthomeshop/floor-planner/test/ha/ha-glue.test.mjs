@@ -42,3 +42,24 @@ test('radar profiles without aliases or targets still give live presence', () =>
     assert.equal(presence.rooms[0].occupied, true);
     assert.deepEqual(radarProfiles(undefined), []);
 });
+
+test('a radar that two rooms already share does not block saving, a new share does', () => {
+    const kitchen = { ...structuredClone(living), id: 'kitchen', name: 'Kitchen', house: { x: 6000, y: 0, floor: 0, rotationDeg: 0 },
+        doors: [], sensors: [{ ...living.sensors[0], id: 'kitchen-source' }] };
+    const office = { ...structuredClone(living), id: 'office', name: 'Office', house: { x: 12000, y: 0, floor: 0, rotationDeg: 0 },
+        doors: [], sensors: [] };
+    const rooms = [living, kitchen, office];
+    const saved = projectFromRooms(rooms, []);
+
+    const renamed = structuredClone(saved);
+    renamed.floors[0].plan.rooms.find(room => room.haRoom === 'office').name = 'Study';
+    assert.deepEqual(saveChanges(renamed, saved, rooms).changes.map(change => change.id), ['office']);
+
+    const spread = structuredClone(saved);
+    const plan = spread.floors[0].plan;
+    const officeRoom = plan.rooms.find(room => room.haRoom === 'office');
+    const copy = { ...structuredClone(plan.sensors[0]), id: 'office-copy', haSource: undefined, haRoom: undefined,
+        x: officeRoom.x + .5, y: officeRoom.y + .5 };
+    plan.sensors.push(copy);
+    assert.throws(() => saveChanges(spread, saved, rooms), error => error.validationCode === 'duplicate_device');
+});

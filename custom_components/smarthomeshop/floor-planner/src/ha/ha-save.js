@@ -30,6 +30,17 @@ const sourceId = sensor => sensor.haSource ?? sensor.id;
 const projectRooms = project => projectFloors(project).flatMap(({ level, plan }) =>
     plan.rooms.map(room => ({ id: room.haRoom ?? room.id, level, room, items: haRoomContents(plan, room) })));
 
+// Every linked Home Assistant device with the rooms of its sensors.
+function deviceRooms(entries) {
+    const rooms = new Map();
+    for (const { id, items } of entries) {
+        for (const sensor of items.sensors) {
+            if (sensor.haDevice) rooms.set(sensor.haDevice, [...rooms.get(sensor.haDevice) ?? [], id]);
+        }
+    }
+    return rooms;
+}
+
 function housePlacement(room, level) {
     const frame = room.haFrame ?? { x: room.x, y: room.y, angle: 0, visible: true };
     return { x: millimetres(frame.x), y: millimetres(frame.y), rotationDeg: frame.angle, floor: level, visible: frame.visible };
@@ -83,8 +94,15 @@ export function saveChanges(project, saved, haRooms) {
     if (projectFloors(project).flatMap(floor => floor.plan.sensors).length !== sensors.length) {
         throw new FloorPlanValidationError('sensor_outside_room');
     }
-    const linked = sensors.map(sensor => sensor.haDevice).filter(Boolean);
-    if (new Set(linked).size !== linked.length) throw new FloorPlanValidationError('duplicate_device');
+    // One device on two sensors is only accepted where it was already saved
+    // like that (older versions allowed it), so it never blocks other edits.
+    const earlier = deviceRooms([...before.values()]);
+    for (const [device, rooms] of deviceRooms(entries)) {
+        const known = earlier.get(device) ?? [];
+        if (rooms.length > 1 && (new Set(rooms).size !== rooms.length || rooms.some(room => !known.includes(room)))) {
+            throw new FloorPlanValidationError('duplicate_device');
+        }
+    }
     return {
         changes: entries.flatMap(entry => roomChange(entry, before.get(entry.id), stored)),
         removed: haRooms.filter(room => before.has(room.id) && !ids.has(room.id)).map(room => room.id),
