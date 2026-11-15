@@ -1,0 +1,15 @@
+{
+  "name": "smarthomeshop-floor-planner",
+  "private": true,
+  "description": "2D/3D floor planner shared by the SmartHomeShop Home Assistant integration",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check",
+    "test": "node --test test/*.test.mjs test/ha/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

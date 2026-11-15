@@ -1,0 +1,729 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="noindex, nofollow"><link rel="stylesheet" href="./editor.css?v=c431943230cd"><link rel="stylesheet" href="./editor-ha.css?v=5dfb8a528c0b"></head><body class="fp-design-body"><main id="main-content" tabindex="-1"><div class="fp fp-design-center">
+    <div class="fp-shell" id="floor-planner" data-product-prefix="/de/products/" data-wallsense-url="https://smarthomeshop.io/wallsense/de" data-locale="de" lang="de">
+        
+
+        <section class="fp-start" id="fp-start" aria-labelledby="fp-start-title" hidden>
+            <div class="fp-start-copy">
+                <h2 id="fp-start-title">Plane dein smartes Zuhause</h2>
+                <p>Zeichne deine Räume, wähle die Montage und finde passende Sensoren. Starte mit einem eigenen Raum oder erkunde das eingerichtete Demozuhause.</p>
+                <div class="fp-start-actions">
+                    <button type="button" class="fp-primary" data-action="start_new">Meinen Grundriss erstellen <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5"/></svg></button>
+                    <button type="button" class="fp-secondary" data-action="start_example">Demozuhause erkunden</button>
+                </div>
+                <div class="fp-start-import">
+                    <span>Hast du bereits einen Grundriss?</span>
+                    <button type="button" data-action="import_underlay">Bild öffnen</button>
+                    <button type="button" data-action="import">Gespeicherten Plan öffnen</button>
+                </div>
+                <p id="fp-start-status" role="status"></p>
+            </div>
+            <div class="fp-start-preview">
+                <svg id="fp-start-preview" viewBox="-.8 -.75 12.1 9.5" aria-hidden="true"></svg>
+                <div class="fp-demo-controls">
+                    <div class="fp-demo-reading">
+                        <strong>Demozuhause</strong>
+                        <span id="fp-demo-detection">Simulierte Erkennung</span>
+                    </div>
+                    <button type="button" id="fp-demo-playback" aria-label="Demo abspielen" hidden>
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path class="fp-demo-play" d="m7 4 9 6-9 6Z"/><path class="fp-demo-pause" d="M7 5v10m6-10v10"/></svg>
+                    </button>
+                </div>
+            </div>
+        </section>
+        <input type="file" id="fp-file" accept=".json,application/json" hidden>
+        <input type="file" id="fp-underlay-file" accept="image/png,image/jpeg,image/webp" hidden>
+
+        <div id="fp-editor" hidden>
+        <div class="fp-project" id="fp-project">
+            <label class="fp-project-name" id="fp-project-name">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm5 0v7h9m-9 0v5"/></svg>
+                <span aria-hidden="true">Projektname</span>
+                <input id="fp-name" maxlength="48" aria-label="Projektname" value="Demozuhause">
+            </label>
+            <details class="fp-project-menu" id="fp-project-menu">
+                <summary class="fp-toolbar-trigger">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h5l2 2h7v9H3z"/></svg>
+                    Projekt
+                    <svg class="fp-toolbar-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                </summary>
+                <div class="fp-toolbar-panel fp-project-actions">
+                    <div id="fp-mobile-project-options"></div>
+                    <button type="button" data-action="new">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6l4 4v11H5zM11 2.5v4h4M10 9v5m-2.5-2.5h5"/></svg>
+                        Neuer Plan
+                    </button>
+                    <button type="button" data-action="example">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m3 9 7-6 7 6m-12-1.5V17h10V7.5M8.5 17v-5h3v5"/></svg>
+                        Demozuhause laden
+                    </button>
+                    <div class="fp-project-files">
+                        <h2>Dateien</h2>
+                        <button type="button" data-action="import" title="Grundriss, HA-Raum oder RoomPlan-JSON importieren">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 3h4l4 4v10H8v-3m4-11v4h4M3 11h9m-2.5-2.5L12 11l-2.5 2.5"/></svg>
+                            Plandatei öffnen
+                        </button>
+                        <button type="button" data-action="import_underlay">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 13 4-4 3 3 2-2 5 5m-4-7h.1"/></svg>
+                            Grundrissbild laden
+                        </button>
+                        <button type="button" data-action="export">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m-3-3 3 3 3-3M4 13v4h12v-4"/></svg>
+                            Plan herunterladen
+                        </button>
+                    </div>
+                </div>
+            </details>
+            <div class="fp-floors">
+                <details id="fp-floor-menu" class="fp-floor-menu">
+                    <summary class="fp-toolbar-trigger">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 3 7.5 4-7.5 4-7.5-4L10 3Zm-7.5 7.5 7.5 4 7.5-4m-15 3.5 7.5 4 7.5-4"/></svg>
+                        <span class="fp-visually-hidden">Etage. </span>
+                        <span id="fp-floor-current">Erdgeschoss</span>
+                        <svg class="fp-toolbar-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                    </summary>
+                    <div class="fp-toolbar-panel fp-floor-panel">
+                        <h2>Etagen verwalten</h2>
+                        <div id="fp-floor-choices" class="fp-floor-choices"></div>
+                        <template id="fp-floor-choice-template">
+                            <button type="button" class="fp-floor-choice">
+                                <span class="fp-floor-level" aria-hidden="true"></span>
+                                <span class="fp-floor-choice-label"></span>
+                                <svg class="fp-floor-check" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10 3.5 3.5 7.5-7"/></svg>
+                            </button>
+                        </template>
+                        <label class="fp-floor-field" id="fp-floor-rename">
+                            <span>Etagenname</span>
+                            <input id="fp-floor-name" maxlength="32">
+                        </label>
+                        <label class="fp-floor-field" id="fp-floor-gap" hidden>
+                            <span>Etagenabstand</span>
+                            <input id="fp-floor-separation" type="range" min=".7" max="1.8" step=".1" value="1">
+                        </label>
+                        <div class="fp-floor-actions">
+                            <button type="button" data-action="add_upper_floor">
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg>
+                                Etage darüber hinzufügen
+                            </button>
+                            <button type="button" data-action="add_lower_floor">
+                                <svg class="fp-floor-arrow-down" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg>
+                                Keller darunter hinzufügen
+                            </button>
+                            <button type="button" data-action="remove_floor" hidden>
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M7.5 5.5V3h5v2.5M5.5 5.5l1 11h7l1-11M8.5 8.5v5m3-5v5"/></svg>
+                                Leere Etage entfernen
+                            </button>
+                        </div>
+                    </div>
+                </details>
+            </div>
+            <button type="button" id="fp-open-order" aria-haspopup="dialog" title="Sensoren im ganzen Zuhause">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7h12l1 10H3L4 7zm3 1V6a3 3 0 0 1 6 0v2"/></svg>
+                <span class="fp-order-label"><span class="fp-order-title">Bestellübersicht</span><span class="fp-order-short">Bestellliste</span><small>Ganzes Zuhause</small></span>
+                <span class="fp-count" id="fp-order-count">0</span>
+            </button>
+        </div>
+        <div class="fp-underlay-controls" id="fp-underlay-controls" hidden>
+            <strong>Vorlagenbild</strong>
+            <label>Sichtbarkeit <input type="range" id="fp-underlay-opacity" min="10" max="85" step="5"></label>
+            <button type="button" data-action="scale_underlay">Maßstab festlegen</button>
+            <button type="button" data-action="remove_underlay">Löschen</button>
+            <div id="fp-underlay-measure" hidden>
+                <label>Tatsächliche Strecke (m) <input type="number" id="fp-underlay-distance" min=".1" max="100" step="any" value="5"></label>
+                <button type="button" data-action="confirm_underlay_scale">Maßstab anwenden</button>
+            </div>
+        </div>
+        <div class="fp-workspace">
+            <section class="fp-drawing" aria-label="Interaktiver Grundriss">
+                <div class="fp-next" id="fp-next">
+                    <div class="fp-next-copy">
+                        <p id="fp-next-message" role="status"></p>
+                        <button type="button" data-action="next_extra_sensor" aria-controls="fp-library" aria-expanded="false" hidden>Weiteren Sensor platzieren</button>
+                    </div>
+                    <button type="button" class="fp-primary" data-action="flow_room" aria-controls="fp-room-form" hidden>Raum hinzufügen</button>
+                    <button type="button" class="fp-primary" data-action="flow_sensor" aria-controls="fp-library" aria-expanded="false" hidden>Sensor hinzufügen</button>
+                    <button type="button" class="fp-primary" data-action="test_person" aria-pressed="false" aria-controls="fp-simulation" hidden>Abdeckung testen</button>
+                    <button type="button" class="fp-primary" data-action="next_order" aria-haspopup="dialog" hidden>Bestellung prüfen</button>
+                </div>
+                <form class="fp-room-form" id="fp-room-form" aria-labelledby="fp-room-form-title" hidden>
+                    <div><h2 id="fp-room-form-title" tabindex="-1">Raum hinzufügen</h2><p>Gib die Innenmaße ein oder zeichne den Raum im Plan.</p></div>
+                    <div class="fp-room-form-inputs">
+                                                    <label>Breite (m)
+                                <input id="fp-room-form-width" name="width" type="number" inputmode="decimal"
+                                    min="0.5" max="60"
+                                    step="any" value="5" required>
+                            </label>
+                                                    <label>Tiefe (m)
+                                <input id="fp-room-form-depth" name="depth" type="number" inputmode="decimal"
+                                    min="0.5" max="60"
+                                    step="any" value="4" required>
+                            </label>
+                                                    <label>Höhe (m)
+                                <input id="fp-room-form-height" name="height" type="number" inputmode="decimal"
+                                    min="1" max="12"
+                                    step="any" value="2.7" required>
+                            </label>
+                                            </div>
+                    <div class="fp-room-form-actions">
+                        <button type="submit" class="fp-primary">Raum erstellen</button>
+                        <button type="button" class="fp-secondary" data-action="flow_draw">Selbst zeichnen</button>
+                        <button type="button" data-action="close_room_form">Abbrechen</button>
+                    </div>
+                    <p id="fp-room-form-error" role="alert" hidden>Prüfe die eingegebenen Maße oder die Position.</p>
+                </form>
+                <div class="fp-viewbar">
+                    <details id="fp-view-menu" class="fp-view-menu">
+                        <summary><span class="fp-control-label">Ansicht</span> <strong id="fp-view-mode">2D</strong><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                        <div class="fp-view-options">
+                            <div class="fp-view-switch" role="group" aria-label="Ansicht">
+                                <button type="button" data-action="view_2d" aria-pressed="true">2D<span class="fp-view-label"> Grundriss</span></button>
+                                <button type="button" data-action="view_3d" aria-pressed="false">3D<span class="fp-view-label"> Räumliche Ansicht</span></button>
+                            </div>
+                            <div class="fp-view-actions">
+                                <button type="button" class="fp-coverage" data-action="coverage" aria-pressed="true">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="m10 10 5-5"/></svg>
+                                    Abdeckung
+                                </button>
+                                <button type="button" class="fp-turn" data-action="turn_view">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8a6 6 0 1 1 1 7M4 3v5h5"/></svg>
+                                    <span class="fp-turn-label">Ansicht drehen</span>
+                                </button>
+                            </div>
+                            <div class="fp-view-zoom fp-flat-controls" role="group" aria-label="Grundriss zoomen und einpassen">
+                                                                    <button type="button" data-action="zoom_out">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/></svg>Verkleinern
+                                    </button>
+                                                                    <button type="button" data-action="zoom_in">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Vergrößern
+                                    </button>
+                                                                    <button type="button" data-action="fit">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/></svg>Ansicht einpassen
+                                    </button>
+                                                            </div>
+                            <p class="fp-zoom-shortcut">Mit einem Finger verschieben, mit zwei Fingern zoomen.</p>
+                            <p class="fp-wheel-shortcut">Strg + Scrollen zum Zoomen in 2D.</p>
+                            <div class="fp-view-zoom fp-space-controls" role="group" aria-label="3D-Kamera">
+                                                                    <button type="button" data-action="space_zoom_out">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/></svg>Verkleinern
+                                    </button>
+                                                                    <button type="button" data-action="space_zoom_in">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Vergrößern
+                                    </button>
+                                                                <button type="button" data-action="reset_view">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/></svg>Ansicht zurücksetzen
+                                </button>
+                                <button type="button" data-action="follow_person" aria-pressed="false" hidden>
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/><circle cx="10" cy="10" r="2.6"/></svg>Testperson folgen
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+                    <div class="fp-quick-tools">
+                        <button type="button" data-action="flow_room" title="Raum hinzufügen"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1"/><path d="M7 7h1m4 6h1"/></svg><span>Raum</span></button>
+                        <button type="button" data-action="furniture_library"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15v2m12-2v2M3 11V9a2 2 0 0 1 4 0v3h6V9a2 2 0 0 1 4 0v6H3zm3-4V5h8v2"/></svg><span>Möbel</span></button>
+                        <button type="button" data-action="library" aria-haspopup="true"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="10" r="4"/><circle cx="8" cy="10" r="1"/><path d="M15 4v6m-3-3h6"/></svg><span>Sensor</span></button>
+                    </div>
+                    <button type="button" class="fp-selection-jump" id="fp-selection-jump" data-action="inspect_selection" aria-controls="fp-outline" hidden>
+                        <span id="fp-selection-name">In diesem Plan</span><span aria-hidden="true">↓</span>
+                    </button>
+                    <details class="fp-toolbox" id="fp-toolbox">
+                        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm7 0v7h7m-7 2v3"/></svg><span class="fp-control-label">Werkzeuge</span><span class="fp-control-short">Mehr</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                        <div class="fp-toolbox-content">
+                            <div class="fp-toolbar" role="group" aria-label="Zeichenwerkzeuge">
+                                <div class="fp-tool-group" role="group" aria-labelledby="fp-tools-draw">
+                                    <p id="fp-tools-draw">Grundriss bearbeiten</p>
+                                                                            <button type="button" data-tool="edit" aria-pressed="true" title="Auswählen (V)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 3 13 9-6 1-3 6-4-16z"/></svg>
+                                            <span>Auswählen</span>
+                                        </button>
+                                                                            <button type="button" data-tool="pan" aria-pressed="false" title="Verschieben (H)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v16M2 10h16M8 4l2-2 2 2M8 16l2 2 2-2M4 8l-2 2 2 2m12-4 2 2-2 2"/></svg>
+                                            <span>Verschieben</span>
+                                        </button>
+                                                                            <button type="button" data-tool="room" aria-pressed="false" title="Raum (R)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1"/><path d="M7 7h1m4 6h1"/></svg>
+                                            <span>Raum zeichnen</span>
+                                        </button>
+                                                                        <button type="button" data-action="edit_add_room">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Raum nach Maß
+                                    </button>
+                                    <details class="fp-drawing-menu" id="fp-drawing-menu">
+                                        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm7 0v7h7m-7 2v3"/></svg><span>Wände, Fenster und Zonen</span></summary>
+                                        <div class="fp-drawing-options">
+                                                                                            <button type="button" data-tool="wall" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15 16 5M4 13v4m12-14v4"/></svg>Wand
+                                                </button>
+                                                                                            <button type="button" data-tool="door" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17h12M6 17V4l8 2v11m-3-5h.1"/></svg>Tür
+                                                </button>
+                                                                                            <button type="button" data-tool="window" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="5" width="13" height="10" rx="1"/><path d="M10 5v10M4 10h12"/></svg>Fenster
+                                                </button>
+                                                                                            <button type="button" data-tool="mirror" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="3" width="10" height="14" rx="2"/><path d="m8 10 3-3m-2 6 3-3"/></svg>Spiegel
+                                                </button>
+                                                                                            <button type="button" data-tool="zone" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 7 7-3 5 4-2 7-8 1z"/><path d="M4 7h.1m7-3h.1m5 4h.1m-2 7h.1m-8 1h.1"/></svg>Zone
+                                                </button>
+                                                                                        <button type="button" data-action="measures" aria-pressed="false">
+                                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7h14v6H3zm4 0v3m3-3v2m3-2v3"/></svg>Wandlängen
+                                            </button>
+                                        </div>
+                                    </details>
+                                </div>
+                                <div class="fp-tool-group" role="group" aria-labelledby="fp-tools-place">
+                                    <p id="fp-tools-place">Sensoren und Möbel</p>
+                                    <button type="button" data-action="library" aria-controls="fp-library" aria-expanded="false">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="10" r="4"/><circle cx="8" cy="10" r="1"/><path d="M15 4v6m-3-3h6"/></svg>Sensor hinzufügen
+                                    </button>
+                                    <button type="button" data-action="furniture_library">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15v2m12-2v2M3 11V9a2 2 0 0 1 4 0v3h6V9a2 2 0 0 1 4 0v6H3zm3-4V5h8v2"/></svg>Möbel hinzufügen
+                                    </button>
+                                    <button type="button" data-action="open_advisor" aria-haspopup="dialog">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="m10 10 5-5"/></svg>Raumempfehlungen
+                                    </button>
+                                    <button type="button" data-action="preview_walk" hidden>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4.25" r="2"/><path d="M4 10l6-2 6 2m-6-2v4m0 0-3 5m3-5 3 5"/></svg>Laufweg testen
+                                    </button>
+                                    <button type="button" data-action="repeat_test" hidden>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4.25" r="2"/><path d="M4 10l6-2 6 2m-6-2v4m0 0-3 5m3-5 3 5"/></svg>Abdeckung testen
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="fp-history" role="group" aria-label="Änderungen rückgängig machen oder wiederholen">
+                                                                    <button type="button" data-action="undo" disabled>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 9l4 4M3 9h9a4 4 0 0 1 0 8"/></svg>Rückgängig
+                                    </button>
+                                                                    <button type="button" data-action="redo" disabled>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m13 5 4 4-4 4m4-4H8a4 4 0 0 0 0 8"/></svg>Wiederholen
+                                    </button>
+                                                            </div>
+                            <details class="fp-shortcuts">
+                                <summary>Tastenkürzel</summary>
+                                <p>Bewege den Zeiger mit den Pfeiltasten und zeichne oder platziere mit Enter. V wählt aus, H verschiebt, R zeichnet einen Raum, W eine Wand, D öffnet Sensoren, F passt die Ansicht an und Q wechselt zwischen 2D und 3D.</p>
+                            </details>
+                        </div>
+                    </details>
+                </div>
+                <div class="fp-placement-bar" id="fp-placement-bar" hidden>
+                    <div class="fp-placement-copy">
+                        <strong id="fp-place-title"></strong>
+                        <span id="fp-place-help" role="status"></span>
+                        <label id="fp-place-installation-field" hidden>Wie möchtest du den Sensor montieren?<select id="fp-place-installation"></select></label>
+                    </div>
+                    <div class="fp-opening-dimensions" id="fp-opening-dimensions" hidden>
+                        <label>Breite (m) <input type="number" id="fp-opening-width" inputmode="decimal" step="any" required></label>
+                        <label id="fp-opening-height-field">Höhe (m) <input type="number" id="fp-opening-height" inputmode="decimal" min=".1" max="6" step="any" required></label>
+                    </div>
+                    <div class="fp-place-actions">
+                        <button type="button" class="fp-placement-primary" id="fp-place-confirm" data-action="place_preview" hidden>Hier platzieren</button>
+                        <button type="button" id="fp-place-center" data-action="place_center" hidden>In der Raummitte platzieren</button>
+                        <button type="button" id="fp-place-cancel" data-action="cancel_place">Abbrechen</button>
+                    </div>
+                </div>
+                <div id="fp-sim-guide" class="fp-sim-guide" role="group" aria-label="Abdeckungstest" hidden>
+                    <div id="fp-sim-people" class="fp-sim-people">
+                        <div id="fp-sim-picker" class="fp-sim-picker" role="group" aria-label="Testperson auswählen">
+                                                            <button type="button" data-walker="man" aria-pressed="true">
+                                    <i aria-hidden="true"></i>Mann
+                                </button>
+                                                            <button type="button" data-walker="woman" aria-pressed="false">
+                                    <i aria-hidden="true"></i>Frau
+                                </button>
+                                                            <button type="button" data-walker="child" aria-pressed="false">
+                                    <i aria-hidden="true"></i>Kind
+                                </button>
+                                                    </div>
+                        <details id="fp-sim-cast" class="fp-sim-menu">
+                            <summary>
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="6" r="2.5"/><path d="M3 16v-1a5 5 0 0 1 10 0v1M14.5 6.5v5m-2.5-2.5h5"/></svg>Personen
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                            </summary>
+                            <div class="fp-sim-options">
+                                                                    <button type="button" data-action="second_person" data-toggle-walker="woman" aria-controls="fp-sim-picker">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/><path class="fp-sim-add-line" d="M10 4v12"/></svg>
+                                        <span>Frau hinzufügen</span>
+                                    </button>
+                                                                    <button type="button" data-action="child_person" data-toggle-walker="child" aria-controls="fp-sim-picker">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/><path class="fp-sim-add-line" d="M10 4v12"/></svg>
+                                        <span>Kind hinzufügen</span>
+                                    </button>
+                                                            </div>
+                        </details>
+                    </div>
+                    <div class="fp-sim-overview">
+                        <div id="fp-sim-at">
+                            <strong id="fp-sim-room-label"></strong>
+                            <span id="fp-sim-floor-label" hidden></span>
+                        </div>
+                        <button type="button" class="fp-sim-reading" data-action="show_readings" aria-controls="fp-simulation">
+                            <span><strong id="fp-sim-count"></strong><span id="fp-sim-detect-label">Sensoren erkennen dich</span></span>
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg>
+                        </button>
+                    </div>
+                    <div id="fp-stair-prompt" class="fp-stair-prompt" hidden>
+                        <svg class="fp-stair-symbol" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h4v-4h4V8h4V4h2"/></svg>
+                        <p id="fp-stair-question" role="status"></p>
+                        <button type="button" data-action="confirm_stair" aria-describedby="fp-stair-question" aria-keyshortcuts="Enter">
+                            <span id="fp-stair-confirm-label"></span><kbd aria-hidden="true">Enter</kbd>
+                        </button>
+                        <button type="button" data-action="dismiss_stair" aria-label="Treppenhinweis schließen">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+                        </button>
+                    </div>
+                    <div class="fp-sim-feedback">
+                        <div><p id="fp-sim-auto-status" role="status"></p><p id="fp-sim-activity" role="status"></p></div>
+                        <button type="button" data-action="stop_stairs" hidden>Treppenroute stoppen</button>
+                    </div>
+                    <div class="fp-sim-footer">
+                        <details id="fp-sim-tools" class="fp-sim-menu" hidden>
+                            <summary>Testoptionen <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                            <div class="fp-sim-options">
+                                <button type="button" class="fp-sim-auto" data-action="auto_walk" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.5v11l8-5.5z"/><path d="M7 5v10m6-10v10"/></svg><span>Automatisch gehen</span>
+                                </button>
+                                <button type="button" data-action="take_stairs" hidden>
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h4v-4h4V8h4V4h2"/></svg><span>Treppe nehmen</span>
+                                </button>
+                                <button type="button" data-action="test_smoke" data-activity-test="smoke" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 2.5c.6 3.2 4.6 4.6 4.6 8.7a5.6 5.6 0 0 1-11.2 0c0-2.2 1.1-3.6 2.2-4.6.1 1.5.8 2.3 1.6 2.7.4-2.8 2.3-4 2.8-6.8Z"/></svg>
+                                    <span>Rauchtest</span>
+                                </button>
+                                <button type="button" data-action="test_fall" data-activity-test="fall" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="13.5" cy="5.5" r="1.8"/><path d="m5 13 4-2.7 3.6 1.6L15 9M9 10.3l1.2-3.4-3.3-2.2M3 16h14"/></svg>
+                                    <span>Sturztest</span>
+                                </button>
+                            </div>
+                        </details>
+                        <p class="fp-sim-keys" id="fp-sim-instructions">Pfeiltasten oder WASD</p>
+                        <div id="fp-sim-exit"></div>
+                    </div>
+                </div>
+                <div class="fp-stage" id="fp-walk-stage" tabindex="-1">
+                    <div class="fp-undo-notice" id="fp-undo-notice" hidden>
+                        <span id="fp-undo-message" role="status"></span>
+                        <button type="button" data-action="undo_recent">Rückgängig</button>
+                    </div>
+                    <div class="fp-board" id="fp-board" role="group" tabindex="0" aria-label="Interaktiver Grundriss" aria-describedby="fp-keys">
+                        <svg id="fp-plan" viewBox="-1 -1 13 10">
+                            <defs>
+                                <pattern id="fp-small-grid" width=".25" height=".25" patternUnits="userSpaceOnUse">
+                                    <path d="M.25 0H0V.25" fill="none" stroke="#2b3037" stroke-width=".55" vector-effect="non-scaling-stroke"/>
+                                </pattern>
+                                <pattern id="fp-grid" width="1" height="1" patternUnits="userSpaceOnUse">
+                                    <rect width="1" height="1" fill="url(#fp-small-grid)"/>
+                                    <path d="M1 0H0V1" fill="none" stroke="#3a4149" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+                                </pattern>
+                            </defs>
+                            <rect id="fp-grid-plane" fill="url(#fp-grid)"/>
+                            <image id="fp-underlay" pointer-events="none" hidden/>
+                            <g id="fp-drawing"></g>
+                            <g id="fp-activity-flat-layer" pointer-events="none"></g>
+                            <g id="fp-person-flat" pointer-events="none"></g>
+                            <g id="fp-ghost" pointer-events="none"></g>
+                            <g id="fp-room-midpoints" pointer-events="none"></g>
+                            <g id="fp-room-handles" pointer-events="none"></g>
+                            <path id="fp-cursor" class="fp-cursor" d="M-.22 0h.44M0-.22v.44" visibility="hidden" pointer-events="none"/>
+                        </svg>
+                    </div>
+                    <svg id="fp-space" hidden role="group" aria-label="Interaktiver Grundriss"></svg>
+                    <div id="fp-sensor-tip" class="fp-sensor-tip" role="tooltip" hidden></div>
+                    <p class="fp-space-furniture" id="fp-space-furniture" hidden>Möblierter Plan</p>
+                    <div id="fp-space-placement" class="fp-space-placement" hidden><span id="fp-space-placement-text"></span>
+                        <button type="button" id="fp-space-place-center" data-action="place_center">In der Raummitte platzieren</button>
+                        <button type="button" data-action="cancel_place">Abbrechen</button>
+                    </div>
+                    <div class="fp-space-guide" id="fp-space-guide" hidden>
+                        <span>Ziehen, um dich umzusehen</span>
+                    </div>
+                    <p id="fp-space-empty" class="fp-space-empty" hidden>Zeichne einen Raum in 2D, um den Plan in 3D anzusehen.</p>
+                    <span class="fp-visually-hidden" id="fp-keys">Bewege den Zeiger mit den Pfeiltasten und zeichne oder platziere mit Enter. V wählt aus, H verschiebt, R zeichnet einen Raum, W eine Wand, D öffnet Sensoren, F passt die Ansicht an und Q wechselt zwischen 2D und 3D.</span>
+                    <span class="fp-visually-hidden" id="fp-outline-keys">Wähle eine Ecke mit Bild auf oder Bild ab. Verschiebe sie mit den Pfeiltasten.</span>
+                    <span class="fp-visually-hidden" id="fp-room-handle-keys">Drücke die Eingabetaste, um diese Ecke mit der Tastatur zu bearbeiten.</span>
+                    <p class="fp-room-handle-feedback" id="fp-room-handle-feedback" role="status"></p>
+                    <div class="fp-stage-top">
+                        <div class="fp-stage-instructions">
+                            <p class="fp-hint" id="fp-hint" role="status"></p>
+                            <p class="fp-draw-keys" id="fp-draw-keys" hidden>Umschalt zum freien Zeichnen · Esc zum Abbrechen</p>
+                        </div>
+                    </div>
+                    <span class="fp-scale" id="fp-scale" aria-hidden="true"><span></span>1 m</span>
+                </div>
+                <div class="fp-outline-tools" id="fp-outline-tools" hidden>
+                    <div class="fp-place-actions fp-room-modes" id="fp-room-modes" role="group" aria-label="Raumform zeichnen" hidden>
+                        <button type="button" data-action="room_rectangle" data-room-mode="room" aria-pressed="true">Rechteck</button>
+                        <button type="button" data-action="room_outline" data-room-mode="outline_room" aria-pressed="false">Freie Form</button>
+                    </div>
+                    <label id="fp-zone-options" hidden>Zonentyp
+                        <select id="fp-zone-type">
+                                                            <option value="detection">Erfassungszone</option>
+                                                            <option value="exclusion">Ausschlusszone</option>
+                                                            <option value="entry">Eintrittslinie</option>
+                                                            <option value="interference">Störzone</option>
+                                                    </select>
+                    </label>
+                    <div class="fp-place-actions" id="fp-room-outline-actions" hidden>
+                        <button type="button" data-action="save_outline">Raum schließen</button>
+                        <button type="button" data-action="undo_corner">Letzte Ecke rückgängig</button>
+                        <button type="button" data-action="remove_corner" hidden>Ecke entfernen</button>
+                        <button type="button" data-action="cancel_outline">Abbrechen</button>
+                    </div>
+                    <div id="fp-room-corner-position" class="fp-room-corner-position" role="group" aria-label="Position der gewählten Ecke" hidden>
+                                                    <label>X (m)<input type="number" inputmode="decimal" min="-100" max="100" step="any" data-corner-axis="x" required></label>
+                                                    <label>Y (m)<input type="number" inputmode="decimal" min="-100" max="100" step="any" data-corner-axis="y" required></label>
+                                            </div>
+                </div>
+                <div class="fp-sim-dock" id="fp-sim-dock" hidden>
+                    <div class="fp-sim-poses" role="group" aria-label="Haltung der Testperson">
+                                                    <button type="button" data-person-pose="standing" aria-pressed="true">Stehen</button>
+                                                    <button type="button" data-person-pose="sitting" aria-pressed="false">Sitzen</button>
+                                                    <button type="button" data-person-pose="lying" aria-pressed="false">Liegen</button>
+                                            </div>
+                    <div class="fp-sim-arrows" role="group" aria-label="Testperson bewegen">
+                                                    <button type="button" data-person-move="ArrowLeft" aria-label="Nach links gehen"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowUp" aria-label="Nach oben gehen"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowDown" aria-label="Nach unten gehen"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowRight" aria-label="Nach rechts gehen"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                            </div>
+                </div>
+                <div class="fp-legend" id="fp-legend">
+                    <span data-walk-legend hidden><i class="fp-route-key" aria-hidden="true"></i>Laufweg in Reichweite</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-gap" aria-hidden="true"></i>Laufweg außerhalb der Reichweite</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-risk" aria-hidden="true"></i>Mögliche Abschirmung</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-link" aria-hidden="true"></i>Sensor erfasst die Testperson</span>
+                    <span><i class="fp-dot ceiling"></i> CeilSense</span>
+                    <span><i class="fp-dot wall"></i> WallSense / UltimateSensor</span>
+                    <span data-legend="2d"><i class="fp-legend-range"></i> Geschätzte Abdeckung</span>
+                    <span class="fp-legend-limit" data-legend="2d">Lauftest zeigt Abschirmung durch Möbel</span>
+                    <span class="fp-legend-limit" data-legend="3d" hidden>Aufgeschnittene Wände, gepunktete Decken und Sensoren auf Montagehöhe.</span>
+                </div>
+            </section>
+            <aside class="fp-sidebar" id="fp-sidebar">
+                <button type="button" class="fp-close-panel" data-action="close_panel" aria-label="Panel schließen">×</button>
+                <section class="fp-library-panel" id="fp-library" aria-labelledby="fp-library-title" hidden>
+                    <div class="fp-library-header">
+                        <div><h2 id="fp-library-title">Sensor hinzufügen</h2><p id="fp-library-context">Wähle ein Modell und finde einen Platz im Grundriss.</p></div>
+                        <button type="button" data-action="close_library" aria-label="Sensorliste schließen">×</button>
+                    </div>
+                    <label class="fp-visually-hidden" for="fp-search">Sensor suchen</label>
+                    <input type="search" id="fp-search" placeholder="Sensor suchen" autocomplete="off">
+                    <div class="fp-library-filters" role="group" aria-label="Nach Montageart filtern">
+                                                    <button type="button" data-catalog-mount="all" aria-pressed="true">Alle Sensoren</button>
+                                                    <button type="button" data-catalog-mount="ceiling" aria-pressed="false">Decke</button>
+                                                    <button type="button" data-catalog-mount="recessed" aria-pressed="false">Wandeinbau</button>
+                                                    <button type="button" data-catalog-mount="freestanding" aria-pressed="false">Freistehend</button>
+                                                    <button type="button" data-catalog-mount="wall" aria-pressed="false">Wandhalterung</button>
+                                            </div>
+                    <button type="button" class="fp-catalog-advice" data-action="catalog_advice" aria-haspopup="dialog">
+                        Hilf mir bei der Wahl <span aria-hidden="true">→</span>
+                    </button>
+                    <p id="fp-search-empty" role="status" class="fp-note" hidden>Keine Sensoren gefunden.</p>
+                    <div id="fp-catalog"></div>
+                </section>
+                <div class="fp-sidebar-nav" role="tablist" aria-label="In diesem Plan">
+                    <button type="button" role="tab" id="fp-tab-outline" aria-controls="fp-outline" aria-selected="true">In diesem Plan</button>
+                    <button type="button" role="tab" id="fp-tab-properties" aria-controls="fp-properties" aria-selected="false" tabindex="-1">Eigenschaften</button>
+                </div>
+                <div class="fp-sidebar-content" id="fp-outline" role="tabpanel" aria-labelledby="fp-tab-outline" tabindex="0">
+                    <div class="fp-panel fp-sensors">
+                        <div class="fp-panel-heading"><h2>Sensoren</h2><span id="fp-count" class="fp-count">0</span></div>
+                        <div id="fp-placements"></div>
+                    </div>
+                    <div class="fp-panel fp-objects">
+                        <div class="fp-panel-heading"><h2>Räume</h2><span id="fp-object-count" class="fp-count">0</span></div>
+                        <button type="button" id="fp-add-room" data-action="edit_add_room" hidden>Raum hinzufügen</button>
+                        <div id="fp-objects"></div>
+                        <details id="fp-structure" hidden>
+                            <summary>Wände und Türen <span id="fp-structure-count" class="fp-count">0</span></summary>
+                            <div id="fp-structure-items"></div>
+                        </details>
+                    </div>
+                    <div class="fp-panel fp-furniture-panel">
+                        <div class="fp-panel-heading"><h2>Möbel</h2><span id="fp-furniture-count" class="fp-count">0</span></div>
+                        <button type="button" class="fp-furniture-add-button" data-action="furniture_library">Möbel hinzufügen</button>
+                        <div id="fp-furniture-items"></div>
+                    </div>
+                </div>
+                <div class="fp-sidebar-content" id="fp-properties" role="tabpanel" aria-labelledby="fp-tab-properties" tabindex="0" hidden>
+                    <div class="fp-panel fp-inspector">
+                        <h2 id="fp-inspector-title" tabindex="-1">Eigenschaften</h2>
+                        <div id="fp-inspector"></div>
+                        <section class="fp-handoff" id="fp-handoff" hidden></section>
+                    </div>
+                </div>
+                <section class="fp-sidebar-content fp-simulation" id="fp-simulation" aria-labelledby="fp-simulation-title" hidden>
+                    <div class="fp-panel">
+                        <div class="fp-sim-panel-head">
+                            <h2 id="fp-simulation-title" tabindex="-1">Simulierte Erkennung</h2>
+                            <button type="button" data-action="show_walk_map">Zurück zum Plan</button>
+                        </div>
+                        <p id="fp-sim-summary" role="status"></p>
+                        <p id="fp-sim-dual-note" class="fp-note" hidden>Der Planer berechnet die Abdeckung pro Person. Ob ein echter Sensor mehrere Personen gleichzeitig unterscheiden kann, hängt vom Radarmodul ab.</p>
+                        <label class="fp-obstruction-toggle"><input type="checkbox" id="fp-include-furniture" checked> Möbel berücksichtigen</label>
+                        <p class="fp-note fp-obstruction-note">Diese Änderung löscht die Laufwege.</p>
+                        <div class="fp-sim-setup">
+                            <label for="fp-sim-room">Neue Route starten in</label>
+                            <select id="fp-sim-room"></select>
+                        </div>
+                        <section id="fp-route-summary" class="fp-route-summary" aria-labelledby="fp-route-title" hidden>
+                            <div class="fp-route-heading">
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="15" r="2"/><circle cx="15" cy="5" r="2"/><path d="M7 15h7a2 2 0 0 0 0-4H6a2 2 0 0 1 0-4h5"/></svg>
+                                <h3 id="fp-route-title" tabindex="-1">Getesteter Laufweg</h3>
+                                <button type="button" data-action="clear_walk" disabled>Laufweg löschen</button>
+                            </div>
+                            <div class="fp-route-meter" aria-hidden="true" hidden><span id="fp-route-fill"></span></div>
+                            <p id="fp-route-distance" class="fp-note">Gehe los, um die Abdeckung entlang des Weges zu sehen.</p>
+                        </section>
+                        <p id="fp-sim-position" class="fp-sim-position" hidden></p>
+                        <ul id="fp-sim-sensors"></ul>
+                        <p class="fp-note">Der Test kombiniert geschätzte Reichweite und direkte Radarwege durch Möbel. Wände begrenzen die Laufwege. Reflexionen und Durchgang durch Wände bleiben außerhalb des Modells.</p>
+                        <details class="fp-sim-explanation">
+                            <summary>Wie berücksichtigt der Planer Möbel?</summary>
+                            <p class="fp-note">Drei Beispielhöhen pro Haltung unterscheiden teilweise und vollständige Abschirmung. Die Materialwerte dienen der Orientierung.</p>
+                            <p class="fp-note">Die Montagehöhe von Wandsensoren lässt sich in den Eigenschaften ändern. Der Test nutzt standardmäßig 1,4 m.</p>
+                            <p class="fp-note"><a href="https://www.nist.gov/publications/penetration-loss-60-ghz-indoor-indoor-and-outdoor-indoor-mobile-scenarios" target="_blank" rel="noopener">NIST · 60 GHz</a>
+                                · <a href="https://www.ti.com/document-viewer/lit/html/swra758" target="_blank" rel="noopener">Texas Instruments · mmWave</a></p>
+                        </details>
+                        <details class="fp-sim-explanation">
+                            <summary>Wie funktioniert die Höhe in dieser Demo?</summary>
+                            <p class="fp-note">LD6002B liefert X, Y und Z. Die Höhen für Stehen, Sitzen und Liegen sind Beispielwerte. Die Sturzmeldung ist eine Simulation. <a href="https://www.hlktech.com/Goods-338.html" target="_blank" rel="noopener">Spezifikationen von Hi-Link</a></p>
+                        </details>
+                    </div>
+                </section>
+                <details class="fp-radar-details" id="fp-radar-panel" hidden>
+                    <summary>Radarabdeckung</summary>
+                    <div class="fp-radar-panel">
+                    <div class="fp-radar-choice">
+                        <label for="fp-radar-focus">Radarabdeckung</label>
+                        <select id="fp-radar-focus"></select>
+                    </div>
+                    <div class="fp-radar-radii" id="fp-radar-radii" hidden></div>
+                    <p id="fp-beam-note">Geschätzte Reichweite. Der Kegel stellt den Umriss am Boden räumlich dar.</p>
+                </div>
+                </details>
+            </aside>
+        </div>
+        </div>
+        <dialog id="fp-sensor-edit" class="fp-furniture-dialog fp-sensor-edit" aria-labelledby="fp-sensor-edit-title" aria-describedby="fp-sensor-edit-context">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-sensor-edit-title">Sensor bearbeiten</h2><p id="fp-sensor-edit-context"></p></div>
+                <button type="button" data-action="close_sensor_edit" aria-label="Panel schließen">×</button>
+            </div>
+            <form id="fp-sensor-edit-form">
+                <div class="fp-sensor-edit-body"><label id="fp-sensor-edit-ha"><span id="fp-ha-device-label"></span><select name="haDevice"></select></label>
+                    <div class="fp-sensor-edit-model">
+                        <img id="fp-sensor-edit-image" alt="" width="52" height="52" hidden>
+                        <label>Sensormodell<select name="model" autofocus></select></label>
+                    </div>
+                    <div class="fp-sensor-edit-fields">
+                        <label>mmWave<select name="radar"></select></label>
+                        <label>Montage<select name="installation"></select></label>
+                    </div>
+                    <label id="fp-sensor-edit-height" hidden>Montagehöhe über Boden (m)
+                        <input name="mountHeight" type="number" min=".15" max="6" step="any" inputmode="decimal" required>
+                    </label>
+                    <label id="fp-sensor-edit-scd41" class="fp-sensor-edit-check" hidden>
+                        <input name="climate" type="checkbox"> <span>SCD41 für CO₂, Temperatur und Luftfeuchte</span>
+                    </label>
+                    <label id="fp-sensor-edit-level" class="fp-sensor-edit-check" hidden>
+                        <input name="level" type="checkbox"> <span>Sensor zeigt senkrecht nach unten</span>
+                    </label>
+                    <p class="fp-note" id="fp-sensor-edit-features" hidden></p>
+                    <p class="fp-note" id="fp-sensor-edit-placement" role="status" hidden></p>
+                </div>
+                <div class="fp-sensor-edit-footer">
+                    <button type="button" data-action="close_sensor_edit">Abbrechen</button>
+                    <button type="submit" class="fp-primary">Speichern</button>
+                </div>
+            </form>
+        </dialog>
+        <dialog id="fp-furniture-library" class="fp-furniture-dialog" aria-labelledby="fp-furniture-title">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-furniture-title">Möbelbibliothek</h2><p>Wähle ein Möbelstück, platziere es und passe Größe und Material an.</p></div>
+                <button type="button" data-action="close_furniture" aria-label="Möbelbibliothek schließen">×</button>
+            </div>
+            <div class="fp-furniture-filters">
+                <label>Möbel suchen<input type="search" id="fp-furniture-search" autocomplete="off"></label>
+                <label>Kategorie<select id="fp-furniture-category">
+                    <option value="">Alle Möbel</option>
+                                            <option value="living">Wohnzimmer</option>
+                                            <option value="work">Küche und Arbeitsplatz</option>
+                                            <option value="sleep">Schlafzimmer und Stauraum</option>
+                                            <option value="motion">Bewegung und Wärme</option>
+                                            <option value="divide">Trennwände und eigene Objekte</option>
+                                    </select></label>
+            </div>
+            <div class="fp-furniture-catalog" id="fp-furniture-catalog"></div>
+        </dialog>
+        <dialog id="fp-advisor" class="fp-furniture-dialog fp-advisor" aria-labelledby="fp-advisor-title">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-advisor-title">Raumempfehlungen</h2><p>Wähle je Raum die Messung und die Montageart.</p></div>
+                <button type="button" id="fp-advisor-close" aria-label="Raumempfehlungen schließen">×</button>
+            </div>
+            <div class="fp-advisor-body">
+                <section class="fp-advisor-overview">
+                    <h3>Empfehlungen nach Raum</h3><div id="fp-advisor-rooms"></div>
+                </section>
+                <section class="fp-advisor-room">
+                    <h3 id="fp-advisor-room-title"></h3>
+                    <div class="fp-advisor-controls" id="fp-advisor-controls">
+                        <label>Was möchtest du messen?<select id="fp-advisor-goal">
+                                                            <option value="presence">Anwesenheit</option>
+                                                            <option value="zones">Position und Zonen</option>
+                                                            <option value="height">Position und Höhe (Z)</option>
+                                                            <option value="climate">CO₂ und Raumklima</option>
+                                                    </select></label>
+                        <label>Wo kannst du den Sensor montieren?<select id="fp-advisor-mount">
+                                                            <option value="either">Hilf mir bei der Wahl</option>
+                                                            <option value="ceiling">Deckeneinbau</option>
+                                                            <option value="recessed">Wandeinbau</option>
+                                                            <option value="wall">Wandhalterung</option>
+                                                            <option value="freestanding">Freistehend</option>
+                                                    </select></label>
+                        <label id="fp-advisor-wall-field">Montagehöhe über Boden (m)<input type="number" id="fp-advisor-wall" value="1.4" min=".15" max="6" step="any" required></label>
+                        <label id="fp-advisor-air-field" class="fp-advisor-check"><input type="checkbox" id="fp-advisor-air"> Auch CO₂ messen</label>
+                        <label id="fp-advisor-level-field" class="fp-advisor-check" hidden><input type="checkbox" id="fp-advisor-level"> Ich kann an der Schräge eine waagerechte Halterung montieren</label>
+                        <label class="fp-advisor-existing" id="fp-advisor-existing" hidden>
+                            <span id="fp-advisor-existing-note"></span>
+                            <select id="fp-advisor-strategy" aria-label="Was soll mit vorhandenen Sensoren geschehen?">
+                                <option value="add">Zu den vorhandenen Sensoren hinzufügen</option>
+                                <option value="replace">Vorhandene Sensoren ersetzen</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="fp-advisor-results" aria-live="polite"></div>
+                </section>
+            </div>
+            <div class="fp-advisor-footer">
+                <details class="fp-advisor-method">
+                    <summary>So schätzen wir die Abdeckung</summary>
+                    <p class="fp-note">Das Modell nutzt Sitzhöhen und freie Radarwege. Tracking zählt ohne eigenes Präsenzprofil als Anwesenheit. Ein weiterer Sensor bringt mindestens fünf Prozentpunkte oder erreicht das 90-%-Ziel.</p>
+                </details>
+                <p id="fp-advisor-status" role="status"></p>
+                <div class="fp-advisor-actions">
+                    <button type="button" id="fp-advisor-place" hidden>Vorgeschlagene Sensoren platzieren</button>
+                    <button type="button" id="fp-advisor-place-all" disabled>Empfehlungen in allen Räumen platzieren</button>
+                </div>
+            </div>
+        </dialog>
+        <dialog id="fp-order" class="fp-order" aria-labelledby="fp-order-title">
+            <div class="fp-order-heading">
+                <div><h2 id="fp-order-title">Bestellübersicht</h2><p>Sieh alle platzierten Sensoren nach Raum. Wähle die Version und die Sensoren, die du bestellen möchtest.</p></div>
+                <button type="button" id="fp-order-close" aria-label="Bestellübersicht schließen">×</button>
+            </div>
+            <div class="fp-order-body" id="fp-order-body"></div>
+        </dialog>
+        <section class="fp-recovery" id="fp-recovery" hidden>
+            <p>Der gespeicherte Plan konnte nicht geöffnet werden. Lade die erhaltene Originaldatei herunter, um eine Kopie zu behalten.</p>
+            <button type="button" data-action="recover_file">Original herunterladen</button>
+            <button type="button" data-action="replace_saved">Diesen Plan auf dem Gerät speichern</button>
+        </section>
+        <p class="fp-visually-hidden" id="fp-event" role="status"></p>
+        <div class="fp-footer">
+            <details><summary>Geschätzte Abdeckung</summary><p>CeilSense schätzt Präsenz im Sitzen oder Positionsverfolgung. WallSense und UltimateSensor zeigen horizontale Abdeckung. Die Umrisse enden an den Raumgrenzen. Innenwände, Möbel und Materialien bleiben unberücksichtigt.</p></details>
+            <span id="fp-save" role="status"></span>
+        </div>
+    </div>
+    <script type="application/json" id="fp-copy">{"title":"Sensorplaner","breadcrumbs":"Brotkrümelnavigation","back_to_shop":"Zurück zum Shop","design_center":"Design Center","room_short":"Raum","sensor_short":"Sensor","more_tools":"Mehr","close_panel":"Panel schließen","wall_recessed":"Wandeinbau","wall_bracket":"Wandhalterung","freestanding":"Freistehend","installation":"Wie möchtest du den Sensor montieren?","installations":{"ceiling-recessed":"In die Decke eingebaut","ceiling-surface":"Auf der Decke montiert","wall-recessed":"In die Wand eingebaut","wall-bracket":"Mit Halterung an der Wand","freestanding":"Auf Regal, Schrank oder Schreibtisch"},"wallsense_note":"WallSense ist in Entwicklung. Du kannst ihn jetzt einplanen und später bestellen.","planning_only":"Nur zur Planung","mount_kit_note":"Bei freistehender Aufstellung oder Wandmontage enthält die Bestellübersicht das passende Standfuß- und Wandhalterungsset.","mount_kit_included":"Inklusive Standfuß und Wandhalterung","open":"Grundrissplaner öffnen","new_tab":"(öffnet in neuem Tab)","from_demo":"Grundriss mit diesen Raummaßen zeichnen","intro":"Zeichne dein Zuhause, platziere Sensoren und sieh ihren geschätzten Erfassungsbereich.","start_title":"Plane dein smartes Zuhause","start_intro":"Zeichne deine Räume, wähle die Montage und finde passende Sensoren. Starte mit einem eigenen Raum oder erkunde das eingerichtete Demozuhause.","start_new":"Meinen Grundriss erstellen","start_example":"Demozuhause erkunden","start_have_plan":"Hast du bereits einen Grundriss?","start_image":"Bild öffnen","start_json":"Gespeicherten Plan öffnen","order_home":"Ganzes Zuhause","history":"Änderungen rückgängig machen oder wiederholen","order_scope":"Sensoren im ganzen Zuhause","next_room_action":"Raum hinzufügen","next_room":"Beginne mit einem Raum auf dieser Etage.","next_sensor":"Auf dieser Etage sind noch keine Sensoren.","next_sensor_room":"Platziere einen Sensor in :room, um seine Abdeckung zu prüfen.","next_test":"Du kannst jetzt prüfen, wo die Sensoren eine Person erfassen.","next_reviewed":"Prüfe deine Auswahl in der Bestellübersicht.","next_order_action":"Bestellung prüfen","next_all_floors":"Wähle eine Etage, um Räume oder Sensoren zu bearbeiten.","keyboard_title":"Tastenkürzel","next_extra_sensor":"Weiteren Sensor platzieren","tools_draw_group":"Grundriss bearbeiten","tools_place_group":"Sensoren und Möbel","tools_room_form":"Raum nach Maß","tools_walk":"Laufweg testen","zoom_controls":"Grundriss zoomen und einpassen","wheel_shortcut":"Strg + Scrollen zum Zoomen in 2D.","undo_moved":"Verschoben.","undo_removed":"Entfernt.","zoom_shortcut":"Mit einem Finger verschieben, mit zwei Fingern zoomen.","undo":"Rückgängig","tools_short":"Werkzeuge","tools_draw_room":"Raum zeichnen","room_settings_more":"Weitere Raumeinstellungen","flow_test":"Abdeckung testen","flow_test_exit":"Abdeckungstest beenden","room_form_title":"Raum hinzufügen","room_form_intro":"Gib die Innenmaße ein oder zeichne den Raum im Plan.","room_form_width":"Breite (m)","room_form_depth":"Tiefe (m)","room_form_height":"Höhe (m)","room_form_create":"Raum erstellen","room_form_draw":"Selbst zeichnen","room_form_map_hint":"Erstelle oben einen Raum oder wähle Selbst zeichnen.","project_menu":"Projekt","project_name":"Projektname","project_files":"Dateien","view":"Ansicht","floor_view":"Grundriss","space_view":"Räumliche Ansicht","turn_view":"Ansicht drehen","orbit_hint":"Ziehen, um dich umzusehen","orbit_reset":"Ansicht zurücksetzen","orbit_follow":"Testperson folgen","orbit_camera":"3D-Kamera","orbit_furniture":"Möblierter Plan","space_note":"Aufgeschnittene Wände, gepunktete Decken und Sensoren auf Montagehöhe.","furniture_title":"Möbelbibliothek","furniture_intro":"Wähle ein Möbelstück, platziere es und passe Größe und Material an.","furniture_add":"Möbel hinzufügen","furniture_short":"Möbel","furniture_list":"Möbel","furniture_empty":"Dieser Plan enthält noch keine Möbel.","furniture_search":"Möbel suchen","furniture_no_match":"Keine passenden Möbel gefunden.","furniture_category":"Kategorie","furniture_all":"Alle Möbel","furniture_categories":{"living":"Wohnzimmer","work":"Küche und Arbeitsplatz","sleep":"Schlafzimmer und Stauraum","motion":"Bewegung und Wärme","divide":"Trennwände und eigene Objekte"},"furniture_items":{"sofa":"Sofa","corner":"Ecksofa","armchair":"Sessel","coffee":"Couchtisch","rug":"Teppich","tv":"Fernseher an der Wand","plant":"Große Pflanze","dining":"Esstisch","chair":"Stuhl","desk":"Schreibtisch","island":"Kücheninsel","fridge":"Kühlschrank","washer":"Waschmaschine","bed":"Bett","nightstand":"Nachttisch","cabinet":"Niedriger Schrank","wardrobe":"Hoher Schrank","shelves":"Offenes Regal","bath":"Badewanne","screen":"Raumteiler","glass":"Glastrennwand","curtain":"Vorhang","custom":"Eigenes Objekt","fan":"Standventilator","pet":"Hund oder Katze","radiator":"Heizkörper","heater":"Heizlüfter"},"furniture_materials":{"wood":"Holz oder Plattenmaterial","textile":"Textil oder Polsterung","metal":"Metall","glass":"Glas","stone":"Massivstein oder Beton","plastic":"Kunststoff","mixed":"Gemischt oder unbekannt","ignore":"Nur anzeigen"},"furniture_material":"Material für den Radartest","furniture_material_note":"Wähle das Material, das den direkten Radarweg am stärksten beeinflusst. Reine Anzeigeobjekte wirken sich nicht auf den Test aus.","furniture_height":"Höhe (m)","furniture_base":"Unterkante über Boden (m)","furniture_place_hint":"Zum Platzieren auf den Boden klicken oder tippen","furniture_move":"Im Plan verschieben","furniture_duplicate":"Duplizieren","furniture_limit":"Dieser Plan enthält bereits 160 Möbelstücke.","furniture_need_room":"Zeichne zuerst einen Raum, um Möbel zu platzieren.","furniture_closed":"Möbelbibliothek schließen","advisor_title":"Raumempfehlungen","advisor_intro":"Wähle je Raum die Messung und die Montageart.","advisor_room":"Raum","advisor_goal":"Was möchtest du messen?","advisor_mount":"Wo kannst du den Sensor montieren?","advisor_goals":{"presence":"Anwesenheit","zones":"Position und Zonen","height":"Position und Höhe (Z)","climate":"CO₂ und Raumklima"},"advisor_mounts":{"either":"Hilf mir bei der Wahl","ceiling":"Deckeneinbau","recessed":"Wandeinbau","wall":"Wandhalterung","freestanding":"Freistehend"},"advisor_air":"Auch CO₂ messen","advisor_level":"Ich kann an der Schräge eine waagerechte Halterung montieren","advisor_wait":"Abdeckung wird berechnet ...","advisor_empty":"Zeichne oder importiere zuerst einen Plan mit Räumen.","advisor_partition":"Dieser Raum hat eine gezeichnete Trennwand. Teile ihn für die Berechnung in separate Räume.","advisor_height":"Für diese Einstellungen gibt es kein passendes Höhenprofil. Wähle eine geeignete Deckenmontage oder ändere dein Ziel.","advisor_no_fit":"Das Modell hat keine passende Anordnung gefunden. Prüfe Montage, Maße und Möbel.","advisor_recommended":"Empfohlen","advisor_alternative":"Alternative","advisor_score":":percent % der Testpunkte mit freiem Radarweg","advisor_partial":"Unter dem Modellziel von 90 %. Prüfe nicht erfasste Stellen mit der Testperson.","advisor_scd41":"Wähle das separate SCD41-Modul für CeilSense V2.","advisor_upgrade_scd41":"SCD41 für deinen CeilSense V2","advisor_upgrade_climate":"Ergänze den CeilSense V2 in diesem Raum um eine CO₂-Messung.","advisor_upgrade_room":"SCD41 in :room hinzufügen","plan_scd41":"SCD41 für CO₂, Temperatur und Luftfeuchte","advisor_climate":"Montagevorschlag für Raumklimamessungen.","advisor_place":"Vorgeschlagene Sensoren platzieren","advisor_place_room":"In :room platzieren","advisor_add_room":"In :room hinzufügen","advisor_replace_room":"Sensoren in :room ersetzen","advisor_place_empty":"Vorschläge in leeren Räumen platzieren","advisor_existing":"Bereits im Raum · :sensors","advisor_strategy":"Was soll mit vorhandenen Sensoren geschehen?","advisor_keep":"Zu den vorhandenen Sensoren hinzufügen","advisor_replace":"Vorhandene Sensoren ersetzen","advisor_needs_surface":"Plane an dieser Stelle ein Regal oder eine andere ebene Auflage ein.","advisor_choose":"Vorschlag auswählen","advisor_positions":"Positionen und Maße","advisor_gain":"Von :before % auf :after % der Testpunkte.","advisor_unmodelled":":count im Plan ohne passendes Erfassungsprofil für dieses Ziel.","advisor_covered":"Die vorhandenen Sensoren erreichen das Modellziel. Wähle Ersetzen, um eine andere Anordnung zu vergleichen.","advisor_covered_short":"Abdeckungsziel erreicht","advisor_climate_already":"Ein Sensor in diesem Raum misst bereits CO₂.","advisor_climate_already_short":"Misst bereits CO₂","advisor_no_suggestion":"Kein passender Vorschlag","advisor_height_invalid":"Gib für diesen Raum eine Montagehöhe zwischen 0,15 und :max m ein.","advisor_method":"So schätzen wir die Abdeckung","advisor_place_all":"Empfehlungen in allen Räumen platzieren","advisor_overview":"Empfehlungen nach Raum","advisor_origin":"Positionen ab der oberen linken Ecke des Raums","advisor_limit":"Der Plan hat nicht genug Platz für alle Sensoren.","advisor_exists":"Die vorgeschlagenen Positionen sind bereits im Plan.","advisor_model_note":"Das Modell nutzt Sitzhöhen und freie Radarwege. Tracking zählt ohne eigenes Präsenzprofil als Anwesenheit. Ein weiterer Sensor bringt mindestens fünf Prozentpunkte oder erreicht das 90-%-Ziel.","advisor_close":"Raumempfehlungen schließen","underlay_title":"Vorlagenbild","underlay_import":"Grundrissbild laden","underlay_opacity":"Sichtbarkeit","underlay_calibrate":"Maßstab festlegen","underlay_start":"Klicke den ersten Endpunkt einer bekannten Strecke im Vorlagenbild an.","underlay_end":"Klicke den anderen Endpunkt der Strecke an.","underlay_distance":"Tatsächliche Strecke (m)","underlay_apply":"Maßstab anwenden","underlay_error":"Das Bild konnte nicht geladen werden. Wähle PNG, JPG oder WebP bis 12 MB.","underlay_ready":"Bild geladen. Lege den Maßstab fest und zeichne die Räume nach.","wall_sensor_height":"Montagehöhe über Boden (m)","space_empty":"Zeichne einen Raum in 2D, um den Plan in 3D anzusehen.","sim_reach_test":"Abdeckungstest","sim_title":"Testperson","sim_manage_people":"Personen","sim_add_woman":"Frau hinzufügen","sim_remove_woman":"Frau entfernen","sim_auto_stop":"Automatisches Laufen stoppen","sim_count_short":":seen von :total","sim_detecting_sensors":"Sensoren erkennen dich","sim_no_sensors_short":"Keine Sensoren","sim_outside_rooms":"Außerhalb der Räume","sim_stair_destination":"Treppe zu :floor","sim_stair_dismiss":"Treppenhinweis schließen","sim_guide":"Pfeiltasten oder WASD","sim_choose_person":"Testperson auswählen","sim_man":"Mann","sim_woman":"Frau","sim_auto":"Automatisch gehen","sim_auto_active":"Benutze die Lauftasten, um die Demo zu übernehmen.","sim_more_tests":"Testoptionen","sim_test_smoke":"Rauchtest","sim_test_fall":"Sturztest","sim_test_stop_smoke":"Rauchtest stoppen","sim_test_stop_fall":"Sturztest stoppen","sim_test_start_smoke":"Rauchtest startet in :room.","sim_test_start_fall":"Sturztest startet in :room.","sim_test_finished_smoke":"Rauchtest abgeschlossen.","sim_test_finished_fall":"Sturztest abgeschlossen.","sim_test_no_place_smoke":"Wähle eine freie Bodenstelle für den Rauchtest.","sim_test_no_place_fall":"Wähle eine Stelle mit genügend freiem Boden für den Sturztest.","sim_activity_seat":":person sitzt in :room","sim_activity_bed":":person liegt in :room auf dem Bett","sim_activity_fall":"Sturz in :room simuliert","sim_activity_fall_detected":"Demo · Gestürzte Person in :room erkannt · LD6002B","sim_activity_fall_undetected":"Demo · Sturz in :room · keine LD6002B-Erkennung","sim_activity_smoke_start":"Die Testperson entfacht ein virtuelles Feuer in :room.","sim_activity_smoke":"Rauch in :room simuliert","sim_activity_smoke_detected":"Demo · Rauchalarm in :room · CeilSense Pro","sim_activity_smoke_undetected":"Demo · Rauch in :room · kein CeilSense Pro","sim_auto_partial":"Für eine Testperson gibt es keinen freien Weg. Wähle einen anderen Startpunkt.","sim_auto_blocked":"Von hier gibt es keinen freien Weg. Wähle einen anderen Startpunkt auf der Karte.","sim_auto_repositioned":"Die Testperson startet auf einer freien Stelle neben den Möbeln.","sim_dual_note":"Der Planer berechnet die Abdeckung pro Person. Ob ein echter Sensor mehrere Personen gleichzeitig unterscheiden kann, hängt vom Radarmodul ab.","sim_pose":"Haltung der Testperson","sim_standing":"Stehen","sim_sitting":"Sitzen","sim_lying":"Liegen","sim_move":"Testperson bewegen","sim_left":"Nach links gehen","sim_up":"Nach oben gehen","sim_down":"Nach unten gehen","sim_right":"Nach rechts gehen","sim_results":"Simulierte Erkennung","sim_jump":"Neue Route starten in","sim_count":":seen von :total Sensoren in Reichweite","sim_empty":"Platziere einen Sensor, um zu sehen, wann die Testperson in Reichweite ist.","sim_need_room":"Zeichne zuerst einen Raum in 2D, um die Testperson zu verwenden.","sim_seen":"In Reichweite","sim_missed":"Außer Reichweite","sim_no_profile":"Kein Erfassungsmodell","sim_presence":"Anwesenheit","sim_xy":"X/Y-Position","sim_xyz":"X/Y/Z-Position","sim_height":":height m über dem Boden","sim_limit":"Der Test kombiniert geschätzte Reichweite und direkte Radarwege durch Möbel. Wände begrenzen die Laufwege. Reflexionen und Durchgang durch Wände bleiben außerhalb des Modells.","sim_furniture":"Möbel berücksichtigen","sim_furniture_toggle_note":"Diese Änderung löscht die Laufwege.","sim_risk_route":":distance m möglicherweise abgeschirmt","sim_shadow":"Mögliche Abschirmung","sim_blocked":"Direkter Weg blockiert","sim_risk_count":":count mit Abschirmung","sim_path_note":"Drei Beispielhöhen pro Haltung unterscheiden teilweise und vollständige Abschirmung. Die Materialwerte dienen der Orientierung.","sim_research":"Wie berücksichtigt der Planer Möbel?","sim_radar_mount":"Die Montagehöhe von Wandsensoren lässt sich in den Eigenschaften ändern. Der Test nutzt standardmäßig 1,4 m.","sim_about_z":"Wie funktioniert die Höhe in dieser Demo?","sim_z_explanation":"LD6002B liefert X, Y und Z. Die Höhen für Stehen, Sitzen und Liegen sind Beispielwerte. Die Sturzmeldung ist eine Simulation.","sim_source":"Spezifikationen von Hi-Link","sim_route":"Getesteter Laufweg","sim_route_empty":"Gehe los, um die Abdeckung entlang des Weges zu sehen.","sim_route_distance":":covered von :total m in Reichweite","sim_reset":"Laufweg löschen","sim_covered":"Laufweg in Reichweite","sim_uncovered":"Laufweg außerhalb der Reichweite","sim_uncertain":"Mögliche Abschirmung","sim_link":"Sensor erfasst die Testperson","sim_view_readings":"Sensorwerte","sim_back_to_map":"Zurück zum Plan","sim_room_position":"Position im Raum · X :x m · Y :y m","beam_sensor":"Radarabdeckung","beam_auto":"Automatisch","beam_note":"Geschätzte Reichweite. Der Kegel stellt den Umriss am Boden räumlich dar.","beam_wall_note":"Horizontaler Erfassungsbereich innerhalb des Raums.","beam_wall_note_3d":"Der Boden zeigt die Abdeckung im Raum. Der obere Fächer liegt auf Montagehöhe.","beam_wall_range":"Modellreichweite und Winkel","beam_radius":"Radius je Achse","beam_seated":"Still sitzen","beam_standing":"Still stehen","beam_moving":"Bewegung","beam_lying":"Sitzreferenz","beam_lying_note":"Beim Liegen verwendet LD2412 die Sitzreferenz.","floor_title":"Etage","floor_manage":"Etagen verwalten","floor_move_room":"Raum auf eine andere Etage verschieben","floor_name":"Etagenname","floor_ground":"Erdgeschoss","floor_upper":"Etage :level","floor_lower":"Keller :level","floor_all":"Alle Etagen","floor_separation":"Etagenabstand","floor_add_upper":"Etage darüber hinzufügen","floor_add_lower":"Keller darunter hinzufügen","floor_remove":"Leere Etage entfernen","design_details":"Details zeichnen","wall_measures":"Wandlängen","window":"Fenster","mirror":"Spiegel","zone":"Zone","redo":"Wiederholen","window_hint":"Klicke auf eine Wand, um ein Fenster zu platzieren.","mirror_hint":"Klicke auf eine Wand, um einen Spiegel zu platzieren.","mirror_note":"Der Spiegel wird im Plan gezeigt. Reflexionen bleiben außerhalb der Simulation.","room_midpoint_label":"Mittelpunkt an Wand :index hinzufügen","room_midpoint_saved":"Mittelpunkt hinzugefügt.","opening_choose_wall":"Wähle eine Wand im Grundriss.","opening_ready":"Prüfe die Maße und wähle Hier platzieren.","opening_wall_missing":"Wähle einen Punkt näher an einer Wand.","opening_too_wide":"Die Wand ist :length m lang. Gib eine kleinere Breite ein.","opening_invalid_dimensions":"Gib gültige Maße ein.","opening_move":"An der Wand verschieben","object_height":"Höhe (m)","zone_type":"Zonentyp","zone_detection":"Erfassungszone","zone_exclusion":"Ausschlusszone","zone_entry":"Eintrittslinie","zone_interference":"Störzone","zone_start":"Setze die erste Ecke der Zone in einen Raum.","zone_more":"Setze die nächste Ecke oder speichere die Zone.","zone_entry_hint":"Setze zwei Punkte im Raum und speichere die Eintrittslinie.","zone_save":"Zone speichern","zone_outside":"Zeichne die gesamte Zone in einem Raum, ohne dass sich die Kanten kreuzen.","zone_parts":":count Teile","zone_add_part":"Zonenteil hinzufügen","zone_part":"Zonenteil","zone_edit_part":"Ecken bearbeiten","zone_remove_part":"Teil entfernen","zone_edit_hint":"Ziehe eine Ecke und speichere die Zone.","zone_direction":"Eintrittsrichtung","zone_left":"Links der Linie","zone_right":"Rechts der Linie","zone_sensor":"Sensor für diese Zone","zone_all_sensors":"Alle Sensoren im Raum","zone_note":"Ausschlusszonen blenden erfasste Punkte im Lauftest aus. Zeichne die anderen Zonen für deine Planung ein.","room_summary":"Raumübersicht","room_perimeter":":length m Umfang","room_corners":"Ecken","room_doors":"Türen","room_windows":"Fenster","room_mirrors":"Spiegel","room_zones":"Zonen","sim_excluded":"Durch Zone ausgeschlossen","import_room_name":"Importierte Räume","import_lidar_name":"LiDAR-Grundriss","import_scan_notes":"Import abgeschlossen. Prüfe die angenäherten Raumgrenzen und übersprungene Elemente.","import_ha_notes":"Raumgeometrie und Zonen importiert. Gerätezuordnungen und Kalibrierung bleiben in Home Assistant.","import_project":"Grundriss, HA-Raum oder RoomPlan-JSON importieren","plan_outline":"In diesem Plan","rooms":"Räume","walls_doors":"Wände und Türen","empty_rooms":"Zeichne deinen ersten Raum mit dem Raumwerkzeug.","new":"Neuer Plan","example":"Demozuhause laden","import":"Plandatei öffnen","export":"Plan herunterladen","edit":"Auswählen","room":"Raum","wall":"Wand","door":"Tür","pan":"Verschieben","tools":"Zeichenwerkzeuge","drawing_more":"Wände, Fenster und Zonen","canvas_controls":"Rückgängig, wiederholen und zoomen","draw_keys":"Umschalt zum freien Zeichnen · Esc zum Abbrechen","coverage_limit":"Lauftest zeigt Abschirmung durch Möbel","coverage":"Abdeckung","zoom_in":"Vergrößern","zoom_out":"Verkleinern","fit":"Ansicht einpassen","keyboard":"Bewege den Zeiger mit den Pfeiltasten und zeichne oder platziere mit Enter. V wählt aus, H verschiebt, R zeichnet einen Raum, W eine Wand, D öffnet Sensoren, F passt die Ansicht an und Q wechselt zwischen 2D und 3D.","canvas":"Interaktiver Grundriss","selection":"Eigenschaften","devices":"Sensor hinzufügen","quick_place_room":"In :room platzieren","placements":"Sensoren","catalog_prompt":"Wähle ein Modell und finde einen Platz im Grundriss.","catalog_filter":"Nach Montageart filtern","catalog_all":"Alle Sensoren","catalog_advice":"Hilf mir bei der Wahl","place_model":":model platzieren","place_hover":"Bewege den Zeiger über den Plan, um die Abdeckung zu sehen. Klicke zum Platzieren.","place_touch":"Tippe auf einen Ort, um die Abdeckung zu sehen.","place_marker_only":"Wähle einen Ort auf dem Plan. Für dieses Modell gibt es keine Abdeckungsschätzung.","place_confirm_hint":"Bestätige den Ort oder tippe auf eine andere Stelle.","place_wall_snap":"Der Sensor rastet an einer nahen Wand ein.","place_here":"Hier platzieren","edit_selection":"Bearbeiten","move_item":"Im Plan verschieben","move_item_hint":"Ziehe das gewählte Element an seinen neuen Ort.","wall_mount":"Wand","ceiling_mount":"Decke","remove":"Löschen","rotate":"Um 90° drehen","radar":"Radarmodul","product":"Produkt ansehen","handoff_title":"Mit diesem Raum fortfahren","handoff_action":"Im Produktassistenten öffnen","handoff_dimensions":"Der Assistent unterstützt 2-15 m Breite, 2-12 m Tiefe und 2-4 m Höhe.","handoff_shape":"Berechne die Abdeckung für diese Raumform und Sensoren über die Raumempfehlungen.","handoff_quantity":"Platziere 1 bis 3 CeilSense V2 in diesem Raum, um den Assistenten zu öffnen.","handoff_radars":"Wähle bei jedem V2 dasselbe Radar oder dieselbe Kombination.","handoff_angles":"Stelle die Richtung in 90°-Schritten ein, um den Assistenten zu nutzen.","planning":"Bestellbar ab Januar 2027","presence_line":"Anwesenheit","tracking_line":"Positionsverfolgung","name":"Name","width":"Breite (m)","depth":"Tiefe (m)","height":"Deckenhöhe (m)","angle":"Richtung (°)","end_x":"Ende X (m)","end_y":"Ende Y (m)","no_radar":"Ohne Radar","sensor_mount_label":"Montage","sensor_edit_title":"Sensor bearbeiten","sensor_edit_model":"Sensormodell","sensor_edit_cancel":"Abbrechen","sensor_edit_save":"Speichern","sensor_edit_snaps":"Der Sensor wird an die nächste Wand in diesem Raum verschoben.","sensor_edit_room_required":"Diese Montage benötigt eine Wand im selben Raum.","sensor_edit_invalid":"Diese Konfiguration passt an dieser Stelle nicht.","sensor_edit_saved":"Sensor aktualisiert.","sensor_unknown":"Nicht angegeben","sensor_scd41_standard":"Ja, serienmäßig","sensor_scd41_added":"Ja, hinzugefügt","sensor_scd41_optional":"Nein, optional","sensor_scd41_absent":"Nein","sensor_smoke_label":"Raucherkennung","sensor_smoke_optical":"Optisch, ergänzend","sensor_audio_label":"Audio","sensor_audio_voice":"Lautsprecher und Mikrofon","wall_upgrade":"LD2412 + LD2460","select_hint":"Wähle oder ziehe ein Objekt.","quick_place_hint":"Doppelklicke in einen Raum, um einen Sensor zu platzieren.","room_start":"Ziehe einen Raum auf oder wähle zwei Ecken.","room_end":"Klicke auf die gegenüberliegende Ecke.","room_draw_mode":"Raumform zeichnen","room_rectangle":"Rechteck","room_outline":"Freie Form","room_outline_start":"Setze die erste Ecke im Plan.","room_outline_more":"Setze die nächste Ecke. Klicke auf den ersten Punkt oder auf Raum schließen, wenn die Form fertig ist.","room_outline_invalid":"Zeichne einen geschlossenen Raum mit mindestens drei Ecken und ohne gekreuzte Kanten.","room_outline_limit":"Ein Raum kann bis zu :count Ecken haben.","room_close_outline":"Raum schließen","room_edit_outline":"Ecken bearbeiten","room_save_outline":"Form speichern","room_edit_hint":"Ziehe eine Ecke oder tippe auf eine Wand, um eine hinzuzufügen.","room_edit_keys":"Wähle eine Ecke mit Bild auf oder Bild ab. Verschiebe sie mit den Pfeiltasten.","room_undo_corner":"Letzte Ecke rückgängig","room_remove_corner":"Ecke entfernen","room_handle_keys":"Drücke die Eingabetaste, um diese Ecke mit der Tastatur zu bearbeiten.","room_corner_saved":"Ecke angepasst.","room_corner_status":"Ecke :index von :total","room_corner_position":"Position der gewählten Ecke","wall_start":"Ziehe eine Wand auf oder wähle zwei Endpunkte.","wall_end":"Klicke auf das Ende der Wand.","door_hint":"Klicke auf eine Wand, um eine Tür zu platzieren. Drehe sie in den Eigenschaften.","pan_hint":"Ziehe, um dich im Plan zu bewegen.","sensor_hint":"Klicke zum Platzieren auf den Plan","empty_hint":"Wähle Raum zum Zeichnen oder lade das Demozuhause.","empty_placements":"Füge einen Sensor hinzu, um seine Montageposition zu sehen.","about_coverage":"Geschätzte Abdeckung","coverage_note":"CeilSense schätzt Präsenz im Sitzen oder Positionsverfolgung. WallSense und UltimateSensor zeigen horizontale Abdeckung. Die Umrisse enden an den Raumgrenzen. Innenwände, Möbel und Materialien bleiben unberücksichtigt.","height_note":"Die Deckenhöhe liegt außerhalb des Referenzbereichs dieses Radars.","room_note":"Platziere den Sensor in einem Raum. Richte Wandsensoren in den Raum, um die Abdeckung zu sehen.","no_profile":"Für dieses Modell gibt es keine Abdeckungsschätzung. Du kannst den Montageort trotzdem planen.","local":"Auf diesem Gerät gespeichert","local_error":"Lokales Speichern ist nicht verfügbar. Exportiere den Plan, um ihn zu behalten.","import_error":"Diese Datei ist kein gültiger Sensorplan.","invalid":"Prüfe die eingegebenen Maße oder die Position.","limit":"Dieser Plan enthält bereits 80 Objekte dieser Art.","confirm":"Diesen Plan ersetzen? Exportiere ihn zuerst, wenn du eine Kopie behalten möchtest.","search_sensor":"Sensor suchen","search_empty":"Keine Sensoren gefunden.","close_library":"Sensorliste schließen","ceiling_edit":"Decke bearbeiten","ceiling_section":"Decke","ceiling_type":"Deckenform","ceiling_flat":"Flach","ceiling_slope":"Einfache Schräge","ceiling_gable":"Satteldach","ceiling_eave":"Traufhöhe (m)","ceiling_low":"Niedrige Seite (m)","ceiling_high":"Hohe Seite (m)","ceiling_ridge":"Firsthöhe (m)","ceiling_direction":"Richtung zur hohen Seite","ceiling_axis":"Richtung quer zum Dach","ceiling_x_plus":"Nach rechts →","ceiling_x_minus":"Nach links ←","ceiling_y_plus":"Nach unten ↓","ceiling_y_minus":"Nach oben ↑","ceiling_axis_x":"Von links nach rechts","ceiling_axis_y":"Von oben nach unten","ceiling_mount_height":"Montagehöhe über Boden","ceiling_mount_level":"Sensor zeigt senkrecht nach unten","ceiling_mount_hint":"Wähle diese Option, wenn die Halterung den Sensor senkrecht ausrichtet. Bestätige sie erneut, wenn du den Sensor bewegst oder die Decke änderst.","ceiling_tilted":"Bei Montage entlang der Schräge zeigt der Sensor schräg. Der Planer blendet dann den Erfassungsbereich aus.","ceiling_local_range":"Geschätzter Umriss anhand der Höhe an dieser Stelle.","ceiling_invalid":"Verwende Höhen von 1 bis 12 m. Die hohe Seite muss höher als die niedrige sein.","ceiling_profile":"Deckenquerschnitt","ceiling_pitch":"Neigung","handoff_ceiling":"Der Assistent verwendet eine einheitliche Deckenhöhe. Verwende für den Raum mit Schräge diesen Planer.","place_center":"In der Raummitte platzieren","ceiling_left":"Links","ceiling_right":"Rechts","ceiling_top":"Oben","ceiling_bottom":"Unten","nudge_title":"10 cm verschieben","nudge_left":"10 cm nach links","nudge_right":"10 cm nach rechts","nudge_up":"10 cm nach oben","nudge_down":"10 cm nach unten","cancel_place":"Abbrechen","ceiling_room_note":"Wähle einen CeilSense im Plan, um die Montagehöhe zu sehen. Der Erfassungsbereich setzt eine senkrechte Ausrichtung und passende Höhe voraus.","recovery_note":"Der gespeicherte Plan konnte nicht geöffnet werden. Lade die erhaltene Originaldatei herunter, um eine Kopie zu behalten.","recovery_download":"Original herunterladen","recovery_replace":"Diesen Plan auf dem Gerät speichern","recovery_confirm":"Das gespeicherte Original durch diesen Plan ersetzen?","position_status":"Position","placed_status":"Sensor platziert","v2_link":"CeilSense V2 ansehen","ceiling_ridge_note":"Am First treffen zwei Dachflächen aufeinander. Wähle eine Fläche oder bestätige die senkrechte Ausrichtung des Sensors.","ceiling_range":"Der Referenzbereich für dieses Radar liegt bei :low-:high m.","order_title":"Bestellübersicht","order_short":"Bestellliste","order_intro":"Sieh alle platzierten Sensoren nach Raum. Wähle die Version und die Sensoren, die du bestellen möchtest.","order_close":"Bestellübersicht schließen","order_variant":"Version","order_no_room":"Außerhalb eines Raums","order_empty":"Platziere einen Sensor im Plan, damit er hier erscheint.","order_draft":"Vorbestellung noch nicht geöffnet","order_coming":"Später verfügbar","order_product_only":"Über die Produktseite bestellen","order_not_available":"Derzeit nicht verfügbar","order_backorder":"Nachbestellung","order_stock":"In dieser Menge nicht verfügbar","order_loading":"Verfügbarkeit wird geprüft ...","order_upgrade":"Separates Upgrade-Modul enthalten","order_subtotal":"Zwischensumme · ohne Versand","order_add":"In den Warenkorb","order_add_one":"1 Sensor in den Warenkorb","order_add_count":":count Sensoren in den Warenkorb","order_view_cart":"Warenkorb ansehen","order_partial_note":"Der Warenkorb erhält nur ausgewählte und verfügbare Sensoren.","order_limit":"Pro Bestellung sind maximal 3 CeilSense V2 vorbestellbar. Prüfe Auswahl und Warenkorb.","order_stock_changed":"Diese Mengen sind nicht mehr verfügbar. Prüfe die Auswahl.","order_changed":"Die Preise haben sich geändert. Prüfe die Übersicht und wähle erneut.","order_too_many":"Diese Auswahl ist zu groß für einen Warenkorb. Entferne einige Positionen.","order_quote_error":"Die Preise konnten nicht geladen werden. Versuche es erneut.","order_error":"Die Sensoren konnten nicht hinzugefügt werden. Versuche es erneut.","order_uncertain":"Wir konnten die hinzugefügten Artikel nicht bestätigen. Prüfe zuerst deinen Warenkorb.","order_busy":"Warenkorb wird geprüft ...","order_check_cart":"Warenkorbänderung prüfen","order_retry":"Preise neu laden","order_success_one":"1 Sensor im Warenkorb.","order_success":":count Sensoren im Warenkorb.","order_variants":{"Standard (without dust sensor)":"Ohne Feinstaubsensor","Complete (with dust sensor)":"Mit Feinstaubsensor"},"next_all_test":"Teste die Sensorabdeckung auf allen Etagen.","staircase":"Treppe","sim_child":"Kind","sim_add_child":"Kind hinzufügen","sim_remove_child":"Kind entfernen","sim_stair_go_up":"Nach oben","sim_stair_go_down":"Nach unten","sim_stair_take_group":"Als Gruppe die Treppe nehmen","sim_stair_take":"Treppe nehmen","sim_stair_stop":"Treppenroute stoppen","sim_stair_travel":"Über die Treppe nach :floor","sim_stair_blocked":"Die Treppe ist nicht erreichbar. Prüfe, ob der Weg frei ist.","names":{"main-bedroom":"Elternschlafzimmer","child-bedroom":"Kinderzimmer","bathroom":"Bad","landing":"Flur oben","study":"Arbeitszimmer oben","sample":"Demozuhause","demo":"Raum aus der Radardemo","room":"Raum","untitled":"Mein Grundriss","living":"Wohnzimmer","kitchen":"Küche","office":"Arbeitszimmer","hall":"Flur","bedroom":"Schlafzimmer"},"sample_name_languages":[{"main-bedroom":"Hoofdslaapkamer","child-bedroom":"Kinderkamer","bathroom":"Badkamer","landing":"Overloop","study":"Studeerkamer","sample":"Demowoning","legacy_sample":"Voorbeeldwoning","demo":"Kamer uit de radardemo","room":"Kamer","untitled":"Mijn plattegrond","living":"Woonkamer","kitchen":"Keuken","office":"Werkkamer","hall":"Hal","bedroom":"Slaapkamer"},{"main-bedroom":"Main bedroom","child-bedroom":"Child's bedroom","bathroom":"Bathroom","landing":"Landing","study":"Study","sample":"Demo home","legacy_sample":"Example home","demo":"Radar demo room","room":"Room","untitled":"My floor plan","living":"Living room","kitchen":"Kitchen","office":"Office","hall":"Hall","bedroom":"Bedroom"},{"main-bedroom":"Dormitorio principal","child-bedroom":"Dormitorio infantil","bathroom":"Baño","landing":"Rellano","study":"Estudio","sample":"Casa de demostración","demo":"Habitación de la demo radar","room":"Habitación","untitled":"Mi plano","living":"Salón","kitchen":"Cocina","office":"Despacho","hall":"Pasillo","bedroom":"Dormitorio"},{"main-bedroom":"Chambre principale","child-bedroom":"Chambre d'enfant","bathroom":"Salle de bain","landing":"Palier","study":"Bureau à l'étage","sample":"Maison de démonstration","demo":"Pièce de la démo radar","room":"Pièce","untitled":"Mon plan","living":"Salon","kitchen":"Cuisine","office":"Bureau","hall":"Entrée","bedroom":"Chambre"},{"main-bedroom":"Elternschlafzimmer","child-bedroom":"Kinderzimmer","bathroom":"Bad","landing":"Flur oben","study":"Arbeitszimmer oben","sample":"Demozuhause","demo":"Raum aus der Radardemo","room":"Raum","untitled":"Mein Grundriss","living":"Wohnzimmer","kitchen":"Küche","office":"Arbeitszimmer","hall":"Flur","bedroom":"Schlafzimmer"}],"demo_detection":"Simulierte Erkennung","demo_pause":"Demo pausieren","demo_play":"Demo abspielen","sim_activity_smoke_fire":"Virtuelles Feuer in :room","wall_mode_cutaway":"Wände aufgeschnitten","wall_mode_up":"Wände hoch","wall_mode_down":"Wände niedrig","daylight_studio":"Studiolicht","daylight_morning":"Morgenlicht","daylight_midday":"Mittagslicht","daylight_evening":"Abendlicht","daylight_night":"Nacht","heatmap":"Abdeckungskarte","heatmap_none":"Nicht abgedeckt","heatmap_one":"1 Sensor","heatmap_many":"2 oder mehr","room_floor_finish":"Boden","room_wall_color":"Wandfarbe","finish_automatic":"Automatisch","floor_finish_boards":"Holzboden","floor_finish_tiles":"Fliesen","floor_finish_carpet":"Teppich","floor_finish_concrete":"Beton","floor_finish_plain":"Schlicht","wall_color_white":"Weiß","wall_color_sand":"Sand","wall_color_sage":"Salbeigrün","wall_color_blue":"Hellblau","wall_color_clay":"Terrakotta","wall_color_grey":"Grau","furniture_motion_note":"Ein laufender Ventilator oder ein Haustier kann für ein Radar wie eine Person aussehen. Halte es außer Sicht oder zeichne eine Störzone darüber."}</script>
+</div>
+
+</main><script type="module" src="./editor.js?v=00f50df95fe0"></script></body></html>

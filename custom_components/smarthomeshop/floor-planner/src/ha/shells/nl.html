@@ -1,0 +1,729 @@
+<!doctype html><html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="robots" content="noindex, nofollow"><link rel="stylesheet" href="./editor.css?v=a7450b383c5f"><link rel="stylesheet" href="./editor-ha.css?v=5dfb8a528c0b"></head><body class="fp-design-body"><main id="main-content" tabindex="-1"><div class="fp fp-design-center">
+    <div class="fp-shell" id="floor-planner" data-product-prefix="/products/" data-wallsense-url="https://smarthomeshop.io/wallsense" data-locale="nl" lang="nl">
+        
+
+        <section class="fp-start" id="fp-start" aria-labelledby="fp-start-title" hidden>
+            <div class="fp-start-copy">
+                <h2 id="fp-start-title">Ontwerp je slimme woning</h2>
+                <p>Teken je kamers, kies je montage en ontdek welke sensoren passen. Begin met een eigen kamer of verken de ingerichte demowoning.</p>
+                <div class="fp-start-actions">
+                    <button type="button" class="fp-primary" data-action="start_new">Maak mijn plattegrond <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-5-5 5 5-5 5"/></svg></button>
+                    <button type="button" class="fp-secondary" data-action="start_example">Verken de demowoning</button>
+                </div>
+                <div class="fp-start-import">
+                    <span>Heb je al een plattegrond?</span>
+                    <button type="button" data-action="import_underlay">Open afbeelding</button>
+                    <button type="button" data-action="import">Open opgeslagen plan</button>
+                </div>
+                <p id="fp-start-status" role="status"></p>
+            </div>
+            <div class="fp-start-preview">
+                <svg id="fp-start-preview" viewBox="-.8 -.75 12.1 9.5" aria-hidden="true"></svg>
+                <div class="fp-demo-controls">
+                    <div class="fp-demo-reading">
+                        <strong>Demowoning</strong>
+                        <span id="fp-demo-detection">Gesimuleerde detectie</span>
+                    </div>
+                    <button type="button" id="fp-demo-playback" aria-label="Demo afspelen" hidden>
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path class="fp-demo-play" d="m7 4 9 6-9 6Z"/><path class="fp-demo-pause" d="M7 5v10m6-10v10"/></svg>
+                    </button>
+                </div>
+            </div>
+        </section>
+        <input type="file" id="fp-file" accept=".json,application/json" hidden>
+        <input type="file" id="fp-underlay-file" accept="image/png,image/jpeg,image/webp" hidden>
+
+        <div id="fp-editor" hidden>
+        <div class="fp-project" id="fp-project">
+            <label class="fp-project-name" id="fp-project-name">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm5 0v7h9m-9 0v5"/></svg>
+                <span aria-hidden="true">Projectnaam</span>
+                <input id="fp-name" maxlength="48" aria-label="Projectnaam" value="Demowoning">
+            </label>
+            <details class="fp-project-menu" id="fp-project-menu">
+                <summary class="fp-toolbar-trigger">
+                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h5l2 2h7v9H3z"/></svg>
+                    Project
+                    <svg class="fp-toolbar-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                </summary>
+                <div class="fp-toolbar-panel fp-project-actions">
+                    <div id="fp-mobile-project-options"></div>
+                    <button type="button" data-action="new">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 2.5h6l4 4v11H5zM11 2.5v4h4M10 9v5m-2.5-2.5h5"/></svg>
+                        Nieuw plan
+                    </button>
+                    <button type="button" data-action="example">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m3 9 7-6 7 6m-12-1.5V17h10V7.5M8.5 17v-5h3v5"/></svg>
+                        Demowoning laden
+                    </button>
+                    <div class="fp-project-files">
+                        <h2>Bestanden</h2>
+                        <button type="button" data-action="import" title="Importeer plattegrond, HA-kamer of RoomPlan-JSON">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 3h4l4 4v10H8v-3m4-11v4h4M3 11h9m-2.5-2.5L12 11l-2.5 2.5"/></svg>
+                            Planbestand openen
+                        </button>
+                        <button type="button" data-action="import_underlay">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 13 4-4 3 3 2-2 5 5m-4-7h.1"/></svg>
+                            Plattegrondfoto laden
+                        </button>
+                        <button type="button" data-action="export">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v9m-3-3 3 3 3-3M4 13v4h12v-4"/></svg>
+                            Plan downloaden
+                        </button>
+                    </div>
+                </div>
+            </details>
+            <div class="fp-floors">
+                <details id="fp-floor-menu" class="fp-floor-menu">
+                    <summary class="fp-toolbar-trigger">
+                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m10 3 7.5 4-7.5 4-7.5-4L10 3Zm-7.5 7.5 7.5 4 7.5-4m-15 3.5 7.5 4 7.5-4"/></svg>
+                        <span class="fp-visually-hidden">Verdieping. </span>
+                        <span id="fp-floor-current">Begane grond</span>
+                        <svg class="fp-toolbar-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                    </summary>
+                    <div class="fp-toolbar-panel fp-floor-panel">
+                        <h2>Verdiepingen beheren</h2>
+                        <div id="fp-floor-choices" class="fp-floor-choices"></div>
+                        <template id="fp-floor-choice-template">
+                            <button type="button" class="fp-floor-choice">
+                                <span class="fp-floor-level" aria-hidden="true"></span>
+                                <span class="fp-floor-choice-label"></span>
+                                <svg class="fp-floor-check" viewBox="0 0 20 20" aria-hidden="true"><path d="m4.5 10 3.5 3.5 7.5-7"/></svg>
+                            </button>
+                        </template>
+                        <label class="fp-floor-field" id="fp-floor-rename">
+                            <span>Naam verdieping</span>
+                            <input id="fp-floor-name" maxlength="32">
+                        </label>
+                        <label class="fp-floor-field" id="fp-floor-gap" hidden>
+                            <span>Afstand tussen lagen</span>
+                            <input id="fp-floor-separation" type="range" min=".7" max="1.8" step=".1" value="1">
+                        </label>
+                        <div class="fp-floor-actions">
+                            <button type="button" data-action="add_upper_floor">
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg>
+                                Verdieping erboven toevoegen
+                            </button>
+                            <button type="button" data-action="add_lower_floor">
+                                <svg class="fp-floor-arrow-down" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg>
+                                Kelder eronder toevoegen
+                            </button>
+                            <button type="button" data-action="remove_floor" hidden>
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5.5h12M7.5 5.5V3h5v2.5M5.5 5.5l1 11h7l1-11M8.5 8.5v5m3-5v5"/></svg>
+                                Lege verdieping verwijderen
+                            </button>
+                        </div>
+                    </div>
+                </details>
+            </div>
+            <button type="button" id="fp-open-order" aria-haspopup="dialog" title="Sensoren in de hele woning">
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 7h12l1 10H3L4 7zm3 1V6a3 3 0 0 1 6 0v2"/></svg>
+                <span class="fp-order-label"><span class="fp-order-title">Besteloverzicht</span><span class="fp-order-short">Bestellen</span><small>Hele woning</small></span>
+                <span class="fp-count" id="fp-order-count">0</span>
+            </button>
+        </div>
+        <div class="fp-underlay-controls" id="fp-underlay-controls" hidden>
+            <strong>Onderlegger</strong>
+            <label>Zichtbaarheid <input type="range" id="fp-underlay-opacity" min="10" max="85" step="5"></label>
+            <button type="button" data-action="scale_underlay">Schaal instellen</button>
+            <button type="button" data-action="remove_underlay">Verwijderen</button>
+            <div id="fp-underlay-measure" hidden>
+                <label>Werkelijke afstand (m) <input type="number" id="fp-underlay-distance" min=".1" max="100" step="any" value="5"></label>
+                <button type="button" data-action="confirm_underlay_scale">Schaal toepassen</button>
+            </div>
+        </div>
+        <div class="fp-workspace">
+            <section class="fp-drawing" aria-label="Interactieve plattegrond">
+                <div class="fp-next" id="fp-next">
+                    <div class="fp-next-copy">
+                        <p id="fp-next-message" role="status"></p>
+                        <button type="button" data-action="next_extra_sensor" aria-controls="fp-library" aria-expanded="false" hidden>Nog een sensor plaatsen</button>
+                    </div>
+                    <button type="button" class="fp-primary" data-action="flow_room" aria-controls="fp-room-form" hidden>Kamer toevoegen</button>
+                    <button type="button" class="fp-primary" data-action="flow_sensor" aria-controls="fp-library" aria-expanded="false" hidden>Sensor toevoegen</button>
+                    <button type="button" class="fp-primary" data-action="test_person" aria-pressed="false" aria-controls="fp-simulation" hidden>Start bereiktest</button>
+                    <button type="button" class="fp-primary" data-action="next_order" aria-haspopup="dialog" hidden>Bekijk besteloverzicht</button>
+                </div>
+                <form class="fp-room-form" id="fp-room-form" aria-labelledby="fp-room-form-title" hidden>
+                    <div><h2 id="fp-room-form-title" tabindex="-1">Kamer toevoegen</h2><p>Vul de binnenmaten in of teken de kamer zelf op de kaart.</p></div>
+                    <div class="fp-room-form-inputs">
+                                                    <label>Breedte (m)
+                                <input id="fp-room-form-width" name="width" type="number" inputmode="decimal"
+                                    min="0.5" max="60"
+                                    step="any" value="5" required>
+                            </label>
+                                                    <label>Diepte (m)
+                                <input id="fp-room-form-depth" name="depth" type="number" inputmode="decimal"
+                                    min="0.5" max="60"
+                                    step="any" value="4" required>
+                            </label>
+                                                    <label>Hoogte (m)
+                                <input id="fp-room-form-height" name="height" type="number" inputmode="decimal"
+                                    min="1" max="12"
+                                    step="any" value="2.7" required>
+                            </label>
+                                            </div>
+                    <div class="fp-room-form-actions">
+                        <button type="submit" class="fp-primary">Maak kamer</button>
+                        <button type="button" class="fp-secondary" data-action="flow_draw">Zelf tekenen</button>
+                        <button type="button" data-action="close_room_form">Annuleren</button>
+                    </div>
+                    <p id="fp-room-form-error" role="alert" hidden>Controleer de ingevoerde maat of positie.</p>
+                </form>
+                <div class="fp-viewbar">
+                    <details id="fp-view-menu" class="fp-view-menu">
+                        <summary><span class="fp-control-label">Weergave</span> <strong id="fp-view-mode">2D</strong><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                        <div class="fp-view-options">
+                            <div class="fp-view-switch" role="group" aria-label="Weergave">
+                                <button type="button" data-action="view_2d" aria-pressed="true">2D<span class="fp-view-label"> Plattegrond</span></button>
+                                <button type="button" data-action="view_3d" aria-pressed="false">3D<span class="fp-view-label"> Ruimtelijk</span></button>
+                            </div>
+                            <div class="fp-view-actions">
+                                <button type="button" class="fp-coverage" data-action="coverage" aria-pressed="true">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="m10 10 5-5"/></svg>
+                                    Bereik
+                                </button>
+                                <button type="button" class="fp-turn" data-action="turn_view">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8a6 6 0 1 1 1 7M4 3v5h5"/></svg>
+                                    <span class="fp-turn-label">Draai aanzicht</span>
+                                </button>
+                            </div>
+                            <div class="fp-view-zoom fp-flat-controls" role="group" aria-label="Kaart zoomen en passend maken">
+                                                                    <button type="button" data-action="zoom_out">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/></svg>Uitzoomen
+                                    </button>
+                                                                    <button type="button" data-action="zoom_in">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Inzoomen
+                                    </button>
+                                                                    <button type="button" data-action="fit">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/></svg>Passend maken
+                                    </button>
+                                                            </div>
+                            <p class="fp-zoom-shortcut">Sleep met één vinger om de kaart te bewegen. Knijp met twee vingers om te zoomen.</p>
+                            <p class="fp-wheel-shortcut">Ctrl + scroll om in 2D te zoomen.</p>
+                            <div class="fp-view-zoom fp-space-controls" role="group" aria-label="3D-camera">
+                                                                    <button type="button" data-action="space_zoom_out">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/></svg>Uitzoomen
+                                    </button>
+                                                                    <button type="button" data-action="space_zoom_in">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Inzoomen
+                                    </button>
+                                                                <button type="button" data-action="reset_view">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/></svg>Herstel aanzicht
+                                </button>
+                                <button type="button" data-action="follow_person" aria-pressed="false" hidden>
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4"/><circle cx="10" cy="10" r="2.6"/></svg>Volg testpersoon
+                                </button>
+                            </div>
+                        </div>
+                    </details>
+                    <div class="fp-quick-tools">
+                        <button type="button" data-action="flow_room" title="Kamer toevoegen"><svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1"/><path d="M7 7h1m4 6h1"/></svg><span>Kamer</span></button>
+                        <button type="button" data-action="furniture_library"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15v2m12-2v2M3 11V9a2 2 0 0 1 4 0v3h6V9a2 2 0 0 1 4 0v6H3zm3-4V5h8v2"/></svg><span>Meubel</span></button>
+                        <button type="button" data-action="library" aria-haspopup="true"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="10" r="4"/><circle cx="8" cy="10" r="1"/><path d="M15 4v6m-3-3h6"/></svg><span>Sensor</span></button>
+                    </div>
+                    <button type="button" class="fp-selection-jump" id="fp-selection-jump" data-action="inspect_selection" aria-controls="fp-outline" hidden>
+                        <span id="fp-selection-name">In dit plan</span><span aria-hidden="true">↓</span>
+                    </button>
+                    <details class="fp-toolbox" id="fp-toolbox">
+                        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm7 0v7h7m-7 2v3"/></svg><span class="fp-control-label">Gereedschap</span><span class="fp-control-short">Meer</span><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                        <div class="fp-toolbox-content">
+                            <div class="fp-toolbar" role="group" aria-label="Tekengereedschap">
+                                <div class="fp-tool-group" role="group" aria-labelledby="fp-tools-draw">
+                                    <p id="fp-tools-draw">Plattegrond bewerken</p>
+                                                                            <button type="button" data-tool="edit" aria-pressed="true" title="Selecteer (V)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 3 13 9-6 1-3 6-4-16z"/></svg>
+                                            <span>Selecteer</span>
+                                        </button>
+                                                                            <button type="button" data-tool="pan" aria-pressed="false" title="Schuif (H)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2v16M2 10h16M8 4l2-2 2 2M8 16l2 2 2-2M4 8l-2 2 2 2m12-4 2 2-2 2"/></svg>
+                                            <span>Schuif</span>
+                                        </button>
+                                                                            <button type="button" data-tool="room" aria-pressed="false" title="Kamer (R)">
+                                            <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1"/><path d="M7 7h1m4 6h1"/></svg>
+                                            <span>Kamer tekenen</span>
+                                        </button>
+                                                                        <button type="button" data-action="edit_add_room">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12m-6-6v12"/></svg>Kamer op maat
+                                    </button>
+                                    <details class="fp-drawing-menu" id="fp-drawing-menu">
+                                        <summary><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 4h14v12H3zm7 0v7h7m-7 2v3"/></svg><span>Wanden, ramen en zones</span></summary>
+                                        <div class="fp-drawing-options">
+                                                                                            <button type="button" data-tool="wall" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15 16 5M4 13v4m12-14v4"/></svg>Wand
+                                                </button>
+                                                                                            <button type="button" data-tool="door" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 17h12M6 17V4l8 2v11m-3-5h.1"/></svg>Deur
+                                                </button>
+                                                                                            <button type="button" data-tool="window" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="5" width="13" height="10" rx="1"/><path d="M10 5v10M4 10h12"/></svg>Raam
+                                                </button>
+                                                                                            <button type="button" data-tool="mirror" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="3" width="10" height="14" rx="2"/><path d="m8 10 3-3m-2 6 3-3"/></svg>Spiegel
+                                                </button>
+                                                                                            <button type="button" data-tool="zone" aria-pressed="false">
+                                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4 7 7-3 5 4-2 7-8 1z"/><path d="M4 7h.1m7-3h.1m5 4h.1m-2 7h.1m-8 1h.1"/></svg>Zone
+                                                </button>
+                                                                                        <button type="button" data-action="measures" aria-pressed="false">
+                                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7h14v6H3zm4 0v3m3-3v2m3-2v3"/></svg>Wandmaten
+                                            </button>
+                                        </div>
+                                    </details>
+                                </div>
+                                <div class="fp-tool-group" role="group" aria-labelledby="fp-tools-place">
+                                    <p id="fp-tools-place">Sensoren en meubels</p>
+                                    <button type="button" data-action="library" aria-controls="fp-library" aria-expanded="false">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="10" r="4"/><circle cx="8" cy="10" r="1"/><path d="M15 4v6m-3-3h6"/></svg>Sensor toevoegen
+                                    </button>
+                                    <button type="button" data-action="furniture_library">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 15v2m12-2v2M3 11V9a2 2 0 0 1 4 0v3h6V9a2 2 0 0 1 4 0v6H3zm3-4V5h8v2"/></svg>Meubel toevoegen
+                                    </button>
+                                    <button type="button" data-action="open_advisor" aria-haspopup="dialog">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="3"/><path d="m10 10 5-5"/></svg>Kameradvies
+                                    </button>
+                                    <button type="button" data-action="preview_walk" hidden>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4.25" r="2"/><path d="M4 10l6-2 6 2m-6-2v4m0 0-3 5m3-5 3 5"/></svg>Looproute proberen
+                                    </button>
+                                    <button type="button" data-action="repeat_test" hidden>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4.25" r="2"/><path d="M4 10l6-2 6 2m-6-2v4m0 0-3 5m3-5 3 5"/></svg>Start bereiktest
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="fp-history" role="group" aria-label="Wijzigingen herstellen">
+                                                                    <button type="button" data-action="undo" disabled>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5 3 9l4 4M3 9h9a4 4 0 0 1 0 8"/></svg>Ongedaan maken
+                                    </button>
+                                                                    <button type="button" data-action="redo" disabled>
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m13 5 4 4-4 4m4-4H8a4 4 0 0 0 0 8"/></svg>Opnieuw
+                                    </button>
+                                                            </div>
+                            <details class="fp-shortcuts">
+                                <summary>Sneltoetsen</summary>
+                                <p>Beweeg de aanwijzer met de pijltjes en teken of plaats met Enter. V selecteert, H verschuift, R tekent een kamer, W tekent een wand, D opent sensoren, F maakt passend en Q wisselt tussen 2D en 3D.</p>
+                            </details>
+                        </div>
+                    </details>
+                </div>
+                <div class="fp-placement-bar" id="fp-placement-bar" hidden>
+                    <div class="fp-placement-copy">
+                        <strong id="fp-place-title"></strong>
+                        <span id="fp-place-help" role="status"></span>
+                        <label id="fp-place-installation-field" hidden>Hoe wil je de sensor plaatsen?<select id="fp-place-installation"></select></label>
+                    </div>
+                    <div class="fp-opening-dimensions" id="fp-opening-dimensions" hidden>
+                        <label>Breedte (m) <input type="number" id="fp-opening-width" inputmode="decimal" step="any" required></label>
+                        <label id="fp-opening-height-field">Hoogte (m) <input type="number" id="fp-opening-height" inputmode="decimal" min=".1" max="6" step="any" required></label>
+                    </div>
+                    <div class="fp-place-actions">
+                        <button type="button" class="fp-placement-primary" id="fp-place-confirm" data-action="place_preview" hidden>Plaats hier</button>
+                        <button type="button" id="fp-place-center" data-action="place_center" hidden>Plaats midden in de kamer</button>
+                        <button type="button" id="fp-place-cancel" data-action="cancel_place">Annuleren</button>
+                    </div>
+                </div>
+                <div id="fp-sim-guide" class="fp-sim-guide" role="group" aria-label="Bereiktest" hidden>
+                    <div id="fp-sim-people" class="fp-sim-people">
+                        <div id="fp-sim-picker" class="fp-sim-picker" role="group" aria-label="Kies een testpersoon">
+                                                            <button type="button" data-walker="man" aria-pressed="true">
+                                    <i aria-hidden="true"></i>Man
+                                </button>
+                                                            <button type="button" data-walker="woman" aria-pressed="false">
+                                    <i aria-hidden="true"></i>Vrouw
+                                </button>
+                                                            <button type="button" data-walker="child" aria-pressed="false">
+                                    <i aria-hidden="true"></i>Kind
+                                </button>
+                                                    </div>
+                        <details id="fp-sim-cast" class="fp-sim-menu">
+                            <summary>
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="6" r="2.5"/><path d="M3 16v-1a5 5 0 0 1 10 0v1M14.5 6.5v5m-2.5-2.5h5"/></svg>Personen
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>
+                            </summary>
+                            <div class="fp-sim-options">
+                                                                    <button type="button" data-action="second_person" data-toggle-walker="woman" aria-controls="fp-sim-picker">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/><path class="fp-sim-add-line" d="M10 4v12"/></svg>
+                                        <span>Vrouw toevoegen</span>
+                                    </button>
+                                                                    <button type="button" data-action="child_person" data-toggle-walker="child" aria-controls="fp-sim-picker">
+                                        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h12"/><path class="fp-sim-add-line" d="M10 4v12"/></svg>
+                                        <span>Kind toevoegen</span>
+                                    </button>
+                                                            </div>
+                        </details>
+                    </div>
+                    <div class="fp-sim-overview">
+                        <div id="fp-sim-at">
+                            <strong id="fp-sim-room-label"></strong>
+                            <span id="fp-sim-floor-label" hidden></span>
+                        </div>
+                        <button type="button" class="fp-sim-reading" data-action="show_readings" aria-controls="fp-simulation">
+                            <span><strong id="fp-sim-count"></strong><span id="fp-sim-detect-label">sensoren zien je</span></span>
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m8 5 5 5-5 5"/></svg>
+                        </button>
+                    </div>
+                    <div id="fp-stair-prompt" class="fp-stair-prompt" hidden>
+                        <svg class="fp-stair-symbol" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h4v-4h4V8h4V4h2"/></svg>
+                        <p id="fp-stair-question" role="status"></p>
+                        <button type="button" data-action="confirm_stair" aria-describedby="fp-stair-question" aria-keyshortcuts="Enter">
+                            <span id="fp-stair-confirm-label"></span><kbd aria-hidden="true">Enter</kbd>
+                        </button>
+                        <button type="button" data-action="dismiss_stair" aria-label="Negeer trapmelding">
+                            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg>
+                        </button>
+                    </div>
+                    <div class="fp-sim-feedback">
+                        <div><p id="fp-sim-auto-status" role="status"></p><p id="fp-sim-activity" role="status"></p></div>
+                        <button type="button" data-action="stop_stairs" hidden>Stop traproute</button>
+                    </div>
+                    <div class="fp-sim-footer">
+                        <details id="fp-sim-tools" class="fp-sim-menu" hidden>
+                            <summary>Testopties <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary>
+                            <div class="fp-sim-options">
+                                <button type="button" class="fp-sim-auto" data-action="auto_walk" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4.5v11l8-5.5z"/><path d="M7 5v10m6-10v10"/></svg><span>Automatisch lopen</span>
+                                </button>
+                                <button type="button" data-action="take_stairs" hidden>
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 16h4v-4h4V8h4V4h2"/></svg><span>Neem de trap</span>
+                                </button>
+                                <button type="button" data-action="test_smoke" data-activity-test="smoke" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M11 2.5c.6 3.2 4.6 4.6 4.6 8.7a5.6 5.6 0 0 1-11.2 0c0-2.2 1.1-3.6 2.2-4.6.1 1.5.8 2.3 1.6 2.7.4-2.8 2.3-4 2.8-6.8Z"/></svg>
+                                    <span>Rooktest</span>
+                                </button>
+                                <button type="button" data-action="test_fall" data-activity-test="fall" aria-pressed="false">
+                                    <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="13.5" cy="5.5" r="1.8"/><path d="m5 13 4-2.7 3.6 1.6L15 9M9 10.3l1.2-3.4-3.3-2.2M3 16h14"/></svg>
+                                    <span>Valtest</span>
+                                </button>
+                            </div>
+                        </details>
+                        <p class="fp-sim-keys" id="fp-sim-instructions">Pijlen of WASD</p>
+                        <div id="fp-sim-exit"></div>
+                    </div>
+                </div>
+                <div class="fp-stage" id="fp-walk-stage" tabindex="-1">
+                    <div class="fp-undo-notice" id="fp-undo-notice" hidden>
+                        <span id="fp-undo-message" role="status"></span>
+                        <button type="button" data-action="undo_recent">Ongedaan maken</button>
+                    </div>
+                    <div class="fp-board" id="fp-board" role="group" tabindex="0" aria-label="Interactieve plattegrond" aria-describedby="fp-keys">
+                        <svg id="fp-plan" viewBox="-1 -1 13 10">
+                            <defs>
+                                <pattern id="fp-small-grid" width=".25" height=".25" patternUnits="userSpaceOnUse">
+                                    <path d="M.25 0H0V.25" fill="none" stroke="#2b3037" stroke-width=".55" vector-effect="non-scaling-stroke"/>
+                                </pattern>
+                                <pattern id="fp-grid" width="1" height="1" patternUnits="userSpaceOnUse">
+                                    <rect width="1" height="1" fill="url(#fp-small-grid)"/>
+                                    <path d="M1 0H0V1" fill="none" stroke="#3a4149" stroke-width=".75" vector-effect="non-scaling-stroke"/>
+                                </pattern>
+                            </defs>
+                            <rect id="fp-grid-plane" fill="url(#fp-grid)"/>
+                            <image id="fp-underlay" pointer-events="none" hidden/>
+                            <g id="fp-drawing"></g>
+                            <g id="fp-activity-flat-layer" pointer-events="none"></g>
+                            <g id="fp-person-flat" pointer-events="none"></g>
+                            <g id="fp-ghost" pointer-events="none"></g>
+                            <g id="fp-room-midpoints" pointer-events="none"></g>
+                            <g id="fp-room-handles" pointer-events="none"></g>
+                            <path id="fp-cursor" class="fp-cursor" d="M-.22 0h.44M0-.22v.44" visibility="hidden" pointer-events="none"/>
+                        </svg>
+                    </div>
+                    <svg id="fp-space" hidden role="group" aria-label="Interactieve plattegrond"></svg>
+                    <div id="fp-sensor-tip" class="fp-sensor-tip" role="tooltip" hidden></div>
+                    <p class="fp-space-furniture" id="fp-space-furniture" hidden>Inrichting</p>
+                    <div id="fp-space-placement" class="fp-space-placement" hidden><span id="fp-space-placement-text"></span>
+                        <button type="button" id="fp-space-place-center" data-action="place_center">Plaats midden in de kamer</button>
+                        <button type="button" data-action="cancel_place">Annuleren</button>
+                    </div>
+                    <div class="fp-space-guide" id="fp-space-guide" hidden>
+                        <span>Sleep om rond te kijken</span>
+                    </div>
+                    <p id="fp-space-empty" class="fp-space-empty" hidden>Teken een kamer in 2D om je plan in 3D te bekijken.</p>
+                    <span class="fp-visually-hidden" id="fp-keys">Beweeg de aanwijzer met de pijltjes en teken of plaats met Enter. V selecteert, H verschuift, R tekent een kamer, W tekent een wand, D opent sensoren, F maakt passend en Q wisselt tussen 2D en 3D.</span>
+                    <span class="fp-visually-hidden" id="fp-outline-keys">Gebruik Page Up of Page Down om een hoek te kiezen. Verplaats die met de pijltjestoetsen.</span>
+                    <span class="fp-visually-hidden" id="fp-room-handle-keys">Druk op Enter om deze hoek met het toetsenbord te bewerken.</span>
+                    <p class="fp-room-handle-feedback" id="fp-room-handle-feedback" role="status"></p>
+                    <div class="fp-stage-top">
+                        <div class="fp-stage-instructions">
+                            <p class="fp-hint" id="fp-hint" role="status"></p>
+                            <p class="fp-draw-keys" id="fp-draw-keys" hidden>Shift voor vrij tekenen · Esc om te stoppen</p>
+                        </div>
+                    </div>
+                    <span class="fp-scale" id="fp-scale" aria-hidden="true"><span></span>1 m</span>
+                </div>
+                <div class="fp-outline-tools" id="fp-outline-tools" hidden>
+                    <div class="fp-place-actions fp-room-modes" id="fp-room-modes" role="group" aria-label="Kamervorm tekenen" hidden>
+                        <button type="button" data-action="room_rectangle" data-room-mode="room" aria-pressed="true">Rechthoek</button>
+                        <button type="button" data-action="room_outline" data-room-mode="outline_room" aria-pressed="false">Vrije vorm</button>
+                    </div>
+                    <label id="fp-zone-options" hidden>Soort zone
+                        <select id="fp-zone-type">
+                                                            <option value="detection">Detectiezone</option>
+                                                            <option value="exclusion">Uitsluitingszone</option>
+                                                            <option value="entry">Ingangslijn</option>
+                                                            <option value="interference">Interferentiezone</option>
+                                                    </select>
+                    </label>
+                    <div class="fp-place-actions" id="fp-room-outline-actions" hidden>
+                        <button type="button" data-action="save_outline">Kamer sluiten</button>
+                        <button type="button" data-action="undo_corner">Laatste hoek wissen</button>
+                        <button type="button" data-action="remove_corner" hidden>Hoek verwijderen</button>
+                        <button type="button" data-action="cancel_outline">Annuleren</button>
+                    </div>
+                    <div id="fp-room-corner-position" class="fp-room-corner-position" role="group" aria-label="Positie van de gekozen hoek" hidden>
+                                                    <label>X (m)<input type="number" inputmode="decimal" min="-100" max="100" step="any" data-corner-axis="x" required></label>
+                                                    <label>Y (m)<input type="number" inputmode="decimal" min="-100" max="100" step="any" data-corner-axis="y" required></label>
+                                            </div>
+                </div>
+                <div class="fp-sim-dock" id="fp-sim-dock" hidden>
+                    <div class="fp-sim-poses" role="group" aria-label="Houding van de testpersoon">
+                                                    <button type="button" data-person-pose="standing" aria-pressed="true">Staan</button>
+                                                    <button type="button" data-person-pose="sitting" aria-pressed="false">Zitten</button>
+                                                    <button type="button" data-person-pose="lying" aria-pressed="false">Liggen</button>
+                                            </div>
+                    <div class="fp-sim-arrows" role="group" aria-label="Verplaats de testpersoon">
+                                                    <button type="button" data-person-move="ArrowLeft" aria-label="Loop naar links"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowUp" aria-label="Loop omhoog"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowDown" aria-label="Loop omlaag"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                                    <button type="button" data-person-move="ArrowRight" aria-label="Loop naar rechts"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4m-4 4 4-4 4 4"/></svg></button>
+                                            </div>
+                </div>
+                <div class="fp-legend" id="fp-legend">
+                    <span data-walk-legend hidden><i class="fp-route-key" aria-hidden="true"></i>Route met bereik</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-gap" aria-hidden="true"></i>Route zonder bereik</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-risk" aria-hidden="true"></i>Mogelijke afscherming</span>
+                    <span data-walk-legend hidden><i class="fp-route-key fp-route-link" aria-hidden="true"></i>Sensor ziet testpersoon</span>
+                    <span><i class="fp-dot ceiling"></i> CeilSense</span>
+                    <span><i class="fp-dot wall"></i> WallSense / UltimateSensor</span>
+                    <span data-legend="2d"><i class="fp-legend-range"></i> Indicatief bereik</span>
+                    <span class="fp-legend-limit" data-legend="2d">Looptest toont afscherming door meubels</span>
+                    <span class="fp-legend-limit" data-legend="3d" hidden>Opengewerkte wanden, gestippelde plafonds en sensoren op hun montagehoogte.</span>
+                </div>
+            </section>
+            <aside class="fp-sidebar" id="fp-sidebar">
+                <button type="button" class="fp-close-panel" data-action="close_panel" aria-label="Sluit dit paneel">×</button>
+                <section class="fp-library-panel" id="fp-library" aria-labelledby="fp-library-title" hidden>
+                    <div class="fp-library-header">
+                        <div><h2 id="fp-library-title">Sensor toevoegen</h2><p id="fp-library-context">Kies een model en geef het een plek op de kaart.</p></div>
+                        <button type="button" data-action="close_library" aria-label="Sensorlijst sluiten">×</button>
+                    </div>
+                    <label class="fp-visually-hidden" for="fp-search">Zoek een sensor</label>
+                    <input type="search" id="fp-search" placeholder="Zoek een sensor" autocomplete="off">
+                    <div class="fp-library-filters" role="group" aria-label="Montage kiezen">
+                                                    <button type="button" data-catalog-mount="all" aria-pressed="true">Alle sensoren</button>
+                                                    <button type="button" data-catalog-mount="ceiling" aria-pressed="false">Plafond</button>
+                                                    <button type="button" data-catalog-mount="recessed" aria-pressed="false">Muurinbouw</button>
+                                                    <button type="button" data-catalog-mount="freestanding" aria-pressed="false">Vrijstaand</button>
+                                                    <button type="button" data-catalog-mount="wall" aria-pressed="false">Muurbeugel</button>
+                                            </div>
+                    <button type="button" class="fp-catalog-advice" data-action="catalog_advice" aria-haspopup="dialog">
+                        Help me kiezen <span aria-hidden="true">→</span>
+                    </button>
+                    <p id="fp-search-empty" role="status" class="fp-note" hidden>Geen sensoren gevonden.</p>
+                    <div id="fp-catalog"></div>
+                </section>
+                <div class="fp-sidebar-nav" role="tablist" aria-label="In dit plan">
+                    <button type="button" role="tab" id="fp-tab-outline" aria-controls="fp-outline" aria-selected="true">In dit plan</button>
+                    <button type="button" role="tab" id="fp-tab-properties" aria-controls="fp-properties" aria-selected="false" tabindex="-1">Eigenschappen</button>
+                </div>
+                <div class="fp-sidebar-content" id="fp-outline" role="tabpanel" aria-labelledby="fp-tab-outline" tabindex="0">
+                    <div class="fp-panel fp-sensors">
+                        <div class="fp-panel-heading"><h2>Sensoren</h2><span id="fp-count" class="fp-count">0</span></div>
+                        <div id="fp-placements"></div>
+                    </div>
+                    <div class="fp-panel fp-objects">
+                        <div class="fp-panel-heading"><h2>Kamers</h2><span id="fp-object-count" class="fp-count">0</span></div>
+                        <button type="button" id="fp-add-room" data-action="edit_add_room" hidden>Kamer toevoegen</button>
+                        <div id="fp-objects"></div>
+                        <details id="fp-structure" hidden>
+                            <summary>Wanden en deuren <span id="fp-structure-count" class="fp-count">0</span></summary>
+                            <div id="fp-structure-items"></div>
+                        </details>
+                    </div>
+                    <div class="fp-panel fp-furniture-panel">
+                        <div class="fp-panel-heading"><h2>Meubels</h2><span id="fp-furniture-count" class="fp-count">0</span></div>
+                        <button type="button" class="fp-furniture-add-button" data-action="furniture_library">Meubel toevoegen</button>
+                        <div id="fp-furniture-items"></div>
+                    </div>
+                </div>
+                <div class="fp-sidebar-content" id="fp-properties" role="tabpanel" aria-labelledby="fp-tab-properties" tabindex="0" hidden>
+                    <div class="fp-panel fp-inspector">
+                        <h2 id="fp-inspector-title" tabindex="-1">Eigenschappen</h2>
+                        <div id="fp-inspector"></div>
+                        <section class="fp-handoff" id="fp-handoff" hidden></section>
+                    </div>
+                </div>
+                <section class="fp-sidebar-content fp-simulation" id="fp-simulation" aria-labelledby="fp-simulation-title" hidden>
+                    <div class="fp-panel">
+                        <div class="fp-sim-panel-head">
+                            <h2 id="fp-simulation-title" tabindex="-1">Gesimuleerde detectie</h2>
+                            <button type="button" data-action="show_walk_map">Naar kaart</button>
+                        </div>
+                        <p id="fp-sim-summary" role="status"></p>
+                        <p id="fp-sim-dual-note" class="fp-note" hidden>De planner berekent het radarbereik per persoon. Of een echte sensor meerdere personen tegelijk kan onderscheiden, hangt af van de radarmodule.</p>
+                        <label class="fp-obstruction-toggle"><input type="checkbox" id="fp-include-furniture" checked> Meubels meenemen</label>
+                        <p class="fp-note fp-obstruction-note">Wisselen wist de geteste routes.</p>
+                        <div class="fp-sim-setup">
+                            <label for="fp-sim-room">Start een nieuwe route in</label>
+                            <select id="fp-sim-room"></select>
+                        </div>
+                        <section id="fp-route-summary" class="fp-route-summary" aria-labelledby="fp-route-title" hidden>
+                            <div class="fp-route-heading">
+                                <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="15" r="2"/><circle cx="15" cy="5" r="2"/><path d="M7 15h7a2 2 0 0 0 0-4H6a2 2 0 0 1 0-4h5"/></svg>
+                                <h3 id="fp-route-title" tabindex="-1">Geteste route</h3>
+                                <button type="button" data-action="clear_walk" disabled>Wis route</button>
+                            </div>
+                            <div class="fp-route-meter" aria-hidden="true" hidden><span id="fp-route-fill"></span></div>
+                            <p id="fp-route-distance" class="fp-note">Loop om het bereik langs je route te zien.</p>
+                        </section>
+                        <p id="fp-sim-position" class="fp-sim-position" hidden></p>
+                        <ul id="fp-sim-sensors"></ul>
+                        <p class="fp-note">De test combineert geschat bereik met directe paden door meubels. Wanden begrenzen de looproute. Reflecties en signaaldoorgang door wanden vallen buiten het model.</p>
+                        <details class="fp-sim-explanation">
+                            <summary>Hoe rekent de planner met meubels?</summary>
+                            <p class="fp-note">Drie voorbeeldhoogtes per houding helpen onderscheid maken tussen gedeeltelijke en volledige afscherming van het directe pad. Materiaalkeuzes zijn indicatief.</p>
+                            <p class="fp-note">Montagehoogte van een wandsensor is instelbaar in Eigenschappen. Standaard gebruikt de test 1,4 m.</p>
+                            <p class="fp-note"><a href="https://www.nist.gov/publications/penetration-loss-60-ghz-indoor-indoor-and-outdoor-indoor-mobile-scenarios" target="_blank" rel="noopener">NIST · 60 GHz</a>
+                                · <a href="https://www.ti.com/document-viewer/lit/html/swra758" target="_blank" rel="noopener">Texas Instruments · mmWave</a></p>
+                        </details>
+                        <details class="fp-sim-explanation">
+                            <summary>Hoe werkt hoogte in deze demo?</summary>
+                            <p class="fp-note">LD6002B geeft X, Y en Z door. De hoogtes voor staan, zitten en liggen zijn voorbeeldwaarden. De valmelding is gesimuleerd. <a href="https://www.hlktech.com/Goods-338.html" target="_blank" rel="noopener">Specificaties van Hi-Link</a></p>
+                        </details>
+                    </div>
+                </section>
+                <details class="fp-radar-details" id="fp-radar-panel" hidden>
+                    <summary>Radarbereik</summary>
+                    <div class="fp-radar-panel">
+                    <div class="fp-radar-choice">
+                        <label for="fp-radar-focus">Radarbereik</label>
+                        <select id="fp-radar-focus"></select>
+                    </div>
+                    <div class="fp-radar-radii" id="fp-radar-radii" hidden></div>
+                    <p id="fp-beam-note">Indicatief bereik. De kegel maakt de vloercontour ruimtelijk zichtbaar.</p>
+                </div>
+                </details>
+            </aside>
+        </div>
+        </div>
+        <dialog id="fp-sensor-edit" class="fp-furniture-dialog fp-sensor-edit" aria-labelledby="fp-sensor-edit-title" aria-describedby="fp-sensor-edit-context">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-sensor-edit-title">Sensor aanpassen</h2><p id="fp-sensor-edit-context"></p></div>
+                <button type="button" data-action="close_sensor_edit" aria-label="Sluit dit paneel">×</button>
+            </div>
+            <form id="fp-sensor-edit-form">
+                <div class="fp-sensor-edit-body"><label id="fp-sensor-edit-ha"><span id="fp-ha-device-label"></span><select name="haDevice"></select></label>
+                    <div class="fp-sensor-edit-model">
+                        <img id="fp-sensor-edit-image" alt="" width="52" height="52" hidden>
+                        <label>Sensormodel<select name="model" autofocus></select></label>
+                    </div>
+                    <div class="fp-sensor-edit-fields">
+                        <label>mmWave<select name="radar"></select></label>
+                        <label>Montage<select name="installation"></select></label>
+                    </div>
+                    <label id="fp-sensor-edit-height" hidden>Montagehoogte boven vloer (m)
+                        <input name="mountHeight" type="number" min=".15" max="6" step="any" inputmode="decimal" required>
+                    </label>
+                    <label id="fp-sensor-edit-scd41" class="fp-sensor-edit-check" hidden>
+                        <input name="climate" type="checkbox"> <span>SCD41 voor CO₂, temperatuur en luchtvochtigheid</span>
+                    </label>
+                    <label id="fp-sensor-edit-level" class="fp-sensor-edit-check" hidden>
+                        <input name="level" type="checkbox"> <span>Sensor wijst verticaal omlaag</span>
+                    </label>
+                    <p class="fp-note" id="fp-sensor-edit-features" hidden></p>
+                    <p class="fp-note" id="fp-sensor-edit-placement" role="status" hidden></p>
+                </div>
+                <div class="fp-sensor-edit-footer">
+                    <button type="button" data-action="close_sensor_edit">Annuleren</button>
+                    <button type="submit" class="fp-primary">Opslaan</button>
+                </div>
+            </form>
+        </dialog>
+        <dialog id="fp-furniture-library" class="fp-furniture-dialog" aria-labelledby="fp-furniture-title">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-furniture-title">Meubelbibliotheek</h2><p>Kies een meubel, plaats het op de kaart en pas de maten en het materiaal aan.</p></div>
+                <button type="button" data-action="close_furniture" aria-label="Meubelbibliotheek sluiten">×</button>
+            </div>
+            <div class="fp-furniture-filters">
+                <label>Zoek een meubel<input type="search" id="fp-furniture-search" autocomplete="off"></label>
+                <label>Categorie<select id="fp-furniture-category">
+                    <option value="">Alle meubels</option>
+                                            <option value="living">Wonen</option>
+                                            <option value="work">Keuken en werkplek</option>
+                                            <option value="sleep">Slapen en opbergen</option>
+                                            <option value="motion">Beweging en warmte</option>
+                                            <option value="divide">Afscheiding en vrij object</option>
+                                    </select></label>
+            </div>
+            <div class="fp-furniture-catalog" id="fp-furniture-catalog"></div>
+        </dialog>
+        <dialog id="fp-advisor" class="fp-furniture-dialog fp-advisor" aria-labelledby="fp-advisor-title">
+            <div class="fp-furniture-heading">
+                <div><h2 id="fp-advisor-title">Kameradvies</h2><p>Kies per kamer wat je wilt meten en hoe je wilt monteren.</p></div>
+                <button type="button" id="fp-advisor-close" aria-label="Kameradvies sluiten">×</button>
+            </div>
+            <div class="fp-advisor-body">
+                <section class="fp-advisor-overview">
+                    <h3>Advies per kamer</h3><div id="fp-advisor-rooms"></div>
+                </section>
+                <section class="fp-advisor-room">
+                    <h3 id="fp-advisor-room-title"></h3>
+                    <div class="fp-advisor-controls" id="fp-advisor-controls">
+                        <label>Wat wil je meten?<select id="fp-advisor-goal">
+                                                            <option value="presence">Aanwezigheid</option>
+                                                            <option value="zones">Positie en zones</option>
+                                                            <option value="height">Positie en hoogte (Z)</option>
+                                                            <option value="climate">CO₂ en binnenklimaat</option>
+                                                    </select></label>
+                        <label>Waar kun je monteren?<select id="fp-advisor-mount">
+                                                            <option value="either">Help mij kiezen</option>
+                                                            <option value="ceiling">Plafondinbouw</option>
+                                                            <option value="recessed">Muurinbouw</option>
+                                                            <option value="wall">Muurbeugel</option>
+                                                            <option value="freestanding">Vrijstaand</option>
+                                                    </select></label>
+                        <label id="fp-advisor-wall-field">Montagehoogte boven vloer (m)<input type="number" id="fp-advisor-wall" value="1.4" min=".15" max="6" step="any" required></label>
+                        <label id="fp-advisor-air-field" class="fp-advisor-check"><input type="checkbox" id="fp-advisor-air"> Ook CO₂ meten</label>
+                        <label id="fp-advisor-level-field" class="fp-advisor-check" hidden><input type="checkbox" id="fp-advisor-level"> Ik kan waterpas monteren aan het schuine plafond</label>
+                        <label class="fp-advisor-existing" id="fp-advisor-existing" hidden>
+                            <span id="fp-advisor-existing-note"></span>
+                            <select id="fp-advisor-strategy" aria-label="Wat wil je met de bestaande sensoren doen?">
+                                <option value="add">Aanvullen naast bestaande sensoren</option>
+                                <option value="replace">Bestaande sensoren vervangen</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div id="fp-advisor-results" aria-live="polite"></div>
+                </section>
+            </div>
+            <div class="fp-advisor-footer">
+                <details class="fp-advisor-method">
+                    <summary>Hoe we bereik schatten</summary>
+                    <p class="fp-note">De schatting gebruikt zittende voorbeeldhoogtes en vrije radarpaden. Tracking telt mee voor aanwezigheid als er geen apart aanwezigheidsprofiel is. Een extra sensor voegt minimaal vijf procentpunt toe of haalt het modeldoel van 90%.</p>
+                </details>
+                <p id="fp-advisor-status" role="status"></p>
+                <div class="fp-advisor-actions">
+                    <button type="button" id="fp-advisor-place" hidden>Plaats voorgestelde sensoren</button>
+                    <button type="button" id="fp-advisor-place-all" disabled>Plaats advies voor alle kamers</button>
+                </div>
+            </div>
+        </dialog>
+        <dialog id="fp-order" class="fp-order" aria-labelledby="fp-order-title">
+            <div class="fp-order-heading">
+                <div><h2 id="fp-order-title">Besteloverzicht</h2><p>Alle geplaatste sensoren per kamer. Kies de uitvoering en vink aan wat je wilt bestellen.</p></div>
+                <button type="button" id="fp-order-close" aria-label="Besteloverzicht sluiten">×</button>
+            </div>
+            <div class="fp-order-body" id="fp-order-body"></div>
+        </dialog>
+        <section class="fp-recovery" id="fp-recovery" hidden>
+            <p>Dit opgeslagen plan kon niet worden geopend. Het originele bestand is bewaard. Download het om een kopie te houden.</p>
+            <button type="button" data-action="recover_file">Download origineel</button>
+            <button type="button" data-action="replace_saved">Bewaar dit plan op dit apparaat</button>
+        </section>
+        <p class="fp-visually-hidden" id="fp-event" role="status"></p>
+        <div class="fp-footer">
+            <details><summary>Indicatief bereik</summary><p>CeilSense toont een schatting voor zittende aanwezigheid of tracking. WallSense en UltimateSensor tonen het horizontale bereik. De contour stopt aan de rand van de getekende kamer. Binnenwanden, meubels en materiaal tellen niet mee.</p></details>
+            <span id="fp-save" role="status"></span>
+        </div>
+    </div>
+    <script type="application/json" id="fp-copy">{"title":"Sensorplanner","breadcrumbs":"Kruimelpad","back_to_shop":"Terug naar de webshop","design_center":"Design Center","room_short":"Kamer","sensor_short":"Sensor","more_tools":"Meer","close_panel":"Sluit dit paneel","wall_recessed":"Muurinbouw","wall_bracket":"Muurbeugel","freestanding":"Vrijstaand","installation":"Hoe wil je de sensor plaatsen?","installations":{"ceiling-recessed":"Plafondinbouw","ceiling-surface":"Plafondopbouw","wall-recessed":"Muurinbouw","wall-bracket":"Muurbeugel","freestanding":"Vrijstaand"},"wallsense_note":"WallSense is in ontwikkeling. Je kunt hem alvast inplannen. Bestellen kan later.","planning_only":"Alleen plannen","mount_kit_note":"Bij vrijstaand en wandmontage telt het besteloverzicht de passende standaard- en wandbeugelset mee.","mount_kit_included":"Inclusief standaard- en wandbeugelset","open":"Open de plattegrondplanner","new_tab":"(opent in een nieuw tabblad)","from_demo":"Teken je plattegrond met deze kamermaten","intro":"Teken je woning, plaats sensoren en bekijk hun geschatte bereik.","start_title":"Ontwerp je slimme woning","start_intro":"Teken je kamers, kies je montage en ontdek welke sensoren passen. Begin met een eigen kamer of verken de ingerichte demowoning.","start_new":"Maak mijn plattegrond","start_example":"Verken de demowoning","start_have_plan":"Heb je al een plattegrond?","start_image":"Open afbeelding","start_json":"Open opgeslagen plan","order_home":"Hele woning","history":"Wijzigingen herstellen","order_scope":"Sensoren in de hele woning","next_room_action":"Kamer toevoegen","next_room":"Begin met een kamer op deze verdieping.","next_sensor":"Op deze verdieping staat nog geen sensor.","next_sensor_room":"Plaats een sensor in :room om het bereik te testen.","next_test":"Je kunt nu testen waar de sensoren iemand detecteren.","next_reviewed":"Controleer je keuzes in het besteloverzicht.","next_order_action":"Bekijk besteloverzicht","next_all_floors":"Kies één verdieping om kamers of sensoren te bewerken.","keyboard_title":"Sneltoetsen","next_extra_sensor":"Nog een sensor plaatsen","tools_draw_group":"Plattegrond bewerken","tools_place_group":"Sensoren en meubels","tools_room_form":"Kamer op maat","tools_walk":"Looproute proberen","zoom_controls":"Kaart zoomen en passend maken","wheel_shortcut":"Ctrl + scroll om in 2D te zoomen.","undo_moved":"Verplaatst.","undo_removed":"Verwijderd.","zoom_shortcut":"Sleep met één vinger om de kaart te bewegen. Knijp met twee vingers om te zoomen.","undo":"Ongedaan maken","tools_short":"Gereedschap","tools_draw_room":"Kamer tekenen","room_settings_more":"Meer kamerinstellingen","flow_test":"Start bereiktest","flow_test_exit":"Stop bereiktest","room_form_title":"Kamer toevoegen","room_form_intro":"Vul de binnenmaten in of teken de kamer zelf op de kaart.","room_form_width":"Breedte (m)","room_form_depth":"Diepte (m)","room_form_height":"Hoogte (m)","room_form_create":"Maak kamer","room_form_draw":"Zelf tekenen","room_form_map_hint":"Maak hierboven een kamer of kies Zelf tekenen.","project_menu":"Project","project_name":"Projectnaam","project_files":"Bestanden","view":"Weergave","floor_view":"Plattegrond","space_view":"Ruimtelijk","turn_view":"Draai aanzicht","orbit_hint":"Sleep om rond te kijken","orbit_reset":"Herstel aanzicht","orbit_follow":"Volg testpersoon","orbit_camera":"3D-camera","orbit_furniture":"Inrichting","space_note":"Opengewerkte wanden, gestippelde plafonds en sensoren op hun montagehoogte.","furniture_title":"Meubelbibliotheek","furniture_intro":"Kies een meubel, plaats het op de kaart en pas de maten en het materiaal aan.","furniture_add":"Meubel toevoegen","furniture_short":"Meubel","furniture_list":"Meubels","furniture_empty":"Nog geen meubels in dit plan.","furniture_search":"Zoek een meubel","furniture_no_match":"Geen meubels gevonden.","furniture_category":"Categorie","furniture_all":"Alle meubels","furniture_categories":{"living":"Wonen","work":"Keuken en werkplek","sleep":"Slapen en opbergen","motion":"Beweging en warmte","divide":"Afscheiding en vrij object"},"furniture_items":{"sofa":"Bank","corner":"Hoekbank","armchair":"Fauteuil","coffee":"Salontafel","rug":"Vloerkleed","tv":"Hangende tv","plant":"Hoge plant","dining":"Eettafel","chair":"Stoel","desk":"Bureau","island":"Keukeneiland","fridge":"Koelkast","washer":"Wasmachine","bed":"Bed","nightstand":"Nachtkastje","cabinet":"Lage kast","wardrobe":"Hoge kast","shelves":"Open boekenkast","bath":"Bad","screen":"Kamerscherm","glass":"Glazen afscheiding","curtain":"Gordijn","custom":"Vrij object","fan":"Staande ventilator","pet":"Hond of kat","radiator":"Radiator","heater":"Elektrische kachel"},"furniture_materials":{"wood":"Hout of plaatmateriaal","textile":"Stof of bekleding","metal":"Metaal","glass":"Glas","stone":"Massief steen of beton","plastic":"Kunststof","mixed":"Gemengd of onbekend","ignore":"Alleen intekenen"},"furniture_material":"Materiaal voor de radartest","furniture_material_note":"Kies het materiaal dat het directe radarpad het meest bepaalt. \"Alleen intekenen\" heeft geen invloed op de test.","furniture_height":"Hoogte (m)","furniture_base":"Onderkant boven vloer (m)","furniture_place_hint":"Klik of tik op de vloer om te plaatsen","furniture_move":"Verplaatsen op de kaart","furniture_duplicate":"Dupliceren","furniture_limit":"Dit plan bevat al 160 meubels.","furniture_need_room":"Teken eerst een kamer om een meubel te plaatsen.","furniture_closed":"Meubelbibliotheek sluiten","advisor_title":"Kameradvies","advisor_intro":"Kies per kamer wat je wilt meten en hoe je wilt monteren.","advisor_room":"Kamer","advisor_goal":"Wat wil je meten?","advisor_mount":"Waar kun je monteren?","advisor_goals":{"presence":"Aanwezigheid","zones":"Positie en zones","height":"Positie en hoogte (Z)","climate":"CO₂ en binnenklimaat"},"advisor_mounts":{"either":"Help mij kiezen","ceiling":"Plafondinbouw","recessed":"Muurinbouw","wall":"Muurbeugel","freestanding":"Vrijstaand"},"advisor_air":"Ook CO₂ meten","advisor_level":"Ik kan waterpas monteren aan het schuine plafond","advisor_wait":"Bereik wordt berekend...","advisor_empty":"Teken of importeer eerst een plan met kamers.","advisor_partition":"Deze kamer heeft een getekende tussenwand. Teken de delen als aparte kamers om advies te berekenen.","advisor_height":"Voor deze combinatie is geen passend hoogteprofiel gevonden. Kies plafondmontage met een ondersteunde hoogte of pas je meetdoel aan.","advisor_no_fit":"Geen passende opstelling in het model. Controleer de montageopties, afmetingen en meubels.","advisor_recommended":"Voorgesteld","advisor_alternative":"Alternatief","advisor_score":":percent% van de testpunten met vrij radarpad","advisor_partial":"Onder het modeldoel van 90%. Controleer de ongedekte plekken met de testpersoon.","advisor_scd41":"Kies SCD41 als losse module bij CeilSense V2.","advisor_upgrade_scd41":"SCD41 voor je CeilSense V2","advisor_upgrade_climate":"Voeg CO₂-meting toe aan de CeilSense V2 die al in deze kamer staat.","advisor_upgrade_room":"Voeg SCD41 toe in :room","plan_scd41":"SCD41 voor CO₂, temperatuur en luchtvochtigheid","advisor_climate":"Montagevoorstel voor klimaatmeting.","advisor_place":"Plaats voorgestelde sensoren","advisor_place_room":"Plaats in :room","advisor_add_room":"Voeg toe in :room","advisor_replace_room":"Vervang sensoren in :room","advisor_place_empty":"Plaats advies in lege kamers","advisor_existing":"Al in deze kamer · :sensors","advisor_strategy":"Wat wil je met de bestaande sensoren doen?","advisor_keep":"Aanvullen naast bestaande sensoren","advisor_replace":"Bestaande sensoren vervangen","advisor_needs_surface":"Teken of voorzie op deze plek een plank of ander vlak oppervlak.","advisor_choose":"Kies een voorstel","advisor_positions":"Posities en maten","advisor_gain":"Van :before% naar :after% van de testpunten.","advisor_unmodelled":":count in het plan zonder passend bereikprofiel voor dit meetdoel.","advisor_covered":"De bestaande sensoren halen het modeldoel al. Kies Vervangen om een andere opstelling te vergelijken.","advisor_covered_short":"Al voldoende dekking","advisor_climate_already":"Een bestaande sensor meet al CO₂ in deze kamer.","advisor_climate_already_short":"Meet al CO₂","advisor_no_suggestion":"Geen passend voorstel","advisor_height_invalid":"Vul voor deze kamer een montagehoogte tussen 0,15 en :max m in.","advisor_method":"Hoe we bereik schatten","advisor_place_all":"Plaats advies voor alle kamers","advisor_overview":"Advies per kamer","advisor_origin":"Posities vanaf de linkerbovenhoek van de kamer","advisor_limit":"Er is geen plek voor al deze sensoren in dit plan.","advisor_exists":"Deze voorgestelde posities staan al op je plan.","advisor_model_note":"De schatting gebruikt zittende voorbeeldhoogtes en vrije radarpaden. Tracking telt mee voor aanwezigheid als er geen apart aanwezigheidsprofiel is. Een extra sensor voegt minimaal vijf procentpunt toe of haalt het modeldoel van 90%.","advisor_close":"Kameradvies sluiten","underlay_title":"Onderlegger","underlay_import":"Plattegrondfoto laden","underlay_opacity":"Zichtbaarheid","underlay_calibrate":"Schaal instellen","underlay_start":"Klik op het eerste uiteinde van een bekende afstand op de plattegrond.","underlay_end":"Klik op het andere uiteinde van die afstand.","underlay_distance":"Werkelijke afstand (m)","underlay_apply":"Schaal toepassen","underlay_error":"Deze plattegrond kon niet worden geladen. Kies een PNG, JPG of WebP van maximaal 12 MB.","underlay_ready":"Foto geladen. Stel de schaal in en teken de kamers over.","wall_sensor_height":"Montagehoogte boven vloer (m)","space_empty":"Teken een kamer in 2D om je plan in 3D te bekijken.","sim_reach_test":"Bereiktest","sim_title":"Testpersoon","sim_manage_people":"Personen","sim_add_woman":"Vrouw toevoegen","sim_remove_woman":"Vrouw verwijderen","sim_auto_stop":"Stop automatisch lopen","sim_count_short":":seen van :total","sim_detecting_sensors":"sensoren zien je","sim_no_sensors_short":"Geen sensoren","sim_outside_rooms":"Buiten de kamers","sim_stair_destination":"Trap naar :floor","sim_stair_dismiss":"Negeer trapmelding","sim_guide":"Pijlen of WASD","sim_choose_person":"Kies een testpersoon","sim_man":"Man","sim_woman":"Vrouw","sim_auto":"Automatisch lopen","sim_auto_active":"Gebruik de looptoetsen om de demo over te nemen.","sim_more_tests":"Testopties","sim_test_smoke":"Rooktest","sim_test_fall":"Valtest","sim_test_stop_smoke":"Stop rooktest","sim_test_stop_fall":"Stop valtest","sim_test_start_smoke":"Rooktest start in :room.","sim_test_start_fall":"Valtest start in :room.","sim_test_finished_smoke":"Rooktest afgerond.","sim_test_finished_fall":"Valtest afgerond.","sim_test_no_place_smoke":"Kies een vrije plek op de vloer voor de rooktest.","sim_test_no_place_fall":"Kies een plek met voldoende vrije vloer voor de valtest.","sim_activity_seat":":person zit in :room","sim_activity_bed":":person ligt op bed in :room","sim_activity_fall":"Val gesimuleerd in :room","sim_activity_fall_detected":"Demo · Gevallen persoon gedetecteerd in :room · LD6002B","sim_activity_fall_undetected":"Demo · Val in :room · geen LD6002B-detectie","sim_activity_smoke_start":"Het poppetje steekt een virtueel vuurtje aan in :room.","sim_activity_smoke":"Rook gesimuleerd in :room","sim_activity_smoke_detected":"Demo · Rookalarm in :room · CeilSense Pro","sim_activity_smoke_undetected":"Demo · Rook in :room · geen CeilSense Pro","sim_auto_partial":"Voor één testpersoon is er geen vrije looproute. Kies voor die persoon een andere startplek.","sim_auto_blocked":"Geen vrije looproute vanaf deze plek. Kies een andere startplek op de kaart.","sim_auto_repositioned":"De testpersoon start op een vrije plek naast het meubilair.","sim_dual_note":"De planner berekent het radarbereik per persoon. Of een echte sensor meerdere personen tegelijk kan onderscheiden, hangt af van de radarmodule.","sim_pose":"Houding van de testpersoon","sim_standing":"Staan","sim_sitting":"Zitten","sim_lying":"Liggen","sim_move":"Verplaats de testpersoon","sim_left":"Loop naar links","sim_up":"Loop omhoog","sim_down":"Loop omlaag","sim_right":"Loop naar rechts","sim_results":"Gesimuleerde detectie","sim_jump":"Start een nieuwe route in","sim_count":":seen van :total sensoren binnen bereik","sim_empty":"Plaats een sensor om te zien wanneer die de testpersoon bereikt.","sim_need_room":"Teken eerst een kamer in 2D om de testpersoon te gebruiken.","sim_seen":"Binnen bereik","sim_missed":"Buiten bereik","sim_no_profile":"Geen bereikmodel","sim_presence":"Aanwezigheid","sim_xy":"Positie X/Y","sim_xyz":"Positie X/Y/Z","sim_height":":height m boven de vloer","sim_limit":"De test combineert geschat bereik met directe paden door meubels. Wanden begrenzen de looproute. Reflecties en signaaldoorgang door wanden vallen buiten het model.","sim_furniture":"Meubels meenemen","sim_furniture_toggle_note":"Wisselen wist de geteste routes.","sim_risk_route":":distance m mogelijk afgeschermd","sim_shadow":"Mogelijk afgeschermd","sim_blocked":"Direct pad afgeschermd","sim_risk_count":":count met afscherming","sim_path_note":"Drie voorbeeldhoogtes per houding helpen onderscheid maken tussen gedeeltelijke en volledige afscherming van het directe pad. Materiaalkeuzes zijn indicatief.","sim_research":"Hoe rekent de planner met meubels?","sim_radar_mount":"Montagehoogte van een wandsensor is instelbaar in Eigenschappen. Standaard gebruikt de test 1,4 m.","sim_about_z":"Hoe werkt hoogte in deze demo?","sim_z_explanation":"LD6002B geeft X, Y en Z door. De hoogtes voor staan, zitten en liggen zijn voorbeeldwaarden. De valmelding is gesimuleerd.","sim_source":"Specificaties van Hi-Link","sim_route":"Geteste route","sim_route_empty":"Loop om het bereik langs je route te zien.","sim_route_distance":":covered van :total m binnen bereik","sim_reset":"Wis route","sim_covered":"Route met bereik","sim_uncovered":"Route zonder bereik","sim_uncertain":"Mogelijke afscherming","sim_link":"Sensor ziet testpersoon","sim_view_readings":"Sensoruitlezing","sim_back_to_map":"Naar kaart","sim_room_position":"Kamerpositie · X :x m · Y :y m","beam_sensor":"Radarbereik","beam_auto":"Automatisch","beam_note":"Indicatief bereik. De kegel maakt de vloercontour ruimtelijk zichtbaar.","beam_wall_note":"Horizontaal bereik, begrensd door de kamer.","beam_wall_note_3d":"De vloer toont het bereik binnen de kamer. De bovenste waaier staat op montagehoogte.","beam_wall_range":"Modelbereik en kijkhoek","beam_radius":"Radius per as","beam_seated":"Stil zitten","beam_standing":"Stil staan","beam_moving":"Beweging","beam_lying":"Zitreferentie","beam_lying_note":"Bij liggen toont LD2412 de zitreferentie.","floor_title":"Verdieping","floor_manage":"Verdiepingen beheren","floor_move_room":"Verplaats kamer naar verdieping","floor_name":"Naam verdieping","floor_ground":"Begane grond","floor_upper":"Verdieping :level","floor_lower":"Kelder :level","floor_all":"Alle verdiepingen","floor_separation":"Afstand tussen lagen","floor_add_upper":"Verdieping erboven toevoegen","floor_add_lower":"Kelder eronder toevoegen","floor_remove":"Lege verdieping verwijderen","design_details":"Details tekenen","wall_measures":"Wandmaten","window":"Raam","mirror":"Spiegel","zone":"Zone","redo":"Opnieuw","window_hint":"Klik op een wand om een raam te plaatsen.","mirror_hint":"Klik op een wand om een spiegel te plaatsen.","mirror_note":"De spiegel is zichtbaar in het ontwerp. Reflecties vallen buiten de simulatie.","room_midpoint_label":"Tussenpunt toevoegen op wand :index","room_midpoint_saved":"Tussenpunt toegevoegd.","opening_choose_wall":"Kies een wand op de plattegrond.","opening_ready":"Controleer de maten en kies Plaats hier.","opening_wall_missing":"Kies een punt dichter bij een wand.","opening_too_wide":"De wand is :length m lang. Kies een kleinere breedte.","opening_invalid_dimensions":"Vul geldige maten in.","opening_move":"Verplaats op wand","object_height":"Hoogte (m)","zone_type":"Soort zone","zone_detection":"Detectiezone","zone_exclusion":"Uitsluitingszone","zone_entry":"Ingangslijn","zone_interference":"Interferentiezone","zone_start":"Plaats de eerste hoek van de zone binnen een kamer.","zone_more":"Plaats de volgende hoek of sla de zone op.","zone_entry_hint":"Plaats twee punten in een kamer en sla de ingangslijn op.","zone_save":"Zone opslaan","zone_outside":"Teken de volledige zone in één kamer en laat randen elkaar vrij.","zone_parts":":count delen","zone_add_part":"Voeg zonedeel toe","zone_part":"Zonedeel","zone_edit_part":"Hoeken bewerken","zone_remove_part":"Deel verwijderen","zone_edit_hint":"Versleep een hoek en sla de zone op.","zone_direction":"Binnenkomrichting","zone_left":"Links van de lijn","zone_right":"Rechts van de lijn","zone_sensor":"Sensor voor deze zone","zone_all_sensors":"Alle sensoren in de kamer","zone_note":"Een uitsluitingszone verbergt positiepunten in de looptest. De andere zones kun je intekenen voor je installatie.","room_summary":"Kameroverzicht","room_perimeter":":length m omtrek","room_corners":"Hoeken","room_doors":"Deuren","room_windows":"Ramen","room_mirrors":"Spiegels","room_zones":"Zones","sim_excluded":"Uitgesloten door zone","import_room_name":"Geïmporteerde kamers","import_lidar_name":"LiDAR-plattegrond","import_scan_notes":"Import gelukt. Controleer benaderde kamergrenzen en overgeslagen onderdelen.","import_ha_notes":"Kamergeometrie en zones ingelezen. Apparaatkoppelingen en kalibratie blijven in Home Assistant.","import_project":"Importeer plattegrond, HA-kamer of RoomPlan-JSON","plan_outline":"In dit plan","rooms":"Kamers","walls_doors":"Wanden en deuren","empty_rooms":"Teken je eerste kamer met het gereedschap Kamer.","new":"Nieuw plan","example":"Demowoning laden","import":"Planbestand openen","export":"Plan downloaden","edit":"Selecteer","room":"Kamer","wall":"Wand","door":"Deur","pan":"Schuif","tools":"Tekengereedschap","drawing_more":"Wanden, ramen en zones","canvas_controls":"Herstellen, opnieuw en zoomen","draw_keys":"Shift voor vrij tekenen · Esc om te stoppen","coverage_limit":"Looptest toont afscherming door meubels","coverage":"Bereik","zoom_in":"Inzoomen","zoom_out":"Uitzoomen","fit":"Passend maken","keyboard":"Beweeg de aanwijzer met de pijltjes en teken of plaats met Enter. V selecteert, H verschuift, R tekent een kamer, W tekent een wand, D opent sensoren, F maakt passend en Q wisselt tussen 2D en 3D.","canvas":"Interactieve plattegrond","selection":"Eigenschappen","devices":"Sensor toevoegen","quick_place_room":"Plaatsen in :room","placements":"Sensoren","catalog_prompt":"Kies een model en geef het een plek op de kaart.","catalog_filter":"Montage kiezen","catalog_all":"Alle sensoren","catalog_advice":"Help me kiezen","place_model":":model plaatsen","place_hover":"Beweeg over de kaart voor een schatting van het bereik. Klik om te plaatsen.","place_touch":"Tik op een plek om het bereik te bekijken.","place_marker_only":"Kies een plek op de kaart. Voor dit model is geen bereikschatting beschikbaar.","place_confirm_hint":"Tevreden met de plek? Bevestig of tik ergens anders.","place_wall_snap":"Dicht bij een wand klikt de sensor eraan vast.","place_here":"Plaats hier","edit_selection":"Bewerken","move_item":"Verplaats op kaart","move_item_hint":"Sleep het geselecteerde onderdeel naar de nieuwe plek.","wall_mount":"Wand","ceiling_mount":"Plafond","remove":"Verwijderen","rotate":"90° draaien","radar":"Radarmodule","product":"Bekijk product","handoff_title":"Verder met deze kamer","handoff_action":"Open in de keuzehulp","handoff_dimensions":"De keuzehulp werkt met kamers van 2-15 m breed, 2-12 m diep en 2-4 m hoog.","handoff_shape":"Open Kameradvies om deze kamervorm met je sensoren door te rekenen.","handoff_quantity":"Plaats 1 tot 3 CeilSense V2's in deze kamer om de keuzehulp te openen.","handoff_radars":"Kies per V2 dezelfde radar of combinatie om deze kamer over te nemen.","handoff_angles":"Gebruik voor de keuzehulp een richting in stappen van 90°.","planning":"Bestelbaar vanaf januari 2027","presence_line":"Aanwezigheid","tracking_line":"Positietracking","name":"Naam","width":"Breedte (m)","depth":"Diepte (m)","height":"Plafondhoogte (m)","angle":"Richting (°)","end_x":"Eindpunt X (m)","end_y":"Eindpunt Y (m)","no_radar":"Zonder radar","sensor_mount_label":"Montage","sensor_edit_title":"Sensor aanpassen","sensor_edit_model":"Sensormodel","sensor_edit_cancel":"Annuleren","sensor_edit_save":"Opslaan","sensor_edit_snaps":"De sensor schuift naar de dichtstbijzijnde wand in deze kamer.","sensor_edit_room_required":"Deze montage heeft een wand in dezelfde kamer nodig.","sensor_edit_invalid":"Deze configuratie past niet op deze plek.","sensor_edit_saved":"Sensor aangepast.","sensor_unknown":"Niet opgegeven","sensor_scd41_standard":"Ja, standaard","sensor_scd41_added":"Ja, toegevoegd","sensor_scd41_optional":"Nee, optioneel","sensor_scd41_absent":"Nee","sensor_smoke_label":"Rookdetectie","sensor_smoke_optical":"Optisch, aanvullend","sensor_audio_label":"Audio","sensor_audio_voice":"Speaker en microfoon","wall_upgrade":"LD2412 + LD2460","select_hint":"Selecteer of versleep een object.","quick_place_hint":"Dubbelklik in een kamer om daar een sensor te plaatsen.","room_start":"Sleep een kamer of kies twee hoeken.","room_end":"Klik op de tegenoverliggende hoek.","room_draw_mode":"Kamervorm tekenen","room_rectangle":"Rechthoek","room_outline":"Vrije vorm","room_outline_start":"Plaats het eerste hoekpunt op de kaart.","room_outline_more":"Plaats de volgende hoek. Klik op het beginpunt of op Kamer sluiten als je rond bent.","room_outline_invalid":"Maak een gesloten kamer van minstens drie hoeken en zorg dat de randen elkaar niet kruisen.","room_outline_limit":"Een kamer kan maximaal :count hoeken hebben.","room_close_outline":"Kamer sluiten","room_edit_outline":"Hoeken bewerken","room_save_outline":"Vorm opslaan","room_edit_hint":"Versleep een hoek of tik op een punt op een wand om een hoek toe te voegen.","room_edit_keys":"Gebruik Page Up of Page Down om een hoek te kiezen. Verplaats die met de pijltjestoetsen.","room_undo_corner":"Laatste hoek wissen","room_remove_corner":"Hoek verwijderen","room_handle_keys":"Druk op Enter om deze hoek met het toetsenbord te bewerken.","room_corner_saved":"Hoek aangepast.","room_corner_status":"Hoek :index van :total","room_corner_position":"Positie van de gekozen hoek","wall_start":"Sleep een wand of kies twee eindpunten.","wall_end":"Klik waar de wand eindigt.","door_hint":"Klik op een wand om een deur te plaatsen. Draai de deur bij Eigenschappen.","pan_hint":"Sleep om over de plattegrond te bewegen.","sensor_hint":"Klik op de plattegrond om te plaatsen","empty_hint":"Kies Kamer om te beginnen, of open de voorbeeldwoning.","empty_placements":"Voeg een sensor toe om de montageplek te bekijken.","about_coverage":"Indicatief bereik","coverage_note":"CeilSense toont een schatting voor zittende aanwezigheid of tracking. WallSense en UltimateSensor tonen het horizontale bereik. De contour stopt aan de rand van de getekende kamer. Binnenwanden, meubels en materiaal tellen niet mee.","height_note":"De plafondhoogte valt buiten het referentiebereik van deze radar.","room_note":"Plaats de sensor in een kamer. Richt een wandsensor naar binnen om het bereik te zien.","no_profile":"Voor dit model is geen bereikprofiel opgenomen. Je kunt de montageplek wel intekenen.","local":"Opgeslagen op dit apparaat","local_error":"Opslag niet beschikbaar. Exporteer je plan om het te bewaren.","import_error":"Dit bestand is geen geldig sensorplan.","invalid":"Controleer de ingevoerde maat of positie.","limit":"Dit plan bevat al 80 objecten van dit type.","confirm":"Het huidige plan vervangen? Exporteer het eerst als je een kopie wilt bewaren.","search_sensor":"Zoek een sensor","search_empty":"Geen sensoren gevonden.","close_library":"Sensorlijst sluiten","ceiling_edit":"Bewerk het plafond","ceiling_section":"Plafond","ceiling_type":"Plafondvorm","ceiling_flat":"Vlak","ceiling_slope":"Enkel schuin","ceiling_gable":"Zadeldak","ceiling_eave":"Goothoogte (m)","ceiling_low":"Lage zijde (m)","ceiling_high":"Hoge zijde (m)","ceiling_ridge":"Nokhoogte (m)","ceiling_direction":"Richting naar de hoge zijde","ceiling_axis":"Dwarsrichting van het dak","ceiling_x_plus":"Naar rechts →","ceiling_x_minus":"Naar links ←","ceiling_y_plus":"Naar onderen ↓","ceiling_y_minus":"Naar boven ↑","ceiling_axis_x":"Van links naar rechts","ceiling_axis_y":"Van boven naar beneden","ceiling_mount_height":"Montagehoogte boven de vloer","ceiling_mount_level":"Sensor wijst verticaal omlaag","ceiling_mount_hint":"Vink aan als jouw bevestiging de sensor hier verticaal laat richten. Bevestig dit opnieuw na verplaatsen of aanpassen van het plafond.","ceiling_tilted":"Volgt de sensor de helling, dan kijkt hij schuin. Daarom tonen we daar geen bereikcontour.","ceiling_local_range":"Indicatieve contour op basis van de hoogte op deze plek.","ceiling_invalid":"Gebruik 1 tot 12 m. De hoge zijde moet hoger zijn dan de lage zijde.","ceiling_profile":"Doorsnede van het plafond","ceiling_pitch":"Helling","handoff_ceiling":"De keuzehulp rekent met één vlakke plafondhoogte. Gebruik deze planner voor de schuine ruimte.","place_center":"Plaats midden in de kamer","ceiling_left":"Links","ceiling_right":"Rechts","ceiling_top":"Boven","ceiling_bottom":"Onder","nudge_title":"Verplaats 10 cm","nudge_left":"10 cm naar links","nudge_right":"10 cm naar rechts","nudge_up":"10 cm naar boven","nudge_down":"10 cm naar onderen","cancel_place":"Annuleren","ceiling_room_note":"Kies een CeilSense op de kaart om de montagehoogte te zien. Voor een bereikcontour moet de sensor verticaal omlaag wijzen en binnen het referentiebereik hangen.","recovery_note":"Dit opgeslagen plan kon niet worden geopend. Het originele bestand is bewaard. Download het om een kopie te houden.","recovery_download":"Download origineel","recovery_replace":"Bewaar dit plan op dit apparaat","recovery_confirm":"Wil je het opgeslagen origineel vervangen door dit plan?","position_status":"Positie","placed_status":"Sensor geplaatst","v2_link":"Bekijk CeilSense V2","ceiling_ridge_note":"Op de nok komen twee dakvlakken samen. Kies een dakvlak of geef aan dat jouw bevestiging de sensor verticaal richt.","ceiling_range":"Referentie voor deze radar is :low-:high m.","order_title":"Besteloverzicht","order_short":"Bestellen","order_intro":"Alle geplaatste sensoren per kamer. Kies de uitvoering en vink aan wat je wilt bestellen.","order_close":"Besteloverzicht sluiten","order_variant":"Uitvoering","order_no_room":"Zonder kamer","order_empty":"Plaats een sensor op je plattegrond om hier je overzicht te zien.","order_draft":"Pre-order nog gesloten","order_coming":"Later beschikbaar","order_product_only":"Bestel via de productpagina","order_not_available":"Momenteel niet bestelbaar","order_backorder":"Nabestelling","order_stock":"Niet beschikbaar in dit aantal","order_loading":"Beschikbaarheid ophalen...","order_upgrade":"Losse upgrademodule inbegrepen","order_subtotal":"Subtotaal · excl. verzending","order_add":"In winkelwagen","order_add_one":"1 sensor in winkelwagen","order_add_count":":count sensoren in winkelwagen","order_view_cart":"Bekijk winkelwagen","order_partial_note":"Alleen de aangevinkte, bestelbare sensoren gaan in je winkelwagen.","order_limit":"Maximaal 3 CeilSense V2's per bestelling tijdens de pre-order. Controleer je selectie en winkelwagen.","order_stock_changed":"Deze aantallen zijn niet meer beschikbaar. Controleer je selectie en winkelwagen.","order_changed":"De prijzen zijn veranderd. Bekijk het bijgewerkte overzicht en kies opnieuw.","order_too_many":"Deze selectie is te groot voor één winkelwagen. Vink enkele regels uit.","order_quote_error":"We kunnen de prijzen nu niet ophalen. Probeer het opnieuw.","order_error":"Toevoegen is niet gelukt. Je kunt het opnieuw proberen.","order_uncertain":"We kunnen nog niet bevestigen wat is toegevoegd. Controleer eerst je winkelwagen.","order_busy":"Winkelwagen controleren...","order_check_cart":"Controleer toevoeging","order_retry":"Prijzen opnieuw ophalen","order_success_one":"1 sensor toegevoegd aan je winkelwagen.","order_success":":count sensoren toegevoegd aan je winkelwagen.","order_variants":{"Standard (without dust sensor)":"Zonder fijnstofsensor","Complete (with dust sensor)":"Met fijnstofsensor","Excluding PM sensor":"Zonder fijnstofsensor","Including PM sensor":"Met fijnstofsensor","Basic (mmWave & Lux only)":"Basic met mmWave en lux","Complete (All features)":"Compleet met alle functies","White":"Wit","Black":"Zwart"},"next_all_test":"Test het sensorbereik op alle verdiepingen.","staircase":"Trap","sim_child":"Kind","sim_add_child":"Kind toevoegen","sim_remove_child":"Kind verwijderen","sim_stair_go_up":"Omhoog","sim_stair_go_down":"Omlaag","sim_stair_take_group":"Met de groep via de trap","sim_stair_take":"Neem de trap","sim_stair_stop":"Stop traproute","sim_stair_travel":"Via de trap naar :floor","sim_stair_blocked":"De trap is niet bereikbaar. Controleer of de doorgang vrij is.","names":{"main-bedroom":"Hoofdslaapkamer","child-bedroom":"Kinderkamer","bathroom":"Badkamer","landing":"Overloop","study":"Studeerkamer","sample":"Demowoning","legacy_sample":"Voorbeeldwoning","demo":"Kamer uit de radardemo","room":"Kamer","untitled":"Mijn plattegrond","living":"Woonkamer","kitchen":"Keuken","office":"Werkkamer","hall":"Hal","bedroom":"Slaapkamer"},"sample_name_languages":[{"main-bedroom":"Hoofdslaapkamer","child-bedroom":"Kinderkamer","bathroom":"Badkamer","landing":"Overloop","study":"Studeerkamer","sample":"Demowoning","legacy_sample":"Voorbeeldwoning","demo":"Kamer uit de radardemo","room":"Kamer","untitled":"Mijn plattegrond","living":"Woonkamer","kitchen":"Keuken","office":"Werkkamer","hall":"Hal","bedroom":"Slaapkamer"},{"main-bedroom":"Main bedroom","child-bedroom":"Child's bedroom","bathroom":"Bathroom","landing":"Landing","study":"Study","sample":"Demo home","legacy_sample":"Example home","demo":"Radar demo room","room":"Room","untitled":"My floor plan","living":"Living room","kitchen":"Kitchen","office":"Office","hall":"Hall","bedroom":"Bedroom"},{"main-bedroom":"Dormitorio principal","child-bedroom":"Dormitorio infantil","bathroom":"Baño","landing":"Rellano","study":"Estudio","sample":"Casa de demostración","demo":"Habitación de la demo radar","room":"Habitación","untitled":"Mi plano","living":"Salón","kitchen":"Cocina","office":"Despacho","hall":"Pasillo","bedroom":"Dormitorio"},{"main-bedroom":"Chambre principale","child-bedroom":"Chambre d'enfant","bathroom":"Salle de bain","landing":"Palier","study":"Bureau à l'étage","sample":"Maison de démonstration","demo":"Pièce de la démo radar","room":"Pièce","untitled":"Mon plan","living":"Salon","kitchen":"Cuisine","office":"Bureau","hall":"Entrée","bedroom":"Chambre"},{"main-bedroom":"Elternschlafzimmer","child-bedroom":"Kinderzimmer","bathroom":"Bad","landing":"Flur oben","study":"Arbeitszimmer oben","sample":"Demozuhause","demo":"Raum aus der Radardemo","room":"Raum","untitled":"Mein Grundriss","living":"Wohnzimmer","kitchen":"Küche","office":"Arbeitszimmer","hall":"Flur","bedroom":"Schlafzimmer"}],"demo_detection":"Gesimuleerde detectie","demo_pause":"Demo pauzeren","demo_play":"Demo afspelen","sim_activity_smoke_fire":"Virtueel vuur in :room","wall_mode_cutaway":"Muren weggesneden","wall_mode_up":"Muren omhoog","wall_mode_down":"Muren omlaag","daylight_studio":"Studiolicht","daylight_morning":"Ochtendlicht","daylight_midday":"Middaglicht","daylight_evening":"Avondlicht","daylight_night":"Nacht","heatmap":"Bereikkaart","heatmap_none":"Geen bereik","heatmap_one":"1 sensor","heatmap_many":"2 of meer","room_floor_finish":"Vloer","room_wall_color":"Muurkleur","finish_automatic":"Automatisch","floor_finish_boards":"Houten vloer","floor_finish_tiles":"Tegels","floor_finish_carpet":"Tapijt","floor_finish_concrete":"Beton","floor_finish_plain":"Effen","wall_color_white":"Wit","wall_color_sand":"Zand","wall_color_sage":"Saliegroen","wall_color_blue":"Lichtblauw","wall_color_clay":"Terracotta","wall_color_grey":"Grijs","furniture_motion_note":"Een draaiende ventilator of een huisdier kan voor een radar op een persoon lijken. Houd het buiten beeld of teken er een interferentiezone overheen."}</script>
+</div>
+
+</main><script type="module" src="./editor.js?v=7d8e1b6f2a90"></script></body></html>

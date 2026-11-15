@@ -52,8 +52,9 @@ Thumbs.db
 npm-debug.log*
 
 # ===== DUPLICAAT FOLDERS =====
-# js/ is een duplicaat van www/ - niet nodig
-js/
+# js/ is een duplicaat van www/ - niet nodig. Anchored, so source folders
+# that happen to be called js (floor-planner/src/js) stay tracked.
+/js/
 
 # dist folders (alleen de .js in www/ is nodig)
 frontend/dist/

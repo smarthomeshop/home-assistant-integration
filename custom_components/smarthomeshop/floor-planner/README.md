@@ -1,0 +1,40 @@
+# Floor planner
+
+The 2D/3D floor planner behind the Room Designer, Live Home and the Live Home
+card. This folder is its source; Home Assistant serves the build in
+`../www/floor-planner`.
+
+## Layout
+
+- `src/js`, `src/css`: the planner itself. Plain ES modules with no Home
+  Assistant code in them: drawing, the 3D model, radar coverage, the walk
+  test, imports, the coverage map.
+- `src/ha`: everything that ties the planner to Home Assistant.
+  - `editor-entry.js` starts the editor inside the panel's iframe.
+  - `host.js` is the `shs-floor-planner-page` element: it loads rooms and
+    radars over the websocket API, saves changes and draws live presence.
+  - `card-scene.js` is the `shs-floor-card-scene` element used by the Live
+    Home card.
+  - `ha-rooms.js` and `ha-save.js` turn stored rooms into a planner project
+    and back. `ha-live.js` works out live presence, `fusion.js` combines
+    several radars, `safety.js` holds the zone and validation rules.
+  - `shells/*.html` are the editor pages in five languages, with their text.
+  - `static/` holds the product images the editor shows.
+- `test/`: node tests for the planner, with the Home Assistant parts in
+  `test/ha`.
+
+## Build
+
+```bash
+npm install
+npm run build   # writes ../www/floor-planner
+npm run check   # fails when ../www/floor-planner does not match the source
+npm test
+```
+
+The build is bundled with esbuild but not minified, so what Home Assistant
+serves stays readable. Files the pages load are versioned by content hash, so
+browsers never keep an old copy after an update.
+
+Rebuild after every change in `src`, and commit the source together with the
+build.

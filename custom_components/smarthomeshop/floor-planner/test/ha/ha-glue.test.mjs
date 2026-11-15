@@ -1,0 +1,44 @@
+// Tests for the Home Assistant side of the planner (src/ha). They live in their
+// own folder because they only make sense next to the integration.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { projectFromRooms } from '../../src/ha/ha-rooms.js';
+import { saveChanges } from '../../src/ha/ha-save.js';
+import { collectLivePresence, radarEntityIds, radarProfiles } from '../../src/ha/ha-live.js';
+import { FloorPlanValidationError, floorPlanValidationCopy, floorPlanValidationMessage } from '../../src/ha/safety.js';
+
+const square = (width, depth) => [[0, 0], [width, 0], [width, depth], [0, depth]]
+    .map(([x, y], index, corners) => ({ x1: x, y1: y, x2: corners[(index + 1) % 4][0], y2: corners[(index + 1) % 4][1] }));
+const living = {
+    id: 'living', name: 'Living', walls: square(5000, 4000), house: { x: 0, y: 0, floor: 0, rotationDeg: 0 }, ceilingHeightMm: 2600,
+    doors: [{ id: 'door', wallIndex: 0, position: .5, width: 900, openDirection: 'inward' }], windows: [], mirrors: [], furniture: [], zones: [],
+    sensors: [{ id: 'source', deviceId: 'radar', x: 100, y: 2000, rotation: 0, heightMm: 1800, mountingMode: 'wall' }],
+};
+
+test('a door that left its wall is named in the save error, in every language', () => {
+    const saved = projectFromRooms([living], []);
+    const project = structuredClone(saved);
+    project.floors[0].plan.doors[0].y += 1;
+    let caught;
+    assert.throws(() => saveChanges(project, saved, [living]), error => (caught = error) instanceof FloorPlanValidationError);
+    assert.equal(caught.validationCode, 'opening_off_wall');
+    assert.equal(floorPlanValidationMessage(caught, 'nl'), 'Zet elke deur, elk raam en elke spiegel in Living tegen een muur voordat je opslaat.');
+    for (const copy of Object.values(floorPlanValidationCopy)) assert.match(copy.opening_off_wall, /\{room\}/);
+});
+
+test('radar profiles without aliases or targets still give live presence', () => {
+    const profiles = radarProfiles([
+        { device_id: 'radar', profile: { tracking_presence_entity_id: 'binary_sensor.radar_presence' } },
+        { device_id: 'empty' },
+        { device_id: 'odd', profile: {}, aliases: 'radar', targets: [null, { x_entity_id: 'sensor.x' }] },
+        null,
+    ]);
+    assert.deepEqual(profiles.map(profile => profile.device_id), ['radar', 'odd']);
+    assert.deepEqual(profiles[1].aliases, []);
+    assert.deepEqual(profiles[1].targets, [{ x_entity_id: 'sensor.x' }]);
+    assert.deepEqual([...radarEntityIds(profiles)], ['binary_sensor.radar_presence', 'sensor.x']);
+    const presence = collectLivePresence([living], profiles, () => ({ state: 'on' }), Date.now(), {}, false);
+    assert.equal(presence.linkedSensors, 1);
+    assert.equal(presence.rooms[0].occupied, true);
+    assert.deepEqual(radarProfiles(undefined), []);
+});

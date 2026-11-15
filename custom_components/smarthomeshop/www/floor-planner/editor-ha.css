@@ -1,0 +1,158 @@
+:root {
+    color-scheme: light;
+    --ha-page: light-dark(#f1f5f9, #171c23);
+    --ha-panel: light-dark(#fbfcfe, #222832);
+    --ha-input: light-dark(#f2f5fa, #1b222c);
+    --ha-ink: light-dark(#172338, #edf1f7);
+    --ha-muted: light-dark(#4b5b72, #b9c5d6);
+    --ha-border: light-dark(#ccd6e3, #465161);
+    --ha-accent: light-dark(#4638b9, #c9beff);
+    --ha-action: light-dark(#4939c1, #6a55d9);
+    --ha-hover: light-dark(#e8eef6, #303949);
+    --ha-selected: light-dark(#ece8ff, #3c3458);
+    --ha-focus: light-dark(#604be2, #c5b5ff);
+    --ha-danger: light-dark(#a52b38, #ffb1b4);
+    --ha-warn: light-dark(#79470f, #ffd09a);
+    --ha-ceiling: light-dark(#5940be, #c9beff);
+    --ha-wall: light-dark(#087359, #8ce1bd);
+    --ha-map: light-dark(#e8eef5, #20252c);
+    --ha-room: light-dark(#f9fbfd, #282f38);
+    --ha-room-edge: light-dark(#8091a5, #a9b5c2);
+    --ha-grid: light-dark(#d9e2ed, #2b3037);
+    --ha-grid-major: light-dark(#bbc9d9, #3a4149);
+    --ha-shadow: 0 8px 22px light-dark(#17274322, #11172273);
+}
+:root[data-ha-theme="dark"] { color-scheme: dark; }
+*, *::before, *::after { box-sizing: border-box; }
+body.fp-design-body { margin: 0; color: var(--ha-ink); background: var(--ha-page); font: 16px/1.45 system-ui, sans-serif; }
+button, input, select { font: inherit; }
+button, summary { cursor: pointer; }
+
+.fp-design-center {
+    --fp-bg: var(--ha-page);
+    --fp-panel: var(--ha-panel);
+    --fp-text: var(--ha-ink);
+    --fp-muted: var(--ha-muted);
+    --fp-accent: var(--ha-accent);
+    --fp-selected: var(--ha-selected);
+    --fp-border: var(--ha-border);
+    --fp-stage: var(--ha-map);
+    --fp-stage-bar: var(--ha-panel);
+    --fp-stage-border: var(--ha-border);
+    --fp-ceiling: var(--ha-ceiling);
+    --fp-wall: var(--ha-wall);
+}
+
+#floor-planner :is(#fp-open-order, [data-action="next_order"], .fp-library-filters, [data-action="catalog_advice"],
+    [data-action="open_advisor"], [data-action="start_example"], [data-action="example"], [data-action="test_person"],
+    [data-action="preview_walk"], [data-action="repeat_test"], .fp-sensor-edit-model label, label:has([name="radar"])) { display: none !important; }
+[data-ha-live] :is(#fp-project-menu, .fp-quick-tools, #fp-toolbox, #fp-sidebar, #fp-next, #fp-room-form, #fp-underlay-controls,
+    .fp-floor-actions, #fp-floor-rename, .fp-selection-jump) { display: none !important; }
+[data-ha-live] #fp-project-name { pointer-events: none; }
+
+#floor-planner .fp-project { gap: 6px 10px; min-height: 52px; padding: 5px 12px; }
+.fp-ha-actions { display: flex; flex: 1 1 auto; align-items: center; justify-content: flex-end; gap: 6px; margin-inline-start: auto; }
+.fp-ha-status { min-width: 0; margin-inline-end: 5px; color: var(--ha-muted); font-size: 11px; line-height: 1.25; text-align: end; }
+.fp-ha-status p { margin: 0; }
+.fp-ha-status p + p { margin-top: 2px; }
+.fp-ha-status .save-status[data-error] { color: var(--ha-danger); }
+#floor-planner .fp-ha-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 42px; min-height: 42px; padding: 4px 9px; border-color: var(--ha-border); font-size: 12px; font-weight: 680; }
+#floor-planner .fp-ha-actions .save:not(:disabled) { color: #fff; border-color: transparent; background: var(--ha-action); }
+#floor-planner .fp-ha-actions .save:disabled { opacity: 1; color: var(--ha-muted); background: var(--ha-input); }
+@media (max-width: 850px) {
+    .fp-ha-actions button span { display: none; }
+}
+@media (max-width: 600px) {
+    #floor-planner .fp-project { display: grid; grid-template-columns: max-content minmax(0, 1fr) 42px 42px; gap: 5px; padding-inline: 8px; }
+    #floor-planner .fp-project .fp-floors { min-width: 0; }
+    #floor-planner .fp-project :is(#fp-floor-current, .fp-ha-status .detections) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #floor-planner .fp-project .fp-toolbar-trigger { gap: 5px; padding-inline: 7px; }
+    .fp-ha-actions { display: contents; }
+    .fp-ha-status { display: flex; grid-column: 1 / -1; grid-row: 2; justify-content: space-between; gap: 8px; margin: 0; padding-inline: 2px; text-align: start; }
+    #floor-planner .fp-ha-actions button { grid-row: 1; min-width: 40px; min-height: 44px; padding: 4px; }
+    #floor-planner .fp-ha-actions .secondary { grid-column: 3; }
+    #floor-planner .fp-ha-actions .save { grid-column: 4; }
+    .fp-ha-status p { min-width: 0; margin: 0; }
+    .fp-ha-status .save-status { margin-inline-start: auto; text-align: end; }
+    .fp-ha-status .save-status[data-error] { text-wrap: pretty; }
+}
+
+#floor-planner .fp-stage { --fp-ceiling: var(--ha-ceiling); --fp-wall: var(--ha-wall); color: var(--ha-ink); }
+#floor-planner[data-view="3d"] .fp-stage { background: radial-gradient(ellipse at 48% 42%, var(--ha-page) 0%, var(--ha-map) 78%); }
+#floor-planner :is(.fp-viewbar, .fp-view-options, .fp-toolbox-content, .fp-outline-tools, .fp-placement-bar,
+    .fp-sensor-tip, .fp-radar-panel, .fp-space-furniture, .fp-space-guide > span, .fp-hint, .fp-legend, .fp-footer, .fp-footer details[open] p) {
+    color: var(--ha-ink); border-color: var(--ha-border); background: var(--ha-panel);
+}
+#floor-planner :is(.fp-viewbar, .fp-view-options, .fp-toolbox-content, .fp-sensor-tip, .fp-footer details[open] p) { box-shadow: var(--ha-shadow); }
+#floor-planner :is(.fp-drawing-options, .fp-history, .fp-view-zoom, .fp-tool-group + .fp-tool-group,
+    .fp-quick-tools, .fp-sensor-tip .fp-sensor-options, .fp-device-group + .fp-device-group) { border-color: var(--ha-border); }
+#floor-planner :is(.fp-viewbar summary, .fp-viewbar button, .fp-toolbar button, .fp-outline-tools button, .fp-placement-bar button,
+    .fp-selection-jump, .fp-stage .fp-place-actions button) { color: var(--ha-ink); }
+#floor-planner :is(.fp-outline-tools button, .fp-placement-bar button, .fp-stage .fp-place-actions button) { border-color: var(--ha-border); }
+#floor-planner .fp-stage .fp-place-actions button { background: var(--ha-input); }
+#floor-planner :is(.fp-viewbar, .fp-toolbar, .fp-stage, .fp-library-panel, .fp-sidebar, .fp-toolbar-panel, .fp-furniture-dialog, .fp-ha-actions) button:hover:not(:disabled),
+#floor-planner .fp-viewbar summary:hover { background: var(--ha-hover); }
+#floor-planner :is(button[aria-pressed="true"], .fp-drawing-menu[open] > summary, .fp-drawing-menu[data-active] > summary,
+    .fp-stage .fp-place-actions #fp-place-center, .fp-outline-tools [data-action="save_outline"]:not(:disabled)) {
+    color: var(--ha-accent); border-color: var(--ha-focus); background: var(--ha-selected);
+}
+#floor-planner :is(.fp-primary, .fp-placement-bar .fp-placement-primary) { color: #fff; border-color: transparent; background: var(--ha-action); }
+#floor-planner :is(.fp-primary, .fp-placement-bar .fp-placement-primary, .fp-ha-actions .save):hover:not(:disabled) { color: #fff; background: color-mix(in srgb, var(--ha-action), #111827 16%); }
+#floor-planner :focus-visible { outline-color: var(--ha-focus); }
+#floor-planner :is(.fp-tool-group > p, .fp-shortcuts, .fp-zoom-shortcut, .fp-wheel-shortcut, .fp-draw-keys, .fp-space-empty,
+    .fp-placement-copy span, .fp-opening-dimensions label, .fp-sensor-tip > p, .fp-sensor-tip dt, #fp-beam-note, .fp-room-corner-position label) { color: var(--ha-muted); }
+#floor-planner .fp-scale span { border-color: var(--ha-muted); }
+
+#floor-planner .fp-library-panel { --fp-catalog-ink: var(--ha-ink); --fp-catalog-muted: var(--ha-muted); border-color: var(--ha-border); background: var(--ha-panel); }
+#floor-planner .fp-library-panel :is(.ceiling, .wall) { color: var(--ha-ceiling); }
+#floor-planner .fp-library-panel .wall { color: var(--ha-wall); }
+#floor-planner #fp-search-empty { margin: 0; padding: 11px; border-radius: 7px; color: var(--ha-ink); background: var(--ha-input); line-height: 1.5; }
+#floor-planner #fp-catalog button[data-ha-device] { min-height: 44px; }
+#floor-planner #fp-catalog button[data-ha-device]:disabled { opacity: .8; }
+#floor-planner #fp-catalog button[data-ha-device]:disabled .fp-add { color: var(--ha-wall); }
+#fp-sensor-edit-ha { display: grid; gap: 4px; }
+#floor-planner :is(.fp-furniture-dialog, .fp-room-form, .fp-underlay-controls, .fp-recovery) { color: var(--ha-ink); border-color: var(--ha-border); background: var(--ha-panel); }
+#floor-planner :is(#fp-search, #fp-inspector input, #fp-inspector select, .fp-room-form-inputs input, .fp-floor-field input:not([type="range"]),
+    .fp-room-corner-position input, .fp-placement-copy select, .fp-opening-dimensions input, #fp-zone-type, .fp-sensor-edit select,
+    .fp-sensor-edit input[type="number"], .fp-furniture-dialog input, .fp-furniture-dialog select, .fp-underlay-controls input[type="number"],
+    .fp-radar-panel select) { color: var(--ha-ink); border-color: var(--ha-border); background: var(--ha-input); }
+#floor-planner :is(.fp-count, .fp-ceiling-settings, .fp-mount, .fp-cross-section svg, .fp-sensor-edit-model img,
+    .fp-furniture-controls, #fp-sensor-config > .fp-sensor-options) { border-color: var(--ha-border); background: var(--ha-input); }
+#floor-planner :is(.fp-index, .fp-next, .fp-undo-notice) { color: var(--ha-accent); border-color: var(--ha-border); background: var(--ha-selected); }
+#floor-planner :is(.fp-next p, .fp-undo-notice button) { color: var(--ha-ink); }
+#floor-planner .fp-index.wall { color: var(--ha-wall); background: color-mix(in srgb, var(--ha-wall) 14%, var(--ha-panel)); }
+.fp-saved-placements { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--ha-border); }
+.fp-saved-placements summary { padding: 7px 2px; color: var(--ha-muted); font-size: 12px; }
+.fp-saved-placements .fp-placed { width: 100%; }
+#floor-planner :is(.fp-warning, .fp-cross-sides) { color: var(--ha-warn); }
+#floor-planner :is(#fp-room-form-error, #fp-start-status, [data-action="delete"], [data-action="remove_floor"]) { color: var(--ha-danger); }
+
+/* The map shares the same scheme as its controls, including its SVG grid and text. */
+#fp-small-grid path { stroke: var(--ha-grid); }
+#fp-grid path, #fp-space-grid path { stroke: var(--ha-grid-major); }
+#floor-planner .fp-room-floor { fill: var(--ha-room); stroke: var(--ha-room-edge); }
+#floor-planner :is(.fp-room.selected > .fp-room-floor, .fp-room-outline, .fp-wall.selected line:last-child) { stroke: var(--ha-ceiling); }
+#floor-planner :is(.fp-room-label, .fp-wall-measure) { fill: var(--ha-ink); stroke: var(--ha-room); }
+#floor-planner .fp-room-size { fill: var(--ha-muted); }
+#floor-planner .fp-wall line:not(.fp-wall-hit) { stroke: var(--ha-room-edge); }
+#floor-planner .fp-door-gap { stroke: var(--ha-room); }
+#floor-planner .fp-cursor { stroke: var(--ha-ink); }
+#floor-planner :is(.fp-person-flat, .fp-person-space) { pointer-events: none; }
+#floor-planner .fp-person-base { fill: light-dark(#e8f7ef, #2b473f); stroke: var(--ha-wall); }
+
+:root[data-ha-theme="light"] #floor-planner {
+    .fp-space-floor.selected { stroke: var(--ha-ceiling); }
+    .fp-model-shadow { fill: #384e66; opacity: .19; }
+    .fp-space-marker circle, .fp-sensor { fill: var(--ha-room); }
+    .fp-space-marker.selected circle { fill: var(--ha-selected); }
+    .fp-building-label { fill: var(--ha-ink); stroke: var(--ha-map); }
+    :is(.fp-door-leaf, .fp-space-door) { stroke: #91612d; }
+    .fp-opening { color: #216d99; }
+    .fp-opening.mirrors { color: #864cb2; }
+    .fp-plan-zone { color: #217956; }
+    .fp-plan-zone.exclusion { color: #ac464c; }
+    .fp-plan-zone.interference { color: #986019; }
+    .fp-plan-zone.entry { color: #187d73; }
+    :is(#fp-cone-space, .fp-stack-beam) { --fp-beam-color: #6454d1; }
+    .fp-wall-sector { fill: var(--ha-wall); stroke: var(--ha-wall); }
+}
