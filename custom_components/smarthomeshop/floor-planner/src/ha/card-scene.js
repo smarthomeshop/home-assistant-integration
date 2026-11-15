@@ -4,7 +4,7 @@
 //
 //   scene    { plan, rooms, focus, scope, view, spacing, locale, labels,
 //              floorNames, roomNames, dark }
-//   presence { people, rooms, houses }
+//   presence { people, rooms, houses, trails? }
 //   control('rotate' | 'fit' | 'zoom-in' | 'zoom-out')
 import plannerCss from '../css/floor-planner.css?inline';
 import haCss from './editor-ha.css?inline';
@@ -48,6 +48,8 @@ styles.replaceSync(plannerCss + haCss.replace(/:root(\[[^\]]+\])/g, ':host($1)')
     [data-hide-names] :is(.fp-room-label,.fp-space-room-label) { display:none; }
     .live-room { fill:light-dark(#eb950d35,#ffb95232); stroke:light-dark(#9c5808,#ffcc83); stroke-width:1.6px;
         stroke-dasharray:5 3; vector-effect:non-scaling-stroke; }
+    .live-trail { fill:none; stroke-width:2px; stroke-linecap:round; stroke-linejoin:round; opacity:.58;
+        vector-effect:non-scaling-stroke; pointer-events:none; }
     .live-target, .live-room { pointer-events:none; }
     .empty-map { display:grid; place-items:center; height:100%; margin:0; padding:14px; text-align:center; color:var(--ha-muted); }
 `);
@@ -109,6 +111,7 @@ class FloorCardScene extends HTMLElement {
     #floors = [];
     #sceneKey = '';
     #people = [];
+    #trails = [];
     #root;
 
     constructor() {
@@ -171,7 +174,7 @@ class FloorCardScene extends HTMLElement {
     // Live positions come in as millimetres in each room's own frame. Only
     // exact positions get a figure; a room that is occupied without one is
     // outlined instead.
-    set presence({ people, rooms, houses }) {
+    set presence({ people, rooms, houses, trails = [] }) {
         const now = performance.now();
         const tracks = new Map();
         const motion = new Map();
@@ -197,6 +200,17 @@ class FloorCardScene extends HTMLElement {
         }
         this.#tracks = tracks;
         this.#motion = motion;
+        this.#trails = trails.flatMap(trail => {
+            const house = houses[trail.roomId];
+            if (!house || !Array.isArray(trail.points)) return [];
+            const points = trail.points.flatMap((point, index) =>
+                Number.isFinite(point?.x) && Number.isFinite(point?.y)
+                    ? [{ ...point, id: `${trail.id}-point-${index}`, roomId: trail.roomId,
+                        floor: trail.floor, x: point.x / 1000, y: point.y / 1000,
+                        approximate: false, house, heading: 0 }]
+                    : []);
+            return points.length > 1 ? [{ ...trail, points }] : [];
+        });
         this.#approximateRooms = new Set(rooms.filter(room => room.occupied && room.approximate).map(room => room.roomId));
         // Presence arrives every second, which is a good moment to notice evening has come.
         if (this.#scene?.view === '3d' && this.#daylight && this.#daylight !== daylightAt()) this.#render();
@@ -296,9 +310,18 @@ class FloorCardScene extends HTMLElement {
             const occupied = rooms.filter(room => this.#approximateRooms?.has(roomKey(room))).map(room => camera
                 ? `<polygon class="live-room" points="${roomCorners(room).map(corner => projectSpace(corner, .022, camera).join(',')).join(' ')}"/>`
                 : paintRoomSurface(room, 'class="live-room"'));
+            const trails = this.#trails.flatMap(trail => {
+                const points = liveFloorFigures(trail.points, rooms);
+                if (points.length < 2) return [];
+                const projected = points.map(point => camera
+                    ? projectSpace([point.x, point.y], .025, camera).join(',')
+                    : `${point.x},${point.y}`).join(' ');
+                const color = /^#[\da-f]{6}$/i.test(trail.color || '') ? trail.color : '#4361ee';
+                return [`<polyline class="live-trail" stroke="${color}" points="${projected}"/>`];
+            });
             const people = liveFloorFigures(this.#people, rooms);
             const figures = people.map(person => `<g class="live-target">${paintPerson(person, camera, motion)}</g>`);
-            const markup = occupied.join('') + figures.join('');
+            const markup = occupied.join('') + trails.join('') + figures.join('');
             if (layer.liveMarkup !== markup) {
                 layer.liveMarkup = markup;
                 layer.innerHTML = markup;

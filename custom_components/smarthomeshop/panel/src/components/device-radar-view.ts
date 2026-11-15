@@ -7,6 +7,43 @@ import { mapReportedZToRoom } from '../utils/multi-sensor-tracking';
 import { radarRoomFurnitureCorners } from '../utils/radar-room-geometry';
 import { projectRoomPoint2D, projectStandaloneRadar3D, radarTargetIsFresh } from '../utils/radar-view-projection';
 
+interface SharedFloorSceneModule {
+  prepareCardPlan(
+    project: unknown,
+    rooms: unknown[],
+    profiles: unknown[],
+    devices: unknown[],
+  ): SharedFloorPlan;
+}
+
+interface SharedFloorPlan {
+  floors: Array<{
+    id: string;
+    level: number;
+    name?: string | null;
+    plan: { rooms?: Array<{ id?: string; haRoom?: string }> };
+  }>;
+  staircase?: unknown;
+}
+
+interface FloorPlanRoom {
+  id: string;
+  name?: string;
+  house?: {
+    x?: number;
+    y?: number;
+    floor?: number;
+    rotationDeg?: number;
+    visible?: boolean;
+  };
+}
+
+const sharedFloorSceneUrl = new URL('/smarthomeshop_panel/floor-planner/card-scene.js', import.meta.url);
+sharedFloorSceneUrl.search = new URL(import.meta.url).search;
+let sharedFloorScenePromise: Promise<SharedFloorSceneModule | null> | undefined;
+const loadSharedFloorScene = (): Promise<SharedFloorSceneModule | null> =>
+  sharedFloorScenePromise ??= import(sharedFloorSceneUrl.href).catch(() => null);
+
 interface LiveRadarTarget {
   index: number;
   x_mm: number;
@@ -94,9 +131,14 @@ export class DeviceRadarView extends LitElement {
   @state() private _trailSeconds = 30;
   @state() private _rangeOverride = 0;
   @state() private _trailRevision = 0;
+  @state() private _sharedFloorPlan: SharedFloorPlan | null = null;
+  @state() private _sharedFloorRoom: FloorPlanRoom | null = null;
+  @state() private _sharedFloorLoading = false;
   private _trails = new Map<number, TrailPoint[]>();
   private _freshnessTimer?: number;
   private _radarReceivedAt = Date.now();
+  private _sharedFloorRoomId: string | null = null;
+  private _sharedFloorRequest = 0;
 
   static styles = css`
     :host { display: block; margin-bottom: 16px; }
@@ -118,6 +160,8 @@ export class DeviceRadarView extends LitElement {
     .check input { accent-color: var(--primary-color, #4361ee); }
     .spacer { flex: 1 1 auto; }
     .scene { position: relative; min-height: 330px; background: color-mix(in srgb, var(--secondary-background-color) 42%, var(--card-background-color)); }
+    .scene.shared-floor { height: min(58vw, 570px); min-height: 440px; background: var(--primary-background-color); }
+    shs-floor-card-scene { display: block; width: 100%; height: 100%; min-height: inherit; }
     svg { display: block; width: 100%; height: min(52vw, 430px); min-height: 330px; touch-action: pan-y; }
     .grid { stroke: color-mix(in srgb, var(--secondary-text-color) 20%, transparent); stroke-width: .35; vector-effect: non-scaling-stroke; }
     .axis { stroke: color-mix(in srgb, var(--secondary-text-color) 52%, transparent); stroke-width: .65; vector-effect: non-scaling-stroke; }
@@ -148,6 +192,7 @@ export class DeviceRadarView extends LitElement {
       .toolbar { align-items: stretch; }
       .spacer { display: none; }
       .scene, svg { min-height: 270px; }
+      .scene.shared-floor { height: 72vw; min-height: 310px; max-height: 440px; }
       svg { height: 72vw; max-height: 360px; }
     }
   `;
@@ -158,6 +203,7 @@ export class DeviceRadarView extends LitElement {
       this._radarReceivedAt = Date.now();
       this._captureTargets();
       if (!this.radar?.room_context && this._scope === 'room') this._scope = 'radar';
+      this._ensureSharedFloorPlan();
     }
   }
 
@@ -170,7 +216,63 @@ export class DeviceRadarView extends LitElement {
   disconnectedCallback(): void {
     if (this._freshnessTimer) window.clearInterval(this._freshnessTimer);
     this._freshnessTimer = undefined;
+    this._sharedFloorRequest += 1;
     super.disconnectedCallback();
+  }
+
+  private _ensureSharedFloorPlan(): void {
+    const roomId = String(this.radar?.room_context?.id || '').trim();
+    if (!roomId) {
+      this._sharedFloorRoomId = null;
+      this._sharedFloorPlan = null;
+      this._sharedFloorRoom = null;
+      this._sharedFloorLoading = false;
+      return;
+    }
+    if (roomId === this._sharedFloorRoomId
+      && (this._sharedFloorPlan || this._sharedFloorLoading)) return;
+    this._sharedFloorRoomId = roomId;
+    this._sharedFloorPlan = null;
+    this._sharedFloorRoom = null;
+    this._sharedFloorLoading = true;
+    const request = ++this._sharedFloorRequest;
+    void this._loadSharedFloorPlan(roomId, request);
+  }
+
+  private async _loadSharedFloorPlan(roomId: string, request: number): Promise<void> {
+    try {
+      const scene = await loadSharedFloorScene();
+      if (!scene || !this.hass || request !== this._sharedFloorRequest) return;
+      const [snapshot, profiles, inventory] = await Promise.all([
+        this.hass.callWS<{ project?: unknown; rooms?: FloorPlanRoom[] }>({ type: 'smarthomeshop/floor_plan' }),
+        this.hass.callWS<{ devices?: unknown[] }>({ type: 'smarthomeshop/radar/profiles' }).catch(() => ({ devices: [] })),
+        this.hass.callWS<{ devices?: unknown[]; hidden_devices?: Record<string, unknown>[] }>({ type: 'smarthomeshop/devices' }).catch(() => ({ devices: [], hidden_devices: [] })),
+      ]);
+      if (request !== this._sharedFloorRequest || roomId !== this._sharedFloorRoomId) return;
+      const rooms = Array.isArray(snapshot.rooms) ? snapshot.rooms : [];
+      const room = rooms.find(candidate => candidate.id === roomId) || null;
+      if (!room) return;
+      const devices = [
+        ...(Array.isArray(inventory.devices) ? inventory.devices : []),
+        ...(Array.isArray(inventory.hidden_devices)
+          ? inventory.hidden_devices.map(device => ({ ...device, hidden: true })) : []),
+      ];
+      const plan = scene.prepareCardPlan(
+        snapshot.project,
+        rooms,
+        Array.isArray(profiles.devices) ? profiles.devices : [],
+        devices,
+      );
+      const containsRoom = plan.floors.some(floor =>
+        (floor.plan.rooms || []).some(candidate => (candidate.haRoom || candidate.id) === roomId));
+      if (!containsRoom) return;
+      this._sharedFloorPlan = plan;
+      this._sharedFloorRoom = room;
+    } catch (error) {
+      console.warn('Could not load the shared Floorplan Designer scene for this device:', error);
+    } finally {
+      if (request === this._sharedFloorRequest) this._sharedFloorLoading = false;
+    }
   }
 
   private _captureTargets(): void {
@@ -550,6 +652,98 @@ export class DeviceRadarView extends LitElement {
       </svg>`;
   }
 
+  private _sharedFloorNumber(): number {
+    const roomId = this._sharedFloorRoomId;
+    const floor = this._sharedFloorPlan?.floors.find(candidate =>
+      (candidate.plan.rooms || []).some(room => (room.haRoom || room.id) === roomId));
+    return finite(this._sharedFloorRoom?.house?.floor)
+      ? this._sharedFloorRoom!.house!.floor!
+      : floor?.level ?? 0;
+  }
+
+  private _sharedFloorPresence() {
+    const room = this.radar?.room_context;
+    const roomId = String(room?.id || '');
+    const rawHouse = this._sharedFloorRoom?.house;
+    const house = {
+      x: finite(rawHouse?.x) ? rawHouse.x : 0,
+      y: finite(rawHouse?.y) ? rawHouse.y : 0,
+      floor: this._sharedFloorNumber(),
+      rotationDeg: finite(rawHouse?.rotationDeg) ? rawHouse.rotationDeg : 0,
+      visible: rawHouse?.visible !== false,
+    };
+    const people = this._targets().flatMap(target => {
+      const point = this._roomTarget(target);
+      return point ? [{
+        id: `${roomId}-radar-target-${target.index}`,
+        roomId,
+        floor: house.floor,
+        x: point.x,
+        y: point.y,
+        approximate: false,
+      }] : [];
+    });
+    const trails = this._showTrails ? [...this._trails.entries()].flatMap(([index, points]) => {
+      const roomPoints = points.flatMap(point => {
+        const projected = this._roomTarget(point);
+        return projected ? [{ x: projected.x, y: projected.y }] : [];
+      });
+      return roomPoints.length > 1 ? [{
+        id: `${roomId}-radar-trail-${index}`,
+        roomId,
+        floor: house.floor,
+        color: TARGET_COLORS[(index - 1) % TARGET_COLORS.length],
+        points: roomPoints,
+      }] : [];
+    }) : [];
+    return {
+      people,
+      trails,
+      rooms: [{ roomId, occupied: people.length > 0, approximate: false }],
+      houses: { [roomId]: house },
+    };
+  }
+
+  private _renderSharedFloorScene() {
+    const plan = this._sharedFloorPlan;
+    const room = this.radar?.room_context;
+    const roomId = String(room?.id || '');
+    if (!plan || !roomId) return nothing;
+    const floorNames = Object.fromEntries(plan.floors.map(floor => [
+      floor.level,
+      floor.name || (floor.level === 0
+        ? panelText(this.hass, 'Ground floor')
+        : panelText(this.hass, floor.level < 0 ? 'Basement {count}' : 'Floor {count}', { count: Math.abs(floor.level) })),
+    ]));
+    const dark = (this.hass?.themes as HomeAssistant['themes'] & { darkMode?: boolean } | undefined)?.darkMode
+      ?? window.matchMedia('(prefers-color-scheme: dark)').matches;
+    return html`<shs-floor-card-scene
+      .scene=${{
+        plan,
+        view: this._view,
+        scope: `room:${roomId}`,
+        rooms: [roomId],
+        roomNames: true,
+        spacing: .75,
+        focus: roomId,
+        floorNames,
+        locale: this.hass?.language,
+        dark,
+        labels: {
+          map: panelText(this.hass, 'Live floor plan'),
+          stairs: panelText(this.hass, 'Stairs'),
+          empty: panelText(this.hass, 'No rooms in this view'),
+        },
+      }}
+      .presence=${this._sharedFloorPresence()}
+    ></shs-floor-card-scene>`;
+  }
+
+  private _sharedSceneControl(action: 'rotate' | 'fit' | 'zoom-in' | 'zoom-out'): void {
+    this.renderRoot.querySelector<HTMLElement & { control?: (value: string) => void }>('shs-floor-card-scene')
+      ?.control?.(action);
+  }
+
   render() {
     if (!this.radar?.supported) return nothing;
     const targets = this._targets();
@@ -557,6 +751,7 @@ export class DeviceRadarView extends LitElement {
     const meters = this._rangeMm() / 1000;
     const room = this.radar.room_context;
     const roomScope = this._scope === 'room' && !!room;
+    const sharedFloor = roomScope && !!this._sharedFloorPlan;
     return html`
       <section class="card" aria-label=${panelText(this.hass, 'Live radar view')}>
         <div class="head">
@@ -595,6 +790,12 @@ export class DeviceRadarView extends LitElement {
           </select>
           <button @click=${this._clearTrails} ?disabled=${!this._showTrails}>${panelText(this.hass, 'Clear trail')}</button>
           <span class="spacer"></span>
+          ${sharedFloor ? html`
+            ${this._view === '3d' ? html`<button title=${panelText(this.hass, 'Rotate view')} aria-label=${panelText(this.hass, 'Rotate view')} @click=${() => this._sharedSceneControl('rotate')}><ha-icon icon="mdi:rotate-3d-variant"></ha-icon></button>` : nothing}
+            <button title=${panelText(this.hass, 'Zoom in')} aria-label=${panelText(this.hass, 'Zoom in')} @click=${() => this._sharedSceneControl('zoom-in')}><ha-icon icon="mdi:plus"></ha-icon></button>
+            <button title=${panelText(this.hass, 'Zoom out')} aria-label=${panelText(this.hass, 'Zoom out')} @click=${() => this._sharedSceneControl('zoom-out')}><ha-icon icon="mdi:minus"></ha-icon></button>
+            <button title=${panelText(this.hass, 'Fit to view')} aria-label=${panelText(this.hass, 'Fit to view')} @click=${() => this._sharedSceneControl('fit')}><ha-icon icon="mdi:fit-to-screen-outline"></ha-icon></button>
+          ` : nothing}
           ${!roomScope ? html`<label class="check">${panelText(this.hass, 'Range')}
             <select aria-label=${panelText(this.hass, 'Radar range')} .value=${String(this._rangeOverride)} @change=${(event: Event) => { this._rangeOverride = Number((event.target as HTMLSelectElement).value); }}>
               <option value="0">${panelText(this.hass, 'Auto')} · ${meters} m</option>
@@ -602,11 +803,11 @@ export class DeviceRadarView extends LitElement {
             </select>
           </label>` : nothing}
         </div>
-        <div class="scene">
-          ${roomScope
+        <div class="scene ${sharedFloor ? 'shared-floor' : ''}">
+          ${sharedFloor ? this._renderSharedFloorScene() : roomScope
             ? this._view === '2d' ? this._renderRoom2D() : this._renderRoom3D()
             : this._view === '2d' ? this._render2D() : this._render3D()}
-          ${targets.length === 0 && !this.unavailable ? html`
+          ${targets.length === 0 && !this.unavailable && !sharedFloor ? html`
             <div class="empty">
               <ha-icon icon="mdi:radar"></ha-icon>
               <span>${panelText(this.hass, 'No live target positions right now.')}</span>

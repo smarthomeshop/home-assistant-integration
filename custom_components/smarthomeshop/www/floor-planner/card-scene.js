@@ -2866,6 +2866,8 @@ styles.replaceSync(floor_planner_default + editor_ha_default.replace(/:root(\[[^
     [data-hide-names] :is(.fp-room-label,.fp-space-room-label) { display:none; }
     .live-room { fill:light-dark(#eb950d35,#ffb95232); stroke:light-dark(#9c5808,#ffcc83); stroke-width:1.6px;
         stroke-dasharray:5 3; vector-effect:non-scaling-stroke; }
+    .live-trail { fill:none; stroke-width:2px; stroke-linecap:round; stroke-linejoin:round; opacity:.58;
+        vector-effect:non-scaling-stroke; pointer-events:none; }
     .live-target, .live-room { pointer-events:none; }
     .empty-map { display:grid; place-items:center; height:100%; margin:0; padding:14px; text-align:center; color:var(--ha-muted); }
 `);
@@ -2916,6 +2918,7 @@ var FloorCardScene = class extends HTMLElement {
   #floors = [];
   #sceneKey = "";
   #people = [];
+  #trails = [];
   #root;
   constructor() {
     super();
@@ -2972,7 +2975,7 @@ var FloorCardScene = class extends HTMLElement {
   // Live positions come in as millimetres in each room's own frame. Only
   // exact positions get a figure; a room that is occupied without one is
   // outlined instead.
-  set presence({ people, rooms, houses }) {
+  set presence({ people, rooms, houses, trails = [] }) {
     const now = performance.now();
     const tracks = /* @__PURE__ */ new Map();
     const motion = /* @__PURE__ */ new Map();
@@ -3009,6 +3012,22 @@ var FloorCardScene = class extends HTMLElement {
     }
     this.#tracks = tracks;
     this.#motion = motion;
+    this.#trails = trails.flatMap((trail) => {
+      const house = houses[trail.roomId];
+      if (!house || !Array.isArray(trail.points)) return [];
+      const points = trail.points.flatMap((point2, index) => Number.isFinite(point2?.x) && Number.isFinite(point2?.y) ? [{
+        ...point2,
+        id: `${trail.id}-point-${index}`,
+        roomId: trail.roomId,
+        floor: trail.floor,
+        x: point2.x / 1e3,
+        y: point2.y / 1e3,
+        approximate: false,
+        house,
+        heading: 0
+      }] : []);
+      return points.length > 1 ? [{ ...trail, points }] : [];
+    });
     this.#approximateRooms = new Set(rooms.filter((room) => room.occupied && room.approximate).map((room) => room.roomId));
     if (this.#scene?.view === "3d" && this.#daylight && this.#daylight !== daylightAt()) this.#render();
     this.#animateLive();
@@ -3094,9 +3113,16 @@ var FloorCardScene = class extends HTMLElement {
     for (const layer of this.#root.querySelectorAll("[data-live-floor]")) {
       const rooms = this.#floors.find((floor) => floor.id === layer.dataset.liveFloor).plan.rooms;
       const occupied = rooms.filter((room) => this.#approximateRooms?.has(roomKey(room))).map((room) => camera ? `<polygon class="live-room" points="${roomCorners(room).map((corner) => projectSpace(corner, 0.022, camera).join(",")).join(" ")}"/>` : paintRoomSurface(room, 'class="live-room"'));
+      const trails = this.#trails.flatMap((trail) => {
+        const points = liveFloorFigures(trail.points, rooms);
+        if (points.length < 2) return [];
+        const projected = points.map((point2) => camera ? projectSpace([point2.x, point2.y], 0.025, camera).join(",") : `${point2.x},${point2.y}`).join(" ");
+        const color2 = /^#[\da-f]{6}$/i.test(trail.color || "") ? trail.color : "#4361ee";
+        return [`<polyline class="live-trail" stroke="${color2}" points="${projected}"/>`];
+      });
       const people = liveFloorFigures(this.#people, rooms);
       const figures2 = people.map((person) => `<g class="live-target">${paintPerson(person, camera, motion)}</g>`);
-      const markup = occupied.join("") + figures2.join("");
+      const markup = occupied.join("") + trails.join("") + figures2.join("");
       if (layer.liveMarkup !== markup) {
         layer.liveMarkup = markup;
         layer.innerHTML = markup;
