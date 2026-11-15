@@ -27,6 +27,9 @@ def resolve_api_base_url(stored_base_url: str | None = None) -> str:
 # Dispatcher signal fired when the smart-energy deadline schedules change, so
 # the binary_sensor platform can add/update/remove schedule entities live.
 SIGNAL_SCHEDULES_CHANGED: Final = f"{DOMAIN}_schedules_changed"
+SIGNAL_SMART_EV_CHANGED: Final = f"{DOMAIN}_smart_ev_changed"
+SIGNAL_SMART_LOADS_CHANGED: Final = f"{DOMAIN}_smart_loads_changed"
+SIGNAL_ROOMS_CHANGED: Final = f"{DOMAIN}_rooms_changed"
 
 # Product types
 PRODUCT_WATERP1METERKIT: Final = "waterp1meterkit"
@@ -165,12 +168,14 @@ CONF_PRICE_FEED_IN: Final = "price_feed_in"
 CONF_PRICE_GAS: Final = "price_gas"
 CONF_PRICE_WATER: Final = "price_water"
 CONF_MAIN_FUSE_AMPS: Final = "main_fuse_amps"
+CONF_MAIN_PHASES: Final = "main_connection_phases"
 DEFAULT_PRICE_T1: Final = 0.25   # EUR per kWh
 DEFAULT_PRICE_T2: Final = 0.25   # EUR per kWh
 DEFAULT_PRICE_FEED_IN: Final = 0.08  # EUR per kWh
 DEFAULT_PRICE_GAS: Final = 1.30  # EUR per m3
 DEFAULT_PRICE_WATER: Final = 1.55  # EUR per m3
 DEFAULT_MAIN_FUSE_AMPS: Final = 25.0
+DEFAULT_MAIN_PHASES: Final = "auto"
 
 # Events fired by the water leak engine
 EVENT_LEAK_DETECTED: Final = "smarthomeshop_leak_detected"

@@ -2,7 +2,11 @@
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+
+from custom_components.smarthomeshop import energy_runtime
 from custom_components.smarthomeshop.const import (
     CONF_PRODUCT_TYPE,
     DOMAIN,
@@ -10,7 +14,6 @@ from custom_components.smarthomeshop.const import (
     PRODUCT_ULTIMATESENSOR,
     PRODUCT_WATERP1METERKIT,
 )
-from custom_components.smarthomeshop import energy_runtime
 from custom_components.smarthomeshop.energy_runtime import (
     async_enable_energy_for_first_p1,
     async_ensure_energy_preference,
@@ -238,3 +241,75 @@ def test_disabling_energy_removes_account_devices_before_ha_2026_8(
 
     assert device_registry.removed == ["prices"]
     assert list(device_registry.devices) == ["p1meterkit"]
+
+
+def test_home_assistant_stop_event_releases_owned_ev_chargers(monkeypatch) -> None:
+    from custom_components.smarthomeshop import (
+        battery_control,
+        battery_coordinator,
+        ev_coordinator,
+        price_coordinator,
+        savings_tracker,
+        smart_load_coordinator,
+        solar_forecast,
+    )
+
+    class Coordinator:
+        def __init__(self):
+            self.data = {}
+            self.async_shutdown = AsyncMock()
+
+        async def async_refresh(self):
+            return None
+
+        async def async_request_refresh(self):
+            return None
+
+        def async_add_listener(self, _callback):
+            return lambda: None
+
+    prices = Coordinator()
+    solar = Coordinator()
+    battery = Coordinator()
+    smart_ev = Coordinator()
+    smart_loads = Coordinator()
+    monkeypatch.setattr(price_coordinator, "PriceCoordinator", lambda _hass: prices)
+    monkeypatch.setattr(
+        solar_forecast, "SolarForecastCoordinator", lambda _hass, _prices: solar
+    )
+    monkeypatch.setattr(
+        battery_coordinator, "BatteryPlanCoordinator", lambda _hass, _prices: battery
+    )
+    monkeypatch.setattr(
+        ev_coordinator, "SmartEVCoordinator", lambda _hass, _prices: smart_ev
+    )
+    monkeypatch.setattr(
+        smart_load_coordinator,
+        "SmartLoadCoordinator",
+        lambda _hass, _prices: smart_loads,
+    )
+    monkeypatch.setattr(savings_tracker, "async_setup_savings", lambda *_args: None)
+    monkeypatch.setattr(
+        battery_control, "async_register_battery_services", AsyncMock()
+    )
+
+    listeners = []
+    bus = SimpleNamespace(
+        async_listen_once=lambda event, callback: (
+            listeners.append((event, callback)) or (lambda: None)
+        )
+    )
+    store = _Store(sources={"energy_dashboard_enabled": True})
+    hass = _hass(store, PRODUCT_ULTIMATESENSOR)
+    hass.bus = bus
+    hass.async_create_task = lambda coro, *_args: asyncio.create_task(coro)
+
+    async def scenario():
+        await energy_runtime.async_setup_energy_runtime(hass)
+        assert listeners[0][0] == EVENT_HOMEASSISTANT_STOP
+        await listeners[0][1](SimpleNamespace())
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+
+    smart_ev.async_shutdown.assert_awaited_once()

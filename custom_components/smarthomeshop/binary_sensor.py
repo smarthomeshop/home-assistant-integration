@@ -6,17 +6,20 @@ from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    DOMAIN,
     CONF_PRODUCT_TYPE,
+    DOMAIN,
     PRODUCT_WATERFLOWKIT,
     PRODUCT_WATERMETERKIT,
     PRODUCT_WATERP1METERKIT,
 )
+from .energy_runtime import energy_runtime_enabled
+from .room_entities import claim_room_host, setup_room_binary_entities
 
 # Import shared water binary sensors from base module
 from .products.base.water import (
@@ -24,12 +27,11 @@ from .products.base.water import (
     WaterBinarySensorEntityDescription,
     WaterCoordinator,
 )
+from .products.waterflowkit.lines import line_label
 
 # The account-host election lives in the sensor platform so both platforms
 # agree on which entry carries the account-wide entities.
 from .sensor import adopt_account_entities, claim_account_host
-from .energy_runtime import energy_runtime_enabled
-from .products.waterflowkit.lines import line_label
 
 
 async def async_setup_entry(
@@ -42,6 +44,12 @@ async def async_setup_entry(
     product_type = config_entry.data.get(CONF_PRODUCT_TYPE)
 
     entities: list[BinarySensorEntity] = []
+
+    is_room_host = claim_room_host(hass, config_entry)
+    if is_room_host:
+        setup_room_binary_entities(
+            hass, config_entry, async_add_entities, entities
+        )
 
     # Water product binary sensors (shared between WaterP1MeterKit, WaterMeterKit)
     # WaterFlowKit uses ESPHome sensors directly + utility meters
@@ -98,10 +106,177 @@ async def async_setup_entry(
             for action in ("charge", "discharge")
         )
 
-    if is_account_host:
+    if is_account_host or is_room_host:
         adopt_account_entities(hass, config_entry, "binary_sensor", entities)
 
+    smart_ev = hass.data.get(DOMAIN, {}).get("smart_ev")
+    if is_account_host and smart_ev is not None:
+        _setup_ev_binary_sensors(
+            hass, config_entry, smart_ev, async_add_entities, entities
+        )
+
+    smart_loads = hass.data.get(DOMAIN, {}).get("smart_loads")
+    if is_account_host and smart_loads is not None:
+        _setup_load_binary_sensors(
+            hass, config_entry, smart_loads, async_add_entities, entities
+        )
+
     async_add_entities(entities)
+
+
+@callback
+def _setup_ev_binary_sensors(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    initial_entities: list[BinarySensorEntity],
+) -> None:
+    """Add/update/remove the charging and problem entities per vehicle.
+
+    Nothing is created while Smart EV is turned off; see the plan sensors.
+    """
+    from .const import SIGNAL_SMART_EV_CHANGED
+    from .energy_runtime import remove_feature_registry_entries
+    from .ev_entities import SmartHomeShopEVBinarySensor, smart_ev_entity_vehicles
+
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        return
+    known: dict[tuple[str, str], SmartHomeShopEVBinarySensor] = {}
+
+    def _vehicles() -> dict[str, dict[str, Any]]:
+        return smart_ev_entity_vehicles(store.get_smart_ev())
+
+    @callback
+    def _sync() -> None:
+        vehicles = _vehicles()
+        new: list[SmartHomeShopEVBinarySensor] = []
+        for vehicle_id, vehicle in vehicles.items():
+            for kind in ("charging", "problem"):
+                key = (vehicle_id, kind)
+                if key in known:
+                    known[key].update_vehicle(vehicle)
+                else:
+                    entity = SmartHomeShopEVBinarySensor(coordinator, vehicle, kind)
+                    known[key] = entity
+                    new.append(entity)
+        if new:
+            adopt_account_entities(hass, config_entry, "binary_sensor", new)
+            async_add_entities(new)
+        removed: list[str] = []
+        for key in list(known):
+            vehicle_id, kind = key
+            if vehicle_id in vehicles:
+                continue
+            entity = known.pop(key)
+            hass.async_create_task(entity.async_remove(force_remove=True))
+            removed.append(f"{DOMAIN}_ev_{vehicle_id}_{kind}")
+        remove_feature_registry_entries(
+            hass, "binary_sensor", removed, None if vehicles else (DOMAIN, "smart_ev")
+        )
+
+    wanted = _vehicles()
+    for vehicle_id, vehicle in wanted.items():
+        for kind in ("charging", "problem"):
+            entity = SmartHomeShopEVBinarySensor(coordinator, vehicle, kind)
+            known[(vehicle_id, kind)] = entity
+            initial_entities.append(entity)
+    remove_feature_registry_entries(
+        hass,
+        "binary_sensor",
+        [
+            f"{DOMAIN}_ev_{item.get('id')}_{kind}"
+            for item in store.get_smart_ev().get("vehicles", [])
+            if isinstance(item, dict) and str(item.get("id") or "") not in wanted
+            for kind in ("charging", "problem")
+        ],
+        None if wanted else (DOMAIN, "smart_ev"),
+    )
+    adopt_account_entities(hass, config_entry, "binary_sensor", list(known.values()))
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SMART_EV_CHANGED, _sync)
+    )
+
+
+@callback
+def _setup_load_binary_sensors(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    initial_entities: list[BinarySensorEntity],
+) -> None:
+    """Add/update/remove active and problem entities per Smart Load.
+
+    Nothing is created while Smart Loads is turned off; see the plan sensors.
+    """
+    from .const import SIGNAL_SMART_LOADS_CHANGED
+    from .energy_runtime import remove_feature_registry_entries
+    from .smart_load_entities import (
+        SmartHomeShopLoadBinarySensor,
+        smart_load_entity_loads,
+    )
+
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        return
+    known: dict[tuple[str, str], SmartHomeShopLoadBinarySensor] = {}
+
+    def _loads() -> dict[str, dict[str, Any]]:
+        return smart_load_entity_loads(store.get_smart_loads())
+
+    @callback
+    def _sync() -> None:
+        loads = _loads()
+        new: list[SmartHomeShopLoadBinarySensor] = []
+        for load_id, load in loads.items():
+            for kind in ("active", "problem"):
+                key = (load_id, kind)
+                if key in known:
+                    known[key].update_load(load)
+                else:
+                    entity = SmartHomeShopLoadBinarySensor(coordinator, load, kind)
+                    known[key] = entity
+                    new.append(entity)
+        if new:
+            adopt_account_entities(hass, config_entry, "binary_sensor", new)
+            async_add_entities(new)
+        removed: list[str] = []
+        for key in list(known):
+            load_id, kind = key
+            if load_id in loads:
+                continue
+            entity = known.pop(key)
+            hass.async_create_task(entity.async_remove(force_remove=True))
+            removed.append(f"{DOMAIN}_load_{load_id}_{kind}")
+        remove_feature_registry_entries(
+            hass, "binary_sensor", removed, None if loads else (DOMAIN, "smart_loads")
+        )
+
+    wanted = _loads()
+    for load_id, load in wanted.items():
+        for kind in ("active", "problem"):
+            entity = SmartHomeShopLoadBinarySensor(coordinator, load, kind)
+            known[(load_id, kind)] = entity
+            initial_entities.append(entity)
+    remove_feature_registry_entries(
+        hass,
+        "binary_sensor",
+        [
+            f"{DOMAIN}_load_{item.get('id')}_{kind}"
+            for item in store.get_smart_loads().get("loads", [])
+            if isinstance(item, dict) and str(item.get("id") or "") not in wanted
+            for kind in ("active", "problem")
+        ],
+        None if wanted else (DOMAIN, "smart_loads"),
+    )
+    adopt_account_entities(
+        hass, config_entry, "binary_sensor", list(known.values())
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SMART_LOADS_CHANGED, _sync)
+    )
 
 
 def _setup_schedule_sensors(

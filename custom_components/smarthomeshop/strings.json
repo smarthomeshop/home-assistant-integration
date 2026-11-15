@@ -65,7 +65,8 @@
           "price_feed_in": "Feed-in compensation",
           "price_gas": "Gas price",
           "price_water": "Water price",
-          "main_fuse_amps": "Main fuse per phase"
+          "main_fuse_amps": "Main fuse per phase",
+          "main_connection_phases": "Physical grid connection"
         },
         "data_description": {
           "continuous_flow_minutes": "Alert when water keeps flowing non-stop for this long. This catches a burst pipe, a forgotten garden hose or a running toilet. 30 minutes is a good default; choose longer if you often fill a bath or pool.",
@@ -77,8 +78,18 @@
           "price_feed_in": "What you receive per kWh that your solar panels feed back into the grid.",
           "price_gas": "What you pay per m³ of gas.",
           "price_water": "What you pay per m³ (1000 litres) of water. Used for the water cost sensor.",
-          "main_fuse_amps": "The size of your main fuse per phase (see your meter cupboard, e.g. 25A or 35A). Used for the phase load sensor."
+          "main_fuse_amps": "The size of your main fuse per phase (see your meter cupboard, e.g. 25A or 35A). Used for the phase load sensor.",
+          "main_connection_phases": "Select the physical number of phases in your meter cupboard. Automatic uses the enabled phases that the P1 meter actually reports and blocks charging when a phase that reported before goes missing."
         }
+      }
+    }
+  },
+  "selector": {
+    "main_connection_phases": {
+      "options": {
+        "auto": "Automatic (safest)",
+        "1": "1 phase",
+        "3": "3 phases"
       }
     }
   },
@@ -162,6 +173,12 @@
       "energy_cost_month": {
         "name": "Energy cost this month (CC)"
       },
+      "ev_plan": {
+        "name": "{name} plan"
+      },
+      "smart_load_plan": {
+        "name": "{name} plan"
+      },
       "room_quality": {
         "name": "Room Quality (CC)"
       },
@@ -170,6 +187,15 @@
       },
       "room_quality_percentage": {
         "name": "Room Quality Percentage (CC)"
+      },
+      "room_temperature": {
+        "name": "Room temperature"
+      },
+      "room_humidity": {
+        "name": "Room humidity"
+      },
+      "room_co2": {
+        "name": "Room CO2"
       }
     },
     "binary_sensor": {
@@ -196,6 +222,21 @@
       },
       "baseline_ready": {
         "name": "Baseline learned (CC)"
+      },
+      "ev_charging_planned": {
+        "name": "{name} charging planned"
+      },
+      "ev_problem": {
+        "name": "{name} problem"
+      },
+      "smart_load_active": {
+        "name": "{name} active"
+      },
+      "smart_load_problem": {
+        "name": "{name} problem"
+      },
+      "room_occupancy": {
+        "name": "Room occupancy"
       }
     }
   },
@@ -215,6 +256,32 @@
     "leak_detected": {
       "title": "Possible water leak on {device}",
       "description": "The leak detection of **{device}** reports a possible leak (type: {leak_type}).\n\nCheck your taps, toilet and appliances. This issue disappears automatically once water usage is back to normal."
+    },
+    "radar_in_two_rooms": {
+      "title": "{radar} is linked to more than one room",
+      "description": "**{radar}** is linked to these rooms: {rooms}. One radar cannot tell which of these rooms it sees, so their presence stays unknown.\n\nOpen **SmartHomeShop.io > Floorplan Designer** and unlink the radar from all rooms but one. This message disappears by itself."
+    },
+    "room_data_repaired": {
+      "title": "Room data was repaired",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Room data was repaired",
+            "description": "Some saved data of these rooms could not be read: {rooms}. Only the broken parts, such as a zone with invalid points, were removed. The rooms and their entities keep working.\n\nCheck these rooms in the Floorplan Designer. A copy of the original data is kept until you submit."
+          }
+        }
+      }
+    },
+    "room_data_unreadable": {
+      "title": "Saved room data could not be read",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Saved room data could not be read",
+            "description": "{count} saved room entries are damaged and cannot be shown. A copy is kept in `.storage/smarthomeshop.rooms` under `invalid_rooms`.\n\nSubmit to delete that copy once you no longer need it."
+          }
+        }
+      }
     }
   }
 }

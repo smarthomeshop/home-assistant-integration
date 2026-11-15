@@ -65,7 +65,8 @@
           "price_feed_in": "Einspeiseausgleich",
           "price_gas": "Gaspreis",
           "price_water": "Wasserpreis",
-          "main_fuse_amps": "Hauptsicherung pro Phase"
+          "main_fuse_amps": "Hauptsicherung pro Phase",
+          "main_connection_phases": "Physischer Netzanschluss"
         },
         "data_description": {
           "continuous_flow_minutes": "Alarmieren Sie, wenn das Wasser so lange ununterbrochen fließt. Dies fängt ein geplatztes Rohr, einen vergessenen Gartenschlauch oder eine laufende Toilette. 30 Minuten sind ein guter Standard; Wählen Sie länger, wenn Sie oft ein Bad oder einen Pool füllen.",
@@ -77,8 +78,18 @@
           "price_feed_in": "Was Sie pro kWh erhalten, das Ihre Solarmodule in das Netz zurückführen.",
           "price_gas": "Was Sie pro m³ von Gas bezahlen.",
           "price_water": "Was Sie pro m³ (1000 Liter) Wasser bezahlen. Wird für den Wasserkostensensor verwendet.",
-          "main_fuse_amps": "Die Größe Ihrer Hauptsicherung pro Phase (siehe Ihren Zählerschrank, z. B. 25A oder 35A). Wird für den Phasenlastsensor verwendet."
+          "main_fuse_amps": "Die Größe Ihrer Hauptsicherung pro Phase (siehe Ihren Zählerschrank, z. B. 25A oder 35A). Wird für den Phasenlastsensor verwendet.",
+          "main_connection_phases": "Wähle die physische Phasenanzahl im Zählerschrank. Automatisch verwendet die aktivierten Phasen, die der P1-Zähler tatsächlich meldet, und blockiert das Laden, sobald eine zuvor gemeldete Phase ausfällt."
         }
+      }
+    }
+  },
+  "selector": {
+    "main_connection_phases": {
+      "options": {
+        "auto": "Automatisch (am sichersten)",
+        "1": "1 Phase",
+        "3": "3 Phasen"
       }
     }
   },
@@ -162,6 +173,12 @@
       "energy_cost_month": {
         "name": "Energiekosten in diesem Monat (CC)"
       },
+      "ev_plan": {
+        "name": "Ladeplan {name}"
+      },
+      "smart_load_plan": {
+        "name": "Planung {name}"
+      },
       "room_quality": {
         "name": "Zimmerqualität (CC)"
       },
@@ -170,6 +187,15 @@
       },
       "room_quality_percentage": {
         "name": "Zimmerqualität Prozentsatz (CC)"
+      },
+      "room_temperature": {
+        "name": "Raumtemperatur"
+      },
+      "room_humidity": {
+        "name": "Raumluftfeuchtigkeit"
+      },
+      "room_co2": {
+        "name": "Raum-CO2"
       }
     },
     "binary_sensor": {
@@ -196,6 +222,21 @@
       },
       "baseline_ready": {
         "name": "Baseline gelernt (CC)"
+      },
+      "ev_charging_planned": {
+        "name": "Laden geplant für {name}"
+      },
+      "ev_problem": {
+        "name": "Problem bei {name}"
+      },
+      "smart_load_active": {
+        "name": "{name} aktiv"
+      },
+      "smart_load_problem": {
+        "name": "Problem bei {name}"
+      },
+      "room_occupancy": {
+        "name": "Raumbelegung"
       }
     }
   },
@@ -215,6 +256,32 @@
     "leak_detected": {
       "title": "Mögliches Wasserleck auf {device}",
       "description": "Die Leckerkennung von **{device}** meldet ein mögliches Leck (Typ: {leak_type}).\n\nÜberprüfen Sie Ihre Wasserhähne, Toiletten und Geräte. Dieses Problem verschwindet automatisch, sobald der Wasserverbrauch wieder normal ist."
+    },
+    "radar_in_two_rooms": {
+      "title": "{radar} ist mit mehr als einem Raum verknüpft",
+      "description": "**{radar}** ist mit diesen Räumen verknüpft: {rooms}. Ein Radar kann nicht unterscheiden, welchen dieser Räume es sieht, daher bleibt die Anwesenheit dort unbekannt.\n\nÖffne **SmartHomeShop.io > Grundriss-Designer** und entferne das Radar aus allen Räumen bis auf einen. Diese Meldung verschwindet von selbst."
+    },
+    "room_data_repaired": {
+      "title": "Raumdaten wurden repariert",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Raumdaten wurden repariert",
+            "description": "Ein Teil der gespeicherten Daten dieser Räume konnte nicht gelesen werden: {rooms}. Nur die beschädigten Teile, etwa eine Zone mit ungültigen Punkten, wurden entfernt. Die Räume und ihre Entitäten funktionieren weiter.\n\nPrüfe diese Räume im Grundriss-Designer. Eine Kopie der ursprünglichen Daten bleibt erhalten, bis du absendest."
+          }
+        }
+      }
+    },
+    "room_data_unreadable": {
+      "title": "Gespeicherte Raumdaten konnten nicht gelesen werden",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Gespeicherte Raumdaten konnten nicht gelesen werden",
+            "description": "{count} gespeicherte Räume sind beschädigt und können nicht angezeigt werden. Eine Kopie liegt in `.storage/smarthomeshop.rooms` unter `invalid_rooms`.\n\nSende ab, um diese Kopie zu löschen, sobald du sie nicht mehr brauchst."
+          }
+        }
+      }
     }
   }
 }

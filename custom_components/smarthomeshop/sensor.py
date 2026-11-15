@@ -37,6 +37,11 @@ from .const import (
     PRODUCT_WATERP1METERKIT,
 )
 from .energy_runtime import energy_runtime_enabled
+from .room_entities import (
+    claim_room_host,
+    setup_room_climate_entities,
+    track_room_host,
+)
 from .products.base.p1 import P1_SENSORS, P1SensorDescription
 
 # Import shared water sensors from base module
@@ -228,6 +233,16 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
+    # Every loaded entry watches the election. The current host's listener is
+    # removed with that entry, so failover needs a surviving listener already
+    # registered before the host is disabled or removed.
+    track_room_host(hass, config_entry)
+    is_room_host = claim_room_host(hass, config_entry)
+    if is_room_host:
+        setup_room_climate_entities(
+            hass, config_entry, async_add_entities, entities
+        )
+
     # Water product sensors (shared between WaterP1MeterKit, WaterMeterKit)
     # WaterFlowKit uses ESPHome sensors directly + utility meters
     if product_type in (
@@ -295,7 +310,19 @@ async def async_setup_entry(
             for description in BATTERY_SENSORS
         )
 
-    if is_account_host:
+    smart_ev = hass.data.get(DOMAIN, {}).get("smart_ev")
+    if is_account_host and smart_ev is not None:
+        _setup_ev_plan_sensors(
+            hass, config_entry, smart_ev, async_add_entities, entities
+        )
+
+    smart_loads = hass.data.get(DOMAIN, {}).get("smart_loads")
+    if is_account_host and smart_loads is not None:
+        _setup_load_plan_sensors(
+            hass, config_entry, smart_loads, async_add_entities, entities
+        )
+
+    if is_account_host or is_room_host:
         adopt_account_entities(hass, config_entry, "sensor", entities)
 
     async_add_entities(entities)
@@ -305,6 +332,154 @@ async def async_setup_entry(
         _add_solar_sensors_when_available(
             hass, config_entry, solar_forecast, async_add_entities
         )
+
+
+@callback
+def _setup_ev_plan_sensors(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    initial_entities: list[SensorEntity],
+) -> None:
+    """Add/update/remove one Smart EV plan sensor per configured vehicle.
+
+    No entities exist while Smart EV is turned off. Turning it on or off
+    sends SIGNAL_SMART_EV_CHANGED, so entities follow without a reload. The
+    coordinator keeps running either way and releases owned chargers.
+    """
+    from .const import SIGNAL_SMART_EV_CHANGED
+    from .energy_runtime import remove_feature_registry_entries
+    from .ev_entities import SmartHomeShopEVPlanSensor, smart_ev_entity_vehicles
+
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        return
+    known: dict[str, SmartHomeShopEVPlanSensor] = {}
+
+    def _vehicles() -> dict[str, dict[str, Any]]:
+        return smart_ev_entity_vehicles(store.get_smart_ev())
+
+    @callback
+    def _sync() -> None:
+        vehicles = _vehicles()
+        new: list[SmartHomeShopEVPlanSensor] = []
+        for vehicle_id, vehicle in vehicles.items():
+            if vehicle_id in known:
+                known[vehicle_id].update_vehicle(vehicle)
+            else:
+                entity = SmartHomeShopEVPlanSensor(coordinator, vehicle)
+                known[vehicle_id] = entity
+                new.append(entity)
+        if new:
+            adopt_account_entities(hass, config_entry, "sensor", new)
+            async_add_entities(new)
+        removed: list[str] = []
+        for vehicle_id in list(known):
+            if vehicle_id in vehicles:
+                continue
+            entity = known.pop(vehicle_id)
+            hass.async_create_task(entity.async_remove(force_remove=True))
+            removed.append(f"{DOMAIN}_ev_{vehicle_id}_plan")
+        remove_feature_registry_entries(
+            hass, "sensor", removed, None if vehicles else (DOMAIN, "smart_ev")
+        )
+
+    wanted = _vehicles()
+    for vehicle_id, vehicle in wanted.items():
+        entity = SmartHomeShopEVPlanSensor(coordinator, vehicle)
+        known[vehicle_id] = entity
+        initial_entities.append(entity)
+    # Entries left from a run where Smart EV was still on.
+    remove_feature_registry_entries(
+        hass,
+        "sensor",
+        [
+            f"{DOMAIN}_ev_{item.get('id')}_plan"
+            for item in store.get_smart_ev().get("vehicles", [])
+            if isinstance(item, dict) and str(item.get("id") or "") not in wanted
+        ],
+        None if wanted else (DOMAIN, "smart_ev"),
+    )
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SMART_EV_CHANGED, _sync)
+    )
+
+
+@callback
+def _setup_load_plan_sensors(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    coordinator: Any,
+    async_add_entities: AddConfigEntryEntitiesCallback,
+    initial_entities: list[SensorEntity],
+) -> None:
+    """Add/update/remove one plan sensor per configured Smart Load.
+
+    No entities exist while Smart Loads is turned off; the change signal adds
+    or removes them live. The coordinator keeps running to finish or stop
+    owned devices safely.
+    """
+    from .const import SIGNAL_SMART_LOADS_CHANGED
+    from .energy_runtime import remove_feature_registry_entries
+    from .smart_load_entities import (
+        SmartHomeShopLoadPlanSensor,
+        smart_load_entity_loads,
+    )
+
+    store = hass.data.get(DOMAIN, {}).get("store")
+    if store is None:
+        return
+    known: dict[str, SmartHomeShopLoadPlanSensor] = {}
+
+    def _loads() -> dict[str, dict[str, Any]]:
+        return smart_load_entity_loads(store.get_smart_loads())
+
+    @callback
+    def _sync() -> None:
+        loads = _loads()
+        new: list[SmartHomeShopLoadPlanSensor] = []
+        for load_id, load in loads.items():
+            if load_id in known:
+                known[load_id].update_load(load)
+            else:
+                entity = SmartHomeShopLoadPlanSensor(coordinator, load)
+                known[load_id] = entity
+                new.append(entity)
+        if new:
+            adopt_account_entities(hass, config_entry, "sensor", new)
+            async_add_entities(new)
+        removed: list[str] = []
+        for load_id in list(known):
+            if load_id in loads:
+                continue
+            entity = known.pop(load_id)
+            hass.async_create_task(entity.async_remove(force_remove=True))
+            removed.append(f"{DOMAIN}_load_{load_id}_plan")
+        remove_feature_registry_entries(
+            hass, "sensor", removed, None if loads else (DOMAIN, "smart_loads")
+        )
+
+    wanted = _loads()
+    for load_id, load in wanted.items():
+        entity = SmartHomeShopLoadPlanSensor(coordinator, load)
+        known[load_id] = entity
+        initial_entities.append(entity)
+    # Entries left from a run where Smart Loads was still on.
+    remove_feature_registry_entries(
+        hass,
+        "sensor",
+        [
+            f"{DOMAIN}_load_{item.get('id')}_plan"
+            for item in store.get_smart_loads().get("loads", [])
+            if isinstance(item, dict) and str(item.get("id") or "") not in wanted
+        ],
+        None if wanted else (DOMAIN, "smart_loads"),
+    )
+    adopt_account_entities(hass, config_entry, "sensor", list(known.values()))
+    config_entry.async_on_unload(
+        async_dispatcher_connect(hass, SIGNAL_SMART_LOADS_CHANGED, _sync)
+    )
 
 
 @callback

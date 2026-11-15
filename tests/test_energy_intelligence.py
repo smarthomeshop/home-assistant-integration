@@ -159,6 +159,27 @@ def test_load_profile_and_forecast_mapping_need_three_matching_days():
     assert series == [1.5]
 
 
+def test_load_profile_excludes_ev_charging_from_normal_house_load():
+    samples = []
+    for week in range(3):
+        moment = datetime(2026, 10, 5, 18, tzinfo=timezone.utc) + timedelta(
+            days=7 * week
+        )
+        samples.append(
+            _sample(
+                moment,
+                grid_w=4700,
+                solar_w=500,
+                battery_w=200,
+                ev_w=3500,
+            )
+        )
+
+    profile = learned_load_profile(samples, local_timezone=timezone.utc)
+
+    assert profile == {"0:18": 1.5}
+
+
 def test_trim_samples_discards_old_rows_and_keeps_a_bounded_order():
     now = datetime(2026, 11, 8, tzinfo=timezone.utc)
     rows = [

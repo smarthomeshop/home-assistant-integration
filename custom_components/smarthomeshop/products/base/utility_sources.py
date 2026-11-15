@@ -26,16 +26,21 @@ def meter_sources(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, str]:
         "energy_returned_tariff_1", "energy_returned_tariff_2",
         "energy_produced_tariff_1", "energy_produced_tariff_2",
         "gas_consumed", "gas_consumed_belgium", "water_total_consumption",
+        "current_phase_1", "current_phase_2", "current_phase_3",
     )
     result = {}
     for entity in er.async_entries_for_device(registry, device.id):
-        if entity.platform != "esphome" or entity.domain != "sensor" or entity.disabled_by is not None:
+        if entity.platform != "esphome" or entity.domain != "sensor":
             continue
         identities = [
             re.sub(r"[^a-z0-9]+", "_", str(value or "").lower()).strip("_")
             for value in (entity.entity_id, entity.unique_id, entity.original_name)
         ]
         for suffix in suffixes:
+            # Disabled phase entities stay mapped so enabling one later is read
+            # from the right entity. The tracker skips them while disabled.
+            if entity.disabled_by is not None and not suffix.startswith("current_phase_"):
+                continue
             aliases = ((suffix, "total_consumption")
                        if suffix == "water_total_consumption" and entry.data.get("product_type") == "watermeterkit"
                        else (suffix,))

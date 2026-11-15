@@ -88,7 +88,9 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         restore=True,
         value_fn=lambda data: data.standby_w,
-        attr_fn=lambda data: {"measured_night": data.standby_day} if data.standby_day else None,
+        attr_fn=lambda data: (
+            {"measured_night": data.standby_day} if data.standby_day else None
+        ),
     ),
     P1SensorDescription(
         key="standby_cost_year",
@@ -194,6 +196,10 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
         value_fn=lambda data: data.net_power_w,
+        attr_fn=lambda data: {
+            "source_fresh": data.net_source_fresh,
+            "source_age_seconds": data.net_source_age_seconds,
+        },
     ),
     # Headroom before the main fuse on the tightest phase, so automations can
     # avoid switching on a heavy load that would trip the connection.
@@ -206,5 +212,13 @@ P1_SENSORS: tuple[P1SensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
         value_fn=lambda data: data.available_grid_w,
+        attr_fn=lambda data: {
+            # The state stays at 0 W or more; the guards read this signed value.
+            "signed_headroom_w": data.signed_available_grid_w,
+            "source_fresh": data.phase_source_fresh,
+            "source_age_seconds": data.phase_source_age_seconds,
+            "phase_count": data.phase_count,
+            "observed_phase_count": data.observed_phase_count,
+        },
     ),
 )

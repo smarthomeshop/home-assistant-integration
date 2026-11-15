@@ -174,9 +174,13 @@ def learned_load_profile(
         # Stored battery power is +charge/-discharge.  House load equals grid
         # import + solar generation - the battery's grid effect.
         battery = number(item.get("battery_w"), 0.0)
+        ev = number(item.get("ev_w"), 0.0)
         if stamp is None or grid is None:
             continue
-        load = max(0.0, grid + (solar or 0.0) - (battery or 0.0)) / 1000
+        load = max(
+            0.0,
+            grid + (solar or 0.0) - (battery or 0.0) - (ev or 0.0),
+        ) / 1000
         local = stamp.astimezone(local_timezone)
         per_hour[(local.date().isoformat(), local.weekday(), local.hour)].append(load)
 

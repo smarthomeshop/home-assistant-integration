@@ -1,9 +1,15 @@
 """Fixtures for universal radar mounting and coordinate discovery."""
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+
 from custom_components.smarthomeshop.radar_profiles import (
     RadarEntitySnapshot,
     resolve_radar_device_profile,
 )
+from custom_components.smarthomeshop.websocket_api import _radar_live_snapshot
 
 
 def _entity(
@@ -75,6 +81,69 @@ def _resolve(name: str, model: str, entries: list[RadarEntitySnapshot]):
     )
 
 
+def _state(value: str):
+    now = datetime.now(UTC)
+    return SimpleNamespace(state=value, last_reported=now, last_updated=now)
+
+
+@pytest.mark.parametrize(
+    ("radar_model", "scale", "x", "y", "z", "expected"),
+    [
+        ("ld2450", 1, "850", "2400", None, (850, 2400, None)),
+        ("ld2460", 1000, "0.85", "2.4", None, (850, 2400, None)),
+        ("ld6002b", 1000, "0.85", "2.4", "1.2", (850, 2400, 1200)),
+    ],
+)
+def test_device_live_view_normalises_every_positioning_radar_to_millimetres(
+    radar_model: str,
+    scale: int,
+    x: str,
+    y: str,
+    z: str | None,
+    expected: tuple[int, int, int | None],
+) -> None:
+    prefix = f"arbitrary_{radar_model}"
+    entries = _metadata(prefix, mounting="ceiling" if radar_model == "ld6002b" else "wall", model=radar_model)
+    entries += _targets(prefix, 1, tracking=True, z=z is not None)
+    radar = _resolve("Custom entity prefix", "ultimatesensor_v2", entries)
+    assert radar.profile.coordinate_scale_to_mm == scale
+
+    states = {
+        radar.targets[0].x_entity_id: _state(x),
+        radar.targets[0].y_entity_id: _state(y),
+    }
+    if z is not None and radar.targets[0].z_entity_id:
+        states[radar.targets[0].z_entity_id] = _state(z)
+    hass = SimpleNamespace(states=SimpleNamespace(get=states.get))
+
+    snapshot = _radar_live_snapshot(hass, radar)
+
+    assert snapshot["supported"] is True
+    assert snapshot["radar_model"] == radar_model
+    assert len(snapshot["targets"]) == 1
+    target = snapshot["targets"][0]
+    assert (target["x_mm"], target["y_mm"], target["z_mm"]) == expected
+
+
+def test_device_live_view_drops_nan_and_unavailable_slots_without_retaining_them() -> None:
+    entries = _metadata("custom", mounting="wall", model="ld2460")
+    entries += _targets("custom", 3, tracking=True)
+    radar = _resolve("LD2460 custom IDs", "ultimatesensor_v2", entries)
+    states = {
+        radar.targets[0].x_entity_id: _state("1.0"),
+        radar.targets[0].y_entity_id: _state("2.0"),
+        radar.targets[1].x_entity_id: _state("NaN"),
+        radar.targets[1].y_entity_id: _state("3.0"),
+        radar.targets[2].x_entity_id: _state("unavailable"),
+        radar.targets[2].y_entity_id: _state("4.0"),
+    }
+    hass = SimpleNamespace(states=SimpleNamespace(get=states.get))
+
+    snapshot = _radar_live_snapshot(hass, radar)
+
+    assert [target["index"] for target in snapshot["targets"]] == [1]
+
+
 def test_mini_v1_ld2450_uses_wall_firmware_metadata() -> None:
     entries = _metadata("mini_v1", mounting="wall", model="ld2450") + _targets("mini_v1", 3)
     radar = _resolve("Kitchen Mini", "ultimatesensor_mini_v1", entries)
@@ -129,7 +198,7 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
             options=("side", "top"),
         ),
         _entity(
-            "text_sensor.another_arbitrary_reported_mode",
+            "sensor.another_arbitrary_reported_mode",
             "Tracking Radar Installation Mode",
             "top",
         ),
@@ -157,7 +226,7 @@ def test_mini_v2_ld2460_uses_scale_and_hardware_mode() -> None:
     assert radar.profile.required_installation_mode == "side"
     assert radar.profile.current_hardware_mode == "top"
     assert radar.profile.reported_installation_mode_entity_id == (
-        "text_sensor.another_arbitrary_reported_mode"
+        "sensor.another_arbitrary_reported_mode"
     )
     assert radar.profile.installation_mode_entity_id == (
         "select.arbitrary_user_renamed_mode_entity"
@@ -325,7 +394,61 @@ def test_ld6002b_maps_xyz_targets_but_uses_floor_xy_projection() -> None:
     assert radar.profile.coordinate_frame == "x_y_z"
     assert radar.profile.coordinate_projection == "floor_xy"
     assert radar.profile.coordinate_scale_to_mm == 1000
+    assert radar.profile.current_hardware_mode == "top"
+    assert radar.profile.reported_installation_mode_entity_id == (
+        "select.ceilsense_ld6002b_installation_mode"
+    )
     assert all(target.z_entity_id for target in radar.targets)
+
+
+def test_ld6002b_live_view_is_ready_in_top_mode_without_installation_angle() -> None:
+    entries = _metadata("ceilsense", mounting="ceiling", model="ld6002b")
+    entries += _targets("ceilsense", 1, tracking=True, z=True)
+    entries.append(
+        _entity(
+            "select.any_prefix_radar_installation_mode",
+            "Radar Installation Mode",
+            "top",
+            options=("top", "side"),
+        )
+    )
+    radar = _resolve("CeilSense V2 test", "ceilsense_v2", entries)
+    states = {
+        radar.targets[0].x_entity_id: _state("0.5"),
+        radar.targets[0].y_entity_id: _state("-0.6"),
+        radar.targets[0].z_entity_id: _state("1.5"),
+    }
+    hass = SimpleNamespace(states=SimpleNamespace(get=states.get))
+
+    snapshot = _radar_live_snapshot(hass, radar)
+
+    assert snapshot["installation_angle_deg"] is None
+    assert snapshot["current_hardware_mode"] == "top"
+    assert snapshot["installation_ready"] is True
+
+
+def test_unknown_reported_mode_does_not_fall_back_to_writable_select() -> None:
+    entries = _metadata("ceilsense", mounting="ceiling", model="ld6002b")
+    entries += _targets("ceilsense", 3, z=True)
+    entries += [
+        _entity(
+            "sensor.ceilsense_reported_mode",
+            "Tracking Installation Mode",
+            "unavailable",
+        ),
+        _entity(
+            "select.ceilsense_mode_control",
+            "Radar Installation Mode",
+            "top",
+            options=("top", "side"),
+        ),
+    ]
+    radar = _resolve("CeilSense LD6002B", "ceilsense_v1", entries)
+
+    assert radar.profile.current_hardware_mode is None
+    assert radar.profile.reported_installation_mode_entity_id == (
+        "sensor.ceilsense_reported_mode"
+    )
 
 
 def test_invalid_metadata_is_reported_and_legacy_defaults_remain_safe() -> None:
@@ -342,3 +465,31 @@ def test_invalid_metadata_is_reported_and_legacy_defaults_remain_safe() -> None:
     assert radar.profile.invalid_metadata_entities == (
         "Radar Coordinate Scale To Millimetres",
     )
+
+
+def test_diy_esphome_radar_without_metadata_is_still_discovered(monkeypatch) -> None:
+    """A radar found by entity name in 1.16 must stay selectable."""
+    from custom_components.smarthomeshop import radar_profiles
+
+    radar = SimpleNamespace(
+        id="diy-radar", name="Living radar", name_by_user=None,
+        manufacturer="Espressif", model="esp32dev",
+    )
+    plug = SimpleNamespace(
+        id="plug", name="Coffee plug", name_by_user=None,
+        manufacturer="Espressif", model="esp8285",
+    )
+    snapshots = {
+        radar.id: tuple(_targets("living_radar", 3)),
+        plug.id: (_entity("sensor.coffee_plug_power", "Power", "12"),),
+    }
+    monkeypatch.setattr(radar_profiles, "iter_esphome_source_devices", lambda _hass: [plug, radar])
+    monkeypatch.setattr(radar_profiles, "_snapshots_for_device", lambda _hass, device_id: snapshots[device_id])
+
+    profiles = radar_profiles.discover_radar_device_profiles(object())
+
+    assert [profile.device_id for profile in profiles] == ["diy-radar"]
+    assert profiles[0].profile.positioning_available is True
+    assert profiles[0].profile.radar_model == "ld2450"
+    # Rooms saved by 1.16 used the entity prefix as device id.
+    assert "living_radar" in profiles[0].aliases

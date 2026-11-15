@@ -13,14 +13,14 @@
       },
       "device": {
         "title": "Sélectionner {product_name}",
-        "description": "{product_description}\n\nSélectionnez l’appareil ESPHome correspondant à ce produit.",
+        "description": "{product_description}\n\nSélectionnez l'appareil ESPHome correspondant à ce produit.",
         "data": {
           "device_id": "Appareil ESPHome"
         }
       },
       "water_options": {
         "title": "Détection des fuites",
-        "description": "Ces capteurs ont été trouvés sur votre appareil :\n- Consommation d’eau : `{water_sensor}`\n- Débit : `{flow_sensor}`\n\nLa détection de fuite surveille ces capteurs et ajoute des entités d’alerte à Home Assistant. Choisissez les réglages adaptés à votre foyer. Vous pourrez tout modifier plus tard via **Configurer**.",
+        "description": "Ces capteurs ont été trouvés sur votre appareil :\n- Consommation d'eau : `{water_sensor}`\n- Débit : `{flow_sensor}`\n\nLa détection de fuite surveille ces capteurs et ajoute des entités d'alerte à Home Assistant. Choisissez les réglages adaptés à votre foyer. Vous pourrez tout modifier plus tard via **Configurer**.",
         "data": {
           "continuous_flow_minutes": "Alarme à flux continu après",
           "night_start": "Début de la surveillance nocturne",
@@ -65,7 +65,8 @@
           "price_feed_in": "Compensation de l'alimentation animale",
           "price_gas": "Prix du gaz",
           "price_water": "Prix de l'eau",
-          "main_fuse_amps": "Fusée principale par phase"
+          "main_fuse_amps": "Fusée principale par phase",
+          "main_connection_phases": "Raccordement physique au réseau"
         },
         "data_description": {
           "continuous_flow_minutes": "Alerte quand l'eau continue à couler sans arrêt pendant si longtemps. Cela prend un tuyau d'éclatement, un tuyau de jardin oublié ou une toilette courante. 30 minutes est un bon défaut; choisissez plus longtemps si vous remplissez souvent une baignoire ou une piscine.",
@@ -77,8 +78,18 @@
           "price_feed_in": "Ce que vous recevez par kWh que vos panneaux solaires retournent dans la grille.",
           "price_gas": "Ce que vous payez par m³ de gaz.",
           "price_water": "Ce que vous payez par m³ (1000 litres) d'eau. Utilisé pour le capteur de coût d'eau.",
-          "main_fuse_amps": "La taille de votre fusible principal par phase (voir votre armoire de compteur, p. ex. 25A ou 35A). Utilisé pour le capteur de charge de phase."
+          "main_fuse_amps": "La taille de votre fusible principal par phase (voir votre armoire de compteur, p. ex. 25A ou 35A). Utilisé pour le capteur de charge de phase.",
+          "main_connection_phases": "Sélectionnez le nombre physique de phases dans le coffret du compteur. Le mode automatique utilise les phases activées que le compteur P1 transmet réellement et bloque la charge dès qu'une phase déjà transmise disparaît."
         }
+      }
+    }
+  },
+  "selector": {
+    "main_connection_phases": {
+      "options": {
+        "auto": "Automatique (le plus sûr)",
+        "1": "1 phase",
+        "3": "3 phases"
       }
     }
   },
@@ -162,6 +173,12 @@
       "energy_cost_month": {
         "name": "Coût énergétique ce mois-ci (CC)"
       },
+      "ev_plan": {
+        "name": "Plan de recharge {name}"
+      },
+      "smart_load_plan": {
+        "name": "Planification {name}"
+      },
       "room_quality": {
         "name": "Qualité de la chambre (CC)"
       },
@@ -170,6 +187,15 @@
       },
       "room_quality_percentage": {
         "name": "Pourcentage de la qualité de la pièce (CC)"
+      },
+      "room_temperature": {
+        "name": "Température de la pièce"
+      },
+      "room_humidity": {
+        "name": "Humidité de la pièce"
+      },
+      "room_co2": {
+        "name": "CO2 de la pièce"
       }
     },
     "binary_sensor": {
@@ -196,6 +222,21 @@
       },
       "baseline_ready": {
         "name": "Données de référence apprises (CC)"
+      },
+      "ev_charging_planned": {
+        "name": "Recharge prévue pour {name}"
+      },
+      "ev_problem": {
+        "name": "Problème avec {name}"
+      },
+      "smart_load_active": {
+        "name": "{name} en marche"
+      },
+      "smart_load_problem": {
+        "name": "Problème avec {name}"
+      },
+      "room_occupancy": {
+        "name": "Occupation de la pièce"
       }
     }
   },
@@ -215,6 +256,32 @@
     "leak_detected": {
       "title": "Fuite d'eau possible sur {device}",
       "description": "La détection des fuites de **{device}** signale une fuite possible (type: {leak_type}).\n\nVérifiez vos robinets, toilettes et appareils. Ce problème disparaît automatiquement lorsque l'utilisation de l'eau est de retour à la normale."
+    },
+    "radar_in_two_rooms": {
+      "title": "{radar} est associé à plusieurs pièces",
+      "description": "**{radar}** est associé à ces pièces : {rooms}. Un radar ne peut pas savoir laquelle de ces pièces il voit, la présence y reste donc inconnue.\n\nOuvrez **SmartHomeShop.io > Concepteur de plan** et dissociez le radar de toutes les pièces sauf une. Ce message disparaît de lui-même."
+    },
+    "room_data_repaired": {
+      "title": "Les données des pièces ont été réparées",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Les données des pièces ont été réparées",
+            "description": "Une partie des données enregistrées de ces pièces n'a pas pu être lue : {rooms}. Seules les parties endommagées, comme une zone aux points invalides, ont été supprimées. Les pièces et leurs entités continuent de fonctionner.\n\nVérifiez ces pièces dans le Concepteur de plan. Une copie des données d'origine est conservée jusqu'à la validation."
+          }
+        }
+      }
+    },
+    "room_data_unreadable": {
+      "title": "Des données de pièces enregistrées sont illisibles",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Des données de pièces enregistrées sont illisibles",
+            "description": "{count} pièces enregistrées sont endommagées et ne peuvent pas être affichées. Une copie est conservée dans `.storage/smarthomeshop.rooms` sous `invalid_rooms`.\n\nValidez pour supprimer cette copie dès que vous n'en avez plus besoin."
+          }
+        }
+      }
     }
   }
 }

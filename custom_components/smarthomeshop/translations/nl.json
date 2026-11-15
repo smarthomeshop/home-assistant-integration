@@ -65,7 +65,8 @@
           "price_feed_in": "Terugleververgoeding",
           "price_gas": "Gasprijs",
           "price_water": "Waterprijs",
-          "main_fuse_amps": "Hoofdzekering per fase"
+          "main_fuse_amps": "Hoofdzekering per fase",
+          "main_connection_phases": "Fysieke netaansluiting"
         },
         "data_description": {
           "continuous_flow_minutes": "Waarschuw als er zó lang onafgebroken water blijft stromen. Dit vangt een gesprongen leiding, een vergeten tuinslang of een doorlopend toilet af. 30 minuten is een goed startpunt; kies langer als je vaak een bad of zwembad vult.",
@@ -77,8 +78,18 @@
           "price_feed_in": "Wat je ontvangt per kWh die je zonnepanelen terugleveren aan het net.",
           "price_gas": "Wat je betaalt per m³ gas.",
           "price_water": "Wat je betaalt per m³ (1000 liter) water. Gebruikt voor de waterkosten-sensor.",
-          "main_fuse_amps": "De grootte van je hoofdzekering per fase (zie je meterkast, bijv. 25A of 35A). Gebruikt voor de fasebelasting-sensor."
+          "main_fuse_amps": "De grootte van je hoofdzekering per fase (zie je meterkast, bijv. 25A of 35A). Gebruikt voor de fasebelasting-sensor.",
+          "main_connection_phases": "Kies het fysieke aantal fasen in je meterkast. Automatisch gebruikt de ingeschakelde fasen die de P1-meter echt meldt en blokkeert laden zodra een eerder gemelde fase wegvalt."
         }
+      }
+    }
+  },
+  "selector": {
+    "main_connection_phases": {
+      "options": {
+        "auto": "Automatisch (veiligst)",
+        "1": "1 fase",
+        "3": "3 fasen"
       }
     }
   },
@@ -162,6 +173,12 @@
       "energy_cost_month": {
         "name": "Energiekosten deze maand (CC)"
       },
+      "ev_plan": {
+        "name": "Laadplan {name}"
+      },
+      "smart_load_plan": {
+        "name": "Planning {name}"
+      },
       "room_quality": {
         "name": "Kamerkwaliteit (CC)"
       },
@@ -170,6 +187,15 @@
       },
       "room_quality_percentage": {
         "name": "Kamerkwaliteit percentage (CC)"
+      },
+      "room_temperature": {
+        "name": "Kamertemperatuur"
+      },
+      "room_humidity": {
+        "name": "Luchtvochtigheid kamer"
+      },
+      "room_co2": {
+        "name": "CO2 kamer"
       }
     },
     "binary_sensor": {
@@ -196,6 +222,21 @@
       },
       "baseline_ready": {
         "name": "Basispatroon geleerd (CC)"
+      },
+      "ev_charging_planned": {
+        "name": "Laden gepland voor {name}"
+      },
+      "ev_problem": {
+        "name": "Probleem met {name}"
+      },
+      "smart_load_active": {
+        "name": "{name} actief"
+      },
+      "smart_load_problem": {
+        "name": "Probleem met {name}"
+      },
+      "room_occupancy": {
+        "name": "Aanwezigheid kamer"
       }
     }
   },
@@ -215,6 +256,32 @@
     "leak_detected": {
       "title": "Mogelijk waterlek bij {device}",
       "description": "De lekdetectie van **{device}** meldt een mogelijk lek (type: {leak_type}).\n\nControleer je kranen, toilet en apparaten. Deze melding verdwijnt automatisch zodra het waterverbruik weer normaal is."
+    },
+    "radar_in_two_rooms": {
+      "title": "{radar} is aan meer dan één kamer gekoppeld",
+      "description": "**{radar}** is gekoppeld aan deze kamers: {rooms}. Eén radar kan niet zien in welke van deze kamers iemand is, dus hun aanwezigheid blijft onbekend.\n\nOpen **SmartHomeShop.io > Plattegrondontwerper** en koppel de radar los van alle kamers op één na. Deze melding verdwijnt vanzelf."
+    },
+    "room_data_repaired": {
+      "title": "Kamergegevens zijn hersteld",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Kamergegevens zijn hersteld",
+            "description": "Een deel van de opgeslagen gegevens van deze kamers kon niet worden gelezen: {rooms}. Alleen de kapotte delen, zoals een zone met ongeldige punten, zijn verwijderd. De kamers en hun entiteiten blijven werken.\n\nControleer deze kamers in de Plattegrondontwerper. Een kopie van de oorspronkelijke gegevens blijft bewaard tot je verzendt."
+          }
+        }
+      }
+    },
+    "room_data_unreadable": {
+      "title": "Opgeslagen kamergegevens konden niet worden gelezen",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Opgeslagen kamergegevens konden niet worden gelezen",
+            "description": "{count} opgeslagen kamers zijn beschadigd en kunnen niet worden getoond. Een kopie staat in `.storage/smarthomeshop.rooms` onder `invalid_rooms`.\n\nVerzend om die kopie te verwijderen zodra je hem niet meer nodig hebt."
+          }
+        }
+      }
     }
   }
 }

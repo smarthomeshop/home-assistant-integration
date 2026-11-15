@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
@@ -28,10 +30,14 @@ _ACCOUNT_ENTITY_PREFIXES = (
     f"{DOMAIN}_smart_savings_",
     f"{DOMAIN}_battery_",
     f"{DOMAIN}_schedule_",
+    f"{DOMAIN}_ev_",
+    f"{DOMAIN}_load_",
 )
 _ACCOUNT_DEVICE_IDENTIFIERS = (
     (DOMAIN, "energy_prices"),
     (DOMAIN, "battery_planner"),
+    (DOMAIN, "smart_ev"),
+    (DOMAIN, "smart_loads"),
 )
 
 
@@ -59,7 +65,12 @@ def _legacy_installation_uses_energy(hass: HomeAssistant, store: Any) -> bool:
         return True
     if store.get_account().get("api_key"):
         return True
-    if store.get_battery().get("enabled") or store.get_schedules():
+    smart_loads = getattr(store, "get_smart_loads", dict)()
+    if (
+        store.get_battery().get("enabled")
+        or store.get_schedules()
+        or smart_loads.get("loads")
+    ):
         return True
     return any(
         entry.data.get(CONF_PRODUCT_TYPE) in _P1_PRODUCTS
@@ -116,7 +127,11 @@ async def async_enable_energy_for_first_p1(
 
 
 async def _async_initial_energy_refresh(
-    prices: Any, solar_forecast: Any, battery_plan: Any
+    prices: Any,
+    solar_forecast: Any,
+    battery_plan: Any,
+    smart_ev: Any,
+    smart_loads: Any,
 ) -> None:
     """Warm the enabled Energy coordinators without delaying setup."""
     try:
@@ -146,6 +161,24 @@ async def _async_initial_energy_refresh(
     except Exception as err:
         LOGGER.warning("Initial battery plan refresh failed: %s", err)
 
+    try:
+        await asyncio.wait_for(smart_ev.async_refresh(), timeout=35)
+    except TimeoutError:
+        LOGGER.warning("Initial Smart EV refresh timed out after 35 seconds")
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:
+        LOGGER.warning("Initial Smart EV refresh failed: %s", err)
+
+    try:
+        await asyncio.wait_for(smart_loads.async_refresh(), timeout=35)
+    except TimeoutError:
+        LOGGER.warning("Initial Smart Loads refresh timed out after 35 seconds")
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:
+        LOGGER.warning("Initial Smart Loads refresh failed: %s", err)
+
 
 async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
     """Start account-wide Energy services when the feature is enabled."""
@@ -155,16 +188,22 @@ async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
 
     from .battery_control import async_register_battery_services
     from .battery_coordinator import BatteryPlanCoordinator
+    from .ev_coordinator import SmartEVCoordinator
     from .price_coordinator import PriceCoordinator
     from .savings_tracker import async_setup_savings
+    from .smart_load_coordinator import SmartLoadCoordinator
     from .solar_forecast import SolarForecastCoordinator
 
     prices = PriceCoordinator(hass)
     solar_forecast = SolarForecastCoordinator(hass, prices)
     battery_plan = BatteryPlanCoordinator(hass, prices)
+    smart_ev = SmartEVCoordinator(hass, prices)
+    smart_loads = SmartLoadCoordinator(hass, prices)
     domain_data["prices"] = prices
     domain_data["solar_forecast"] = solar_forecast
     domain_data["battery_plan"] = battery_plan
+    domain_data["smart_ev"] = smart_ev
+    domain_data["smart_loads"] = smart_loads
     async_setup_savings(hass, prices)
 
     previous_unsubscribe = domain_data.pop("battery_price_unsubscribe", None)
@@ -173,6 +212,47 @@ async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
     domain_data["battery_price_unsubscribe"] = prices.async_add_listener(
         lambda: hass.async_create_task(battery_plan.async_request_refresh())
     )
+    domain_data["ev_price_unsubscribe"] = prices.async_add_listener(
+        lambda: hass.async_create_task(smart_ev.async_request_refresh())
+    )
+    domain_data["loads_price_unsubscribe"] = prices.async_add_listener(
+        lambda: hass.async_create_task(smart_loads.async_request_refresh())
+    )
+    # Automatic EV control must keep evaluating even if a user disables every
+    # optional plan/status entity in the registry. A coordinator only polls
+    # while it has a listener, so retain one for the account-wide runtime.
+    domain_data["smart_ev_runtime_unsubscribe"] = smart_ev.async_add_listener(
+        lambda: None
+    )
+    domain_data["smart_loads_runtime_unsubscribe"] = smart_loads.async_add_listener(
+        lambda: None
+    )
+
+    async def _async_stop_smart_ev(_event: Event) -> None:
+        """Stop owned chargers while Home Assistant is still operational."""
+        await smart_ev.async_shutdown()
+
+    previous_stop_unsubscribe = domain_data.pop(
+        "smart_ev_stop_unsubscribe", None
+    )
+    if previous_stop_unsubscribe:
+        previous_stop_unsubscribe()
+    domain_data["smart_ev_stop_unsubscribe"] = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP,
+        _async_stop_smart_ev,
+    )
+
+    async def _async_stop_smart_loads(_event: Event) -> None:
+        """Stop only owned Smart Loads while Home Assistant is operational."""
+        await smart_loads.async_shutdown()
+
+    previous_load_stop = domain_data.pop("smart_loads_stop_unsubscribe", None)
+    if previous_load_stop:
+        previous_load_stop()
+    domain_data["smart_loads_stop_unsubscribe"] = hass.bus.async_listen_once(
+        EVENT_HOMEASSISTANT_STOP,
+        _async_stop_smart_loads,
+    )
     # A coordinator only polls while something listens. The planner reads the
     # forecast without listening, and accounts without one have no sensors.
     domain_data["solar_forecast_unsubscribe"] = solar_forecast.async_add_listener(
@@ -180,7 +260,9 @@ async def async_setup_energy_runtime(hass: HomeAssistant) -> None:
     )
     await async_register_battery_services(hass)
     domain_data["initial_energy_refresh_task"] = hass.async_create_task(
-        _async_initial_energy_refresh(prices, solar_forecast, battery_plan),
+        _async_initial_energy_refresh(
+            prices, solar_forecast, battery_plan, smart_ev, smart_loads
+        ),
         f"{DOMAIN}_initial_energy_refresh",
     )
 
@@ -193,7 +275,16 @@ async def async_stop_energy_runtime(hass: HomeAssistant) -> None:
         if task is not None and not task.done():
             task.cancel()
 
-    for key in ("battery_price_unsubscribe", "solar_forecast_unsubscribe"):
+    for key in (
+        "battery_price_unsubscribe",
+        "ev_price_unsubscribe",
+        "loads_price_unsubscribe",
+        "solar_forecast_unsubscribe",
+        "smart_ev_runtime_unsubscribe",
+        "smart_ev_stop_unsubscribe",
+        "smart_loads_runtime_unsubscribe",
+        "smart_loads_stop_unsubscribe",
+    ):
         unsubscribe = domain_data.pop(key, None)
         if unsubscribe:
             unsubscribe()
@@ -206,6 +297,12 @@ async def async_stop_energy_runtime(hass: HomeAssistant) -> None:
     if prices is not None:
         prices.async_shutdown()
     domain_data.pop("battery_plan", None)
+    smart_ev = domain_data.pop("smart_ev", None)
+    if smart_ev is not None:
+        await smart_ev.async_shutdown()
+    smart_loads = domain_data.pop("smart_loads", None)
+    if smart_loads is not None:
+        await smart_loads.async_shutdown()
     domain_data.pop("account_host", None)
 
     from .battery_control import SERVICE_APPLY_RECOMMENDATION
@@ -225,6 +322,32 @@ def remove_account_energy_registry_entries(hass: HomeAssistant) -> None:
     device_registry = dr.async_get(hass)
     for identifier in _ACCOUNT_DEVICE_IDENTIFIERS:
         for device in _account_devices(device_registry, identifier):
+            device_registry.async_remove_device(device.id)
+
+
+def remove_feature_registry_entries(
+    hass: HomeAssistant,
+    entity_domain: str,
+    unique_ids: Iterable[str],
+    device_identifier: tuple[str, str] | None = None,
+) -> None:
+    """Remove registry entries of Smart EV or Smart Loads entities not provided.
+
+    With a device identifier, the service device is removed as well once no
+    entity uses it anymore, so a feature that is turned off leaves nothing.
+    """
+    entity_registry = er.async_get(hass)
+    for unique_id in unique_ids:
+        entity_id = entity_registry.async_get_entity_id(entity_domain, DOMAIN, unique_id)
+        if entity_id:
+            entity_registry.async_remove(entity_id)
+    if device_identifier is None:
+        return
+    device_registry = dr.async_get(hass)
+    for device in _account_devices(device_registry, device_identifier):
+        if not er.async_entries_for_device(
+            entity_registry, device.id, include_disabled_entities=True
+        ):
             device_registry.async_remove_device(device.id)
 
 

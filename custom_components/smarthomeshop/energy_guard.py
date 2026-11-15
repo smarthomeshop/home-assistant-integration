@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant, State
@@ -12,6 +13,17 @@ from .const import DOMAIN
 from .energy_intelligence import guard_battery_power, number
 
 _INVALID_STATES = {"", "none", "unknown", "unavailable"}
+_DISPATCH_LOCK = "energy_dispatch_lock"
+
+
+def energy_dispatch_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """Return the shared lock for battery, EV and Smart Load start budgets."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    lock = domain_data.get(_DISPATCH_LOCK)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        domain_data[_DISPATCH_LOCK] = lock
+    return lock
 
 
 def _power_w(state: State | None) -> float | None:
@@ -59,9 +71,7 @@ def _resolve_p1_helper(
             return matches[0]
         return None
 
-    matches = [
-        entry.entity_id for entry in registry.entities.values() if usable(entry)
-    ]
+    matches = [entry.entity_id for entry in registry.entities.values() if usable(entry)]
     return matches[0] if len(matches) == 1 else None
 
 
@@ -76,9 +86,7 @@ def resolve_grid_power_entity(
 
 def resolve_fuse_headroom_entity(hass: HomeAssistant) -> str | None:
     """Resolve P1 headroom on the most heavily loaded phase."""
-    return _resolve_p1_helper(
-        hass, "_available_grid_power", "_available_grid_power"
-    )
+    return _resolve_p1_helper(hass, "_available_grid_power", "_available_grid_power")
 
 
 def _measurement(
@@ -88,16 +96,41 @@ def _measurement(
     value = _power_w(state)
     age: float | None = None
     if state is not None:
+        # Home Assistant only advances ``last_updated`` when the value or its
+        # attributes change.  P1 helpers can legitimately report the same
+        # rounded value for minutes, while ``last_reported`` still proves that
+        # the source is alive.  Using the newest timestamp prevents stable
+        # night-time loads from being mistaken for stale telemetry.
+        reported_at = max(
+            state.last_updated,
+            getattr(state, "last_reported", state.last_updated),
+        )
         age = max(
             0.0,
-            (datetime.now(timezone.utc) - state.last_updated).total_seconds(),
+            (datetime.now(UTC) - reported_at).total_seconds(),
         )
+    # SmartHomeShop P1 helpers publish the freshness of their underlying
+    # ESPHome sources.  The helper itself updates every coordinator cycle, so
+    # its own timestamp must never hide a stale or unavailable raw meter.
+    source_fresh = state.attributes.get("source_fresh") if state else None
+    source_age = number(state.attributes.get("source_age_seconds")) if state else None
+    if source_age is not None:
+        # ``source_age`` was measured when the helper last updated.  Time has
+        # continued to pass since then, so the current raw-source age is the
+        # helper age plus that recorded age (not merely the larger of both).
+        age = (age or 0.0) + source_age
+    fresh = value is not None and age is not None and age <= max_age
+    if source_fresh is False:
+        fresh = False
     return {
         "entity_id": entity_id,
         "power_w": value,
         "age_seconds": round(age, 1) if age is not None else None,
-        "fresh": value is not None and age is not None and age <= max_age,
+        "fresh": fresh,
         "max_age_seconds": round(max_age),
+        "phase_count": int(number(state.attributes.get("phase_count"), 0) or 0)
+        if state
+        else 0,
     }
 
 
@@ -122,7 +155,14 @@ def fuse_headroom_measurement(
         15.0,
         float(number(config.get("grid_data_max_age"), 90.0) or 90.0),
     )
-    return _measurement(hass, resolve_fuse_headroom_entity(hass), max_age)
+    result = _measurement(hass, resolve_fuse_headroom_entity(hass), max_age)
+    state = hass.states.get(result["entity_id"]) if result["entity_id"] else None
+    signed = number(state.attributes.get("signed_headroom_w")) if state else None
+    if signed is not None and result["power_w"] is not None:
+        # The sensor state never drops below 0 W for user automations. Use the
+        # signed value so an existing overload still reduces running loads.
+        result["power_w"] = signed
+    return result
 
 
 def source_power_w(hass: HomeAssistant, key: str) -> float | None:
@@ -140,6 +180,21 @@ def current_battery_power_w(hass: HomeAssistant) -> float | None:
     """Return battery power using planner convention: +charge, -discharge."""
     source_value = source_power_w(hass, "battery_power")
     return -source_value if source_value is not None else None
+
+
+def battery_power_measurement(
+    hass: HomeAssistant, max_age: float = 90.0
+) -> dict[str, Any]:
+    """Return fresh battery power using planner convention (+charge)."""
+    store = hass.data.get(DOMAIN, {}).get("store")
+    sources = store.get_energy_sources() if store else {}
+    result = _measurement(hass, sources.get("battery_power"), max(15.0, max_age))
+    value = result.get("power_w")
+    if value is not None:
+        if sources.get("battery_invert"):
+            value = -value
+        result["power_w"] = -value
+    return result
 
 
 def solar_power_w(hass: HomeAssistant) -> float | None:
@@ -197,11 +252,13 @@ def evaluate_battery_guard(
             )
         else:
             current = current_battery_power_w(hass) or 0.0
-            margin = max(
-                0.0, number(config.get("grid_safety_margin"), 250.0) or 0.0
+            margin = max(0.0, number(config.get("grid_safety_margin"), 250.0) or 0.0)
+            # Headroom may be negative while a phase is already overloaded.
+            # Preserve that negative signal so the requested battery target is
+            # reduced far enough instead of keeping the current charge power.
+            fuse_allowed = max(
+                0.0, current + float(fuse["power_w"] or 0.0) - margin
             )
-            fuse_limit = max(0.0, float(fuse["power_w"] or 0.0) - margin)
-            fuse_allowed = max(0.0, current + fuse_limit)
             previous = float(
                 number(result.get("allowed_power_w"), requested_power_w) or 0.0
             )
@@ -211,9 +268,7 @@ def evaluate_battery_guard(
                 fuse_reason = "Main-fuse phase headroom limited the battery target"
                 projected = None
                 if measurement["power_w"] is not None:
-                    projected = round(
-                        float(measurement["power_w"]) - current + allowed
-                    )
+                    projected = round(float(measurement["power_w"]) - current + allowed)
                 result.update(
                     status="blocked" if allowed < 1 else "limited",
                     reason=f"{reason}; {fuse_reason}" if reason else fuse_reason,

@@ -7,10 +7,11 @@ small, explicit legacy fallback for devices that have not been updated yet.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import math
 import re
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 from .const import (
     PRODUCT_CEILSENSE,
@@ -386,7 +387,12 @@ def _reported_installation_mode(
     """Resolve the read-only mode reported by the radar itself."""
     candidates: list[tuple[int, str, RadarEntitySnapshot]] = []
     for entity in entities:
-        if entity.platform != "esphome" or not entity.entity_id.startswith("text_sensor."):
+        # ESPHome TextSensorInfo is exposed by Home Assistant on the sensor
+        # platform. Accept the legacy text_sensor domain as well so existing
+        # fixtures and older adapters remain compatible.
+        if entity.platform != "esphome" or not entity.entity_id.startswith(
+            ("sensor.", "text_sensor.")
+        ):
             continue
         original = _normalise(entity.original_name)
         if original in {
@@ -582,6 +588,18 @@ def resolve_radar_device_profile(
     targets = _discover_targets(snapshots, maximum_targets)
     current_mode, reported_mode_entity = _reported_installation_mode(snapshots)
     mode_entity, mode_options = _installation_mode_control(snapshots)
+    if reported_mode_entity is None and mode_entity:
+        # Some LD6002B and early LD2460 firmware only expose the writable
+        # select. Its readback is still registry-associated, authoritative
+        # mode evidence and must be watched just like the diagnostic sensor.
+        mode_snapshot = next(
+            (snapshot for snapshot in snapshots if snapshot.entity_id == mode_entity),
+            None,
+        )
+        selected_mode = _valid_state(mode_snapshot.state) if mode_snapshot else None
+        if selected_mode in {"top", "side"}:
+            current_mode = selected_mode
+        reported_mode_entity = mode_entity
     height_entity: str | None = None
     height_m: float | None = None
     angle_entity: str | None = None
@@ -774,7 +792,22 @@ def discover_radar_device_profiles(hass: Any) -> list[RadarDeviceProfile]:
                 "ultimate sensor",
             )
         )
-        if not known_product and not has_metadata and not has_known_identity:
+        # A DIY ESPHome radar has no product metadata, but its target X/Y
+        # sensors are enough to place it. Earlier versions found these in the
+        # panel by entity name; keep them selectable.
+        target_axes = {
+            axis for entity in snapshots if (axis := _target_axis(entity)) is not None
+        }
+        has_target_pair = any(
+            coordinate == "x" and (index, "y") in target_axes
+            for index, coordinate in target_axes
+        )
+        if (
+            not known_product
+            and not has_metadata
+            and not has_known_identity
+            and not has_target_pair
+        ):
             continue
 
         resolved = resolve_radar_device_profile(

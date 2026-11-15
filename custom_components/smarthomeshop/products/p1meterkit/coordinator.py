@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from ...const import CONF_DEVICE_ID, DOMAIN, LOGGER, UPDATE_INTERVAL_SECONDS
 from ...device_linking import resolve_source_device
 from ..base.p1 import EnergyData, EnergyTracker
+from ..base.utility_sources import meter_sources
 
 
 class P1MeterKitCoordinator(DataUpdateCoordinator[EnergyData]):
@@ -34,7 +35,11 @@ class P1MeterKitCoordinator(DataUpdateCoordinator[EnergyData]):
         self.entity_prefix = prefix
         self.short_device_id = short_id
         self.energy_tracker = EnergyTracker(
-            hass, config_entry, prefix, f"p1_{short_id}"
+            hass,
+            config_entry,
+            prefix,
+            f"p1_{short_id}",
+            source_entities=meter_sources(hass, config_entry),
         )
 
         LOGGER.info(

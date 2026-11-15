@@ -75,6 +75,7 @@ def test_device_entities_report_registry_disabled_state(monkeypatch) -> None:
     registry = _Registry(entity)
     monkeypatch.setattr(websocket_api.er, "async_get", lambda _hass: registry)
     monkeypatch.setattr(websocket_api, "resolve_source_device", lambda *_args: None)
+    monkeypatch.setattr(websocket_api, "radar_profile_for_device", lambda *_args: None)
     hass = SimpleNamespace(states={})
     connection = _Connection()
 

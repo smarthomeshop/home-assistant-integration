@@ -65,7 +65,8 @@
           "price_feed_in": "Indemnización por alimentos",
           "price_gas": "Precio del gas",
           "price_water": "Precio del agua",
-          "main_fuse_amps": "Fusible principal por fase"
+          "main_fuse_amps": "Fusible principal por fase",
+          "main_connection_phases": "Conexión física a la red"
         },
         "data_description": {
           "continuous_flow_minutes": "Alerta cuando el agua sigue fluyendo sin parar durante tanto tiempo. Esto atrapa una tubería de ráfaga, una manguera de jardín olvidada o un inodoro en funcionamiento. 30 minutos es un buen defecto; elige más tiempo si a menudo llena un baño o piscina.",
@@ -77,8 +78,18 @@
           "price_feed_in": "Lo que recibe por kWh que sus paneles solares se alimentan de nuevo en la red.",
           "price_gas": "Lo que pagas por m³ de gas.",
           "price_water": "Lo que paga por m³ (1000 litros) de agua. Se utiliza para el sensor de coste de agua.",
-          "main_fuse_amps": "El tamaño de su fusible principal por fase (vea su armario medidor, por ejemplo 25A o 35A). Se utiliza para el sensor de carga de fase."
+          "main_fuse_amps": "El tamaño de su fusible principal por fase (vea su armario medidor, por ejemplo 25A o 35A). Se utiliza para el sensor de carga de fase.",
+          "main_connection_phases": "Selecciona el número físico de fases del armario del contador. El modo automático usa las fases habilitadas que el medidor P1 informa realmente y bloquea la carga en cuanto falta una fase que ya había informado."
         }
+      }
+    }
+  },
+  "selector": {
+    "main_connection_phases": {
+      "options": {
+        "auto": "Automático (más seguro)",
+        "1": "1 fase",
+        "3": "3 fases"
       }
     }
   },
@@ -162,6 +173,12 @@
       "energy_cost_month": {
         "name": "Costo de energía este mes (CC)"
       },
+      "ev_plan": {
+        "name": "Plan de carga {name}"
+      },
+      "smart_load_plan": {
+        "name": "Planificación {name}"
+      },
       "room_quality": {
         "name": "Calidad de la habitación (CC)"
       },
@@ -170,6 +187,15 @@
       },
       "room_quality_percentage": {
         "name": "Porcentaje de la calidad de la habitación (CC)"
+      },
+      "room_temperature": {
+        "name": "Temperatura de la habitación"
+      },
+      "room_humidity": {
+        "name": "Humedad de la habitación"
+      },
+      "room_co2": {
+        "name": "CO2 de la habitación"
       }
     },
     "binary_sensor": {
@@ -196,6 +222,21 @@
       },
       "baseline_ready": {
         "name": "Base de referencia aprendida (CC)"
+      },
+      "ev_charging_planned": {
+        "name": "Carga planificada para {name}"
+      },
+      "ev_problem": {
+        "name": "Problema con {name}"
+      },
+      "smart_load_active": {
+        "name": "{name} en marcha"
+      },
+      "smart_load_problem": {
+        "name": "Problema con {name}"
+      },
+      "room_occupancy": {
+        "name": "Ocupación de la habitación"
       }
     }
   },
@@ -215,6 +256,32 @@
     "leak_detected": {
       "title": "Posible fuga de agua en {device}",
       "description": "La detección de fugas de **{device}** reporta una posible fuga (tipo: {leak_type}).\n\nRevise sus grifos, inodoro y electrodomésticos. Este problema desaparece automáticamente una vez que el uso del agua es normal."
+    },
+    "radar_in_two_rooms": {
+      "title": "{radar} está vinculado a más de una habitación",
+      "description": "**{radar}** está vinculado a estas habitaciones: {rooms}. Un radar no puede saber cuál de ellas ve, así que su presencia sigue siendo desconocida.\n\nAbre **SmartHomeShop.io > Diseñador de planos** y desvincula el radar de todas las habitaciones menos una. Este aviso desaparece solo."
+    },
+    "room_data_repaired": {
+      "title": "Se repararon datos de habitaciones",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Se repararon datos de habitaciones",
+            "description": "No se pudo leer parte de los datos guardados de estas habitaciones: {rooms}. Solo se eliminaron las partes dañadas, como una zona con puntos no válidos. Las habitaciones y sus entidades siguen funcionando.\n\nRevisa estas habitaciones en el Diseñador de planos. Se guarda una copia de los datos originales hasta que envíes."
+          }
+        }
+      }
+    },
+    "room_data_unreadable": {
+      "title": "No se pudieron leer datos de habitaciones guardados",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "No se pudieron leer datos de habitaciones guardados",
+            "description": "{count} habitaciones guardadas están dañadas y no se pueden mostrar. Hay una copia en `.storage/smarthomeshop.rooms` bajo `invalid_rooms`.\n\nEnvía para borrar esa copia cuando ya no la necesites."
+          }
+        }
+      }
     }
   }
 }

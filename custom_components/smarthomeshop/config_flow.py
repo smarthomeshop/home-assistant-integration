@@ -20,12 +20,14 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_DEVICE_ID,
     CONF_MAIN_FUSE_AMPS,
+    CONF_MAIN_PHASES,
     CONF_PRICE_FEED_IN,
     CONF_PRICE_GAS,
     CONF_PRICE_T1,
     CONF_PRICE_T2,
     CONF_PRICE_WATER,
     DEFAULT_MAIN_FUSE_AMPS,
+    DEFAULT_MAIN_PHASES,
     DEFAULT_PRICE_FEED_IN,
     DEFAULT_PRICE_GAS,
     DEFAULT_PRICE_T1,
@@ -619,6 +621,16 @@ class SmartHomeShopOptionsFlow(OptionsFlow):
                     min=10, max=80, step=1,
                     mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement="A",
+                )
+            )
+            schema[vol.Required(
+                CONF_MAIN_PHASES,
+                default=current.get(CONF_MAIN_PHASES, DEFAULT_MAIN_PHASES),
+            )] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=["auto", "1", "3"],
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                    translation_key="main_connection_phases",
                 )
             )
 

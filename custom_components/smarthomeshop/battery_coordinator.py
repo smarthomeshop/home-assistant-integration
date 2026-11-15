@@ -34,6 +34,7 @@ from .energy_intelligence import (
     trim_samples,
 )
 from .price_coordinator import PriceCoordinator
+from .smart_load_planner import planned_power_series
 
 _SAMPLE_INTERVAL = timedelta(minutes=15)
 _JOURNAL_REPEAT = timedelta(minutes=30)
@@ -93,6 +94,48 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return float(state.state)
         except (TypeError, ValueError):
             return None
+
+    def _active_flexible_power_w(self) -> float:
+        """Return fresh EV and Smart Load power for base-load learning."""
+        store = self.hass.data.get(DOMAIN, {}).get("store")
+        vehicles = store.get_smart_ev().get("vehicles", []) if store else []
+        loads = (
+            getattr(store, "get_smart_loads", dict)().get("loads", [])
+            if store
+            else []
+        )
+        total = 0.0
+        seen: set[str] = set()
+        now = dt_util.utcnow()
+        for item in [*vehicles, *loads]:
+            entity_id = str(item.get("power_entity") or "")
+            if not entity_id or entity_id in seen:
+                continue
+            seen.add(entity_id)
+            state = self.hass.states.get(entity_id)
+            if state is None or str(state.state).lower() in {
+                "unknown",
+                "unavailable",
+                "none",
+            }:
+                continue
+            reported = max(
+                state.last_updated,
+                getattr(state, "last_reported", state.last_updated),
+            )
+            if (now - reported).total_seconds() > 90:
+                continue
+            try:
+                value = float(state.state)
+            except (TypeError, ValueError):
+                continue
+            unit = str(state.attributes.get("unit_of_measurement") or "W").lower()
+            if unit == "kw":
+                value *= 1000
+            elif unit not in {"w", ""}:
+                continue
+            total += max(0.0, value)
+        return total
 
     def _forecast_series(
         self,
@@ -195,6 +238,9 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "grid_w": grid_w,
             "battery_w": battery_w,
             "solar_w": solar_w,
+            # The learning model already subtracts this field. It now covers
+            # all flexible demand while retaining the stored schema key.
+            "ev_w": self._active_flexible_power_w(),
             "soc": soc,
         }
         samples = trim_samples(samples, sample, now=now)
@@ -339,6 +385,17 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 starts,
                 local_timezone=dt_util.DEFAULT_TIME_ZONE,
             )
+        smart_loads = self.hass.data.get(DOMAIN, {}).get("smart_loads")
+        load_plans = (
+            (smart_loads.data or {}).get("plans", {}) if smart_loads else {}
+        )
+        reserved = planned_power_series(forecast, load_plans)
+        if load is not None or any(reserved):
+            load = load or [fallback_load_kw] * len(starts)
+            load = [
+                value + reserved[index] / 1000
+                for index, value in enumerate(load)
+            ]
         plan = build_battery_plan(
             forecast,
             effective,
@@ -372,6 +429,7 @@ class BatteryPlanCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "execution holds instead of discharging."
             )
         plan.update(
+            calculated_at=dt_util.utcnow().isoformat(),
             execution_mode=config.get("execution_mode", "advice"),
             requested_power_w=round(requested),
             original_recommendation=original_action,
