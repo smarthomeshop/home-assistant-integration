@@ -202,7 +202,7 @@ const nl: Record<string, string> = {
 };
 
 const de: Record<string, string> = {
-  "Loading smart savings...": "Smart Savings wird geladen…",
+  "Loading smart savings...": "Smart Savings wird geladen...",
   "Smart savings unavailable": "Smart Savings nicht verfügbar",
   "Smart Savings is paused": "Smart Savings wird angehalten",
   "An active SmartHomeShop energy contract is needed to calculate savings.": "Ein aktiver SmartHomeShop-Energievertrag ist erforderlich, um Einsparungen zu berechnen.",
@@ -398,7 +398,7 @@ const de: Record<string, string> = {
 };
 
 const fr: Record<string, string> = {
-  "Loading smart savings...": "Chargement de Smart Savings…",
+  "Loading smart savings...": "Chargement de Smart Savings...",
   "Smart savings unavailable": "Smart Savings indisponible",
   "Smart Savings is paused": "Smart Savings est interrompu",
   "An active SmartHomeShop energy contract is needed to calculate savings.": "Un contrat énergétique SmartHomeShop actif est nécessaire pour calculer les économies.",
@@ -416,14 +416,14 @@ const fr: Record<string, string> = {
   "Since Smart Savings started measuring": "Depuis que Smart Savings a commencé à mesurer",
   "Battery today": "Batterie aujourd'hui",
   "Charging and discharging": "Chargement et déchargement",
-  "Schedules today": "Planifications aujourd’hui",
+  "Schedules today": "Planifications aujourd'hui",
   "Loads shifted in time": "Charges décalées dans le temps",
   "Measured every 15 minutes from battery flows and running schedules, valued against the day-average electricity price.": "Mesuré toutes les 15 minutes à partir du débit de la batterie et des horaires de fonctionnement, évalué par rapport au prix moyen journalier de l'électricité.",
   "Live energy": "Énergie en direct",
-  "Live power flow": "Flux d’énergie en direct",
-  "Direction and speed follow the power moving right now": "La direction et la vitesse suivent le flux d’énergie actuel",
-  "Pause flow animation": "Mettre l’animation du flux en pause",
-  "Resume flow animation": "Reprendre l’animation du flux",
+  "Live power flow": "Flux d'énergie en direct",
+  "Direction and speed follow the power moving right now": "La direction et la vitesse suivent le flux d'énergie actuel",
+  "Pause flow animation": "Mettre l'animation du flux en pause",
+  "Resume flow animation": "Reprendre l'animation du flux",
   "Home": "Maison",
   "Live usage": "Consommation actuelle",
   "Incomplete sensor data": "Données incomplètes du capteur",
@@ -467,7 +467,7 @@ const fr: Record<string, string> = {
   "Daily average": "Moyenne journalière",
   "Feed-in now": "Injection actuelle",
   "Next lower": "Suivant inférieur",
-  "None today": "Aucun aujourd’hui",
+  "None today": "Aucun aujourd'hui",
   "Lowest": "Le plus bas",
   "Highest": "Le plus élevé",
   "Negative prices": "Prix négatifs",
@@ -500,7 +500,7 @@ const fr: Record<string, string> = {
   "Grid export": "Exportation de grille",
   "Power (W) · mean with min/max range": "Puissance (W) · moyenne avec une plage min/max",
   "Loading Home Assistant chart...": "Chargement du graphique Home Assistant...",
-  "Electricity costs": "Coûts d’électricité",
+  "Electricity costs": "Coûts d'électricité",
   "Imported, returned and net value today": "Importé, retourné et valeur nette aujourd'hui",
   "Calculating today's electricity costs...": "Calculer les coûts d'électricité d'aujourd'hui...",
   "Electricity costs unavailable": "Coûts de l'électricité non disponibles",
@@ -509,8 +509,8 @@ const fr: Record<string, string> = {
   "Select a P1 meter in SmartHomeShop Energy settings first.": "Sélectionnez un compteur P1 dans les paramètres d'énergie SmartHomeShop.",
   "Not enough history yet": "Pas encore assez d'histoire",
   "The card will calculate today's costs as soon as Recorder has grid power history.": "La carte calculera les coûts d'aujourd'hui dès que Recorder aura l'historique du réseau électrique.",
-  "Net earned today": "Gain net aujourd’hui",
-  "Net electricity cost": "Coût net de l’électricité",
+  "Net earned today": "Gain net aujourd'hui",
+  "Net electricity cost": "Coût net de l'électricité",
   "Return value is higher than import cost.": "La valeur de retour est plus élevée que le coût d'importation.",
   "{value} return value deducted": "Valeur de retour {value} déduite",
   "No measured return value deducted yet.": "Aucune valeur de retour mesurée n'a encore été déduite.",
@@ -549,7 +549,7 @@ const fr: Record<string, string> = {
   "Pause automation": "Automatisation des pauses",
   "Enable automation": "Activer l'automatisation",
   "Edit setup": "Modifier la configuration",
-  "More information": "Plus d’informations",
+  "More information": "Plus d'informations",
   "Disabled - deadline planning is paused": "Handicapé - la planification de la date limite est interrompue",
   "Running now to meet the deadline": "Courir maintenant pour respecter la date limite",
   "Running in a selected low-price hour": "Courant dans une heure choisie à bas prix",
@@ -594,7 +594,7 @@ const fr: Record<string, string> = {
 };
 
 const es: Record<string, string> = {
-  "Loading smart savings...": "Cargando Smart Savings…",
+  "Loading smart savings...": "Cargando Smart Savings...",
   "Smart savings unavailable": "Smart Savings no disponible",
   "Smart Savings is paused": "Smart Savings se detiene",
   "An active SmartHomeShop energy contract is needed to calculate savings.": "Se necesita un contrato de energía SmartHomeShop activo para calcular los ahorros.",

@@ -1,15 +1,27 @@
-import { LitElement, html, css, PropertyValues } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
-import type { HomeAssistant, PanelConfig, PageType } from './types';
+import { LitElement, html, css, nothing, PropertyValues } from 'lit';
+import { property, state } from 'lit/decorators.js';
+import type { HomeAssistant, PanelConfig, PageType, Room } from './types';
+import type { ZonesPage } from './pages/zones-page';
 import { installPanelLocalization, panelText } from './utils/panel-translations';
 import './pages/dashboard-page';
-import './pages/home-presence-page';
 import './pages/zones-page';
 import './pages/settings-page';
 import './pages/energy-hub';
 
+const panelModule = new URL(import.meta.url);
+const floorPlannerModule = new URL('./floor-planner/host.js', panelModule);
+floorPlannerModule.search = panelModule.search;
+void import(floorPlannerModule.href);
+
 // @ts-ignore - VERSION is replaced by rollup at build time
 const VERSION = '__VERSION__';
+
+type RadarContext = { roomId?: string; sensorId?: string; readOnly: boolean };
+type FloorEditor = HTMLElement & {
+  isDirty?: boolean;
+  focusRadarButton(): void;
+  applyRadarCalibration(detail: { room: Room; previousRevision?: string }): void;
+};
 
 // Official SmartHomeShop Logo SVG (house with face)
 const SHS_LOGO_SVG = `
@@ -36,13 +48,14 @@ const SHS_LOGO_SVG = `
 </svg>
 `;
 
-@customElement('smarthomeshop-panel')
 export class SmartHomeShopPanel extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ type: Boolean, reflect: true }) public narrow = false;
   @property({ attribute: false }) public panel?: { config: PanelConfig };
   @state() private _currentPage: PageType = 'dashboard';
   @state() private _selectedDeviceId?: string;
+  @state() private _radarContext: RadarContext | null = null;
+  @state() private _confirmRadarClose = false;
   private _localization?: { refresh: () => void; disconnect: () => void };
 
   static styles = css`
@@ -54,6 +67,7 @@ export class SmartHomeShopPanel extends LitElement {
       /* SmartHomeShop brand color, used as accent only */
       --shs-primary: #4361ee;
     }
+    :host([data-floor-plan]) { height: 100dvh; }
 
     .panel-header {
       display: flex;
@@ -146,6 +160,79 @@ export class SmartHomeShopPanel extends LitElement {
       overflow: auto;
       padding: 24px;
     }
+    .panel-content.floor-plan { display: flex; min-height: 0; padding: 0; }
+    .radar-drawer {
+      box-sizing: border-box;
+      position: fixed;
+      inset: 12px 12px 12px auto;
+      width: min(480px, calc(100vw - 24px));
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      overflow: auto;
+      overscroll-behavior: contain;
+      border: 1px solid var(--divider-color, #d6dce5);
+      border-radius: 16px;
+      background: var(--card-background-color, #fbfcfe);
+      color: var(--primary-text-color, #172338);
+      box-shadow: 0 14px 42px #10172530;
+    }
+    .radar-drawer::backdrop { background: #11182740; }
+    .radar-drawer-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 20px;
+      background: var(--card-background-color, #fbfcfe);
+      border-bottom: 1px solid var(--divider-color, #d6dce5);
+    }
+    .radar-drawer-head h2 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.25;
+      letter-spacing: -.02em;
+    }
+    .radar-drawer-head h2 ha-icon { color: var(--primary-color, #4361ee); --mdc-icon-size: 21px; }
+    .radar-drawer button {
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid var(--divider-color, #d6dce5);
+      border-radius: 8px;
+      background: var(--secondary-background-color, #f3f6fa);
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .radar-drawer .radar-close { display: grid; place-items: center; min-width: 44px; padding: 0; }
+    .radar-drawer button:hover { border-color: var(--primary-color, #4361ee); }
+    .radar-drawer button:focus-visible { outline: 2px solid var(--primary-color, #4361ee); outline-offset: 2px; }
+    .radar-close ha-icon { --mdc-icon-size: 21px; }
+    .radar-confirm {
+      margin: 16px 20px 0;
+      padding: 12px;
+      border: 1px solid var(--divider-color, #d6dce5);
+      border-inline-start: 3px solid var(--warning-color, #be7c27);
+      border-radius: 8px;
+      background: var(--secondary-background-color, #f3f6fa);
+    }
+    .radar-confirm p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; }
+    .radar-confirm div { display: flex; flex-wrap: wrap; gap: 8px; }
+    .radar-confirm .radar-discard { color: var(--error-color, #ab312d); }
+    @media (max-width: 600px) {
+      .radar-drawer { inset: auto 0 0; width: 100%; max-height: 91dvh; border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+      .radar-drawer-head { padding: 10px 15px; }
+      .radar-confirm { margin-inline: 15px; }
+    }
 
     /* Responsive */
     @media (max-width: 900px) {
@@ -167,6 +254,10 @@ export class SmartHomeShopPanel extends LitElement {
       .panel-content {
         padding: 16px;
       }
+    }
+    @media (max-width: 460px) {
+      :host([data-floor-plan]) .nav-tabs .nav-tab { padding-inline: 7px; }
+      :host([data-floor-plan]) .nav-tabs .nav-tab ha-icon { display: none; }
     }
   `;
 
@@ -196,18 +287,69 @@ export class SmartHomeShopPanel extends LitElement {
     this._localization = installPanelLocalization(this.renderRoot as ShadowRoot, () => this.hass);
   }
 
-  private _zonesDirty(): boolean {
-    const zones = this.renderRoot?.querySelector('shs-zones-page') as (HTMLElement & { isDirty?: boolean }) | null;
-    return !!zones?.isDirty;
-  }
-
-  private _homeDirty(): boolean {
-    const home = this.renderRoot?.querySelector('shs-home-presence-page') as (HTMLElement & { isDirty?: boolean }) | null;
-    return !!home?.isDirty;
-  }
-
   private _hasUnsavedChanges(): boolean {
-    return this._zonesDirty() || this._homeDirty();
+    return Boolean(this._floorEditor()?.isDirty || this._radarEditor()?.isDirty);
+  }
+
+  private _floorEditor(): FloorEditor | null {
+    return this.renderRoot?.querySelector<FloorEditor>('shs-floor-planner-page') ?? null;
+  }
+
+  private _radarEditor(): ZonesPage | null {
+    return this.renderRoot?.querySelector<ZonesPage>('shs-zones-page[hardwareonly]') ?? null;
+  }
+
+  private async _openRadarTools(event: CustomEvent<RadarContext>): Promise<void> {
+    if (!this.hass?.user?.is_admin || this._radarContext) return;
+    this._radarContext = event.detail;
+    await this.updateComplete;
+    this.renderRoot.querySelector<HTMLDialogElement>('.radar-drawer')?.showModal();
+  }
+
+  private _closeRadarTools(discard = false): void {
+    const settings = this._radarEditor();
+    if (settings?.hardwareBusy) return;
+    if (settings?.isDirty && !discard) {
+      this._confirmRadarClose = true;
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('.radar-continue')?.focus());
+      return;
+    }
+    this.renderRoot.querySelector<HTMLDialogElement>('.radar-drawer')?.close();
+  }
+
+  private _radarClosed(): void {
+    this._radarContext = null;
+    this._confirmRadarClose = false;
+    void this.updateComplete.then(() => this._floorEditor()?.focusRadarButton?.());
+  }
+
+  private _renderRadarTools() {
+    if (!this._radarContext) return nothing;
+    return html`<dialog class="radar-drawer" aria-labelledby="radar-settings-title"
+      @cancel=${(event: Event) => { event.preventDefault(); this._closeRadarTools(); }}
+      @close=${this._radarClosed}>
+      <header class="radar-drawer-head">
+        <h2 id="radar-settings-title"><ha-icon icon="mdi:radar" aria-hidden="true"></ha-icon>${panelText(this.hass, 'Radar settings')}</h2>
+        <button class="radar-close" type="button" autofocus aria-label=${panelText(this.hass, 'Close radar settings')}
+          @click=${() => this._closeRadarTools()}><ha-icon icon="mdi:close" aria-hidden="true"></ha-icon></button>
+      </header>
+      ${this._confirmRadarClose ? html`<section class="radar-confirm" aria-label=${panelText(this.hass, 'Unsaved calibration')}>
+        <p>${panelText(this.hass, 'Your measurement is unsaved. Discard it?')}</p>
+        <div><button type="button" class="radar-continue" @click=${() => { this._confirmRadarClose = false; }}>
+          ${panelText(this.hass, 'Keep editing')}</button>
+        <button type="button" class="radar-discard" @click=${() => this._closeRadarTools(true)}>
+          ${panelText(this.hass, 'Discard changes')}</button></div>
+      </section>` : nothing}
+      <shs-zones-page hardwareonly .hass=${this.hass} .hardwareContext=${this._radarContext}
+        @radar-calibration-saved=${(event: CustomEvent<{ room: Room; previousRevision?: string }>) => {
+          this._confirmRadarClose = false;
+          this._floorEditor()?.applyRadarCalibration(event.detail);
+        }}></shs-zones-page>
+    </dialog>`;
+  }
+
+  private _isFloorPlan(page = this._currentPage): boolean {
+    return ['home', 'zones', 'room-builder'].includes(page);
   }
 
   protected firstUpdated(_changedProperties: PropertyValues): void {
@@ -225,19 +367,14 @@ export class SmartHomeShopPanel extends LitElement {
   }
 
   protected updated(changedProperties: PropertyValues): void {
+    this.toggleAttribute('data-floor-plan', this._isFloorPlan());
     if (changedProperties.has('hass')) this._localization?.refresh();
   }
 
   private _navigateTo(page: PageType): void {
-    // Leaving the Room Designer with unsaved work must not silently discard it.
-    const leavingZones = (this._currentPage === 'zones' || this._currentPage === 'room-builder')
-      && page !== 'zones' && page !== 'room-builder';
-    if (leavingZones && this._zonesDirty()
-      && !window.confirm(panelText(this.hass, 'You have unsaved changes in the Room Designer. Discard them?'))) {
-      return;
-    }
-    if (this._currentPage === 'home' && page !== 'home' && this._homeDirty()
-      && !window.confirm(panelText(this.hass, 'You have unsaved changes in Live Home. Discard them?'))) {
+    if (page === 'home') page = 'zones';
+    if (this._isFloorPlan() && !this._isFloorPlan(page) && this._hasUnsavedChanges()
+      && !window.confirm(panelText(this.hass, 'Discard the unsaved changes to your floor plan?'))) {
       return;
     }
     this._currentPage = page;
@@ -272,10 +409,7 @@ export class SmartHomeShopPanel extends LitElement {
             <ha-icon icon="mdi:view-dashboard"></ha-icon>Dashboard
           </button>
           <button class="nav-tab ${this._currentPage === 'zones' || this._currentPage === 'room-builder' ? 'active' : ''}" @click=${() => this._navigateTo('zones')}>
-            <ha-icon icon="mdi:floor-plan"></ha-icon>Room Designer
-          </button>
-          <button class="nav-tab ${this._currentPage === 'home' ? 'active' : ''}" @click=${() => this._navigateTo('home')}>
-            <ha-icon icon="mdi:home-account"></ha-icon>${panelText(this.hass, 'Live Home')}
+            <ha-icon icon="mdi:floor-plan"></ha-icon>${panelText(this.hass, 'Floorplan Designer')}
           </button>
           <button class="nav-tab ${this._currentPage === 'energy' ? 'active' : ''}" @click=${() => this._navigateTo('energy')}>
             <ha-icon icon="mdi:lightning-bolt"></ha-icon>Energy
@@ -285,7 +419,8 @@ export class SmartHomeShopPanel extends LitElement {
           <span class="version">v${VERSION}</span>
         </div>
       </div>
-      <div class="panel-content">${this._renderPage()}</div>
+      <div class="panel-content ${this._isFloorPlan() ? 'floor-plan' : ''}">${this._renderPage()}</div>
+      ${this._renderRadarTools()}
     `;
   }
 
@@ -301,15 +436,12 @@ export class SmartHomeShopPanel extends LitElement {
         ></shs-dashboard-page>`;
       case 'room-builder':
       case 'zones':
-        return html`<shs-zones-page
-          .hass=${this.hass}
-          .selectedDeviceId=${this._selectedDeviceId}
-        ></shs-zones-page>`;
       case 'home':
-        return html`<shs-home-presence-page
+        return html`<shs-floor-planner-page
           .hass=${this.hass}
-          @navigate=${(e: CustomEvent) => this._navigateTo(e.detail.page)}
-        ></shs-home-presence-page>`;
+          .mode=${!this.hass?.user?.is_admin ? 'live' : 'edit'}
+          @open-radar-tools=${this._openRadarTools}
+        ></shs-floor-planner-page>`;
       case 'energy':
         return html`<shs-energy-hub .hass=${this.hass}></shs-energy-hub>`;
       case 'settings':
@@ -325,6 +457,10 @@ export class SmartHomeShopPanel extends LitElement {
         return html`<p>Page not found</p>`;
     }
   }
+}
+
+if (!customElements.get('smarthomeshop-panel')) {
+  customElements.define('smarthomeshop-panel', SmartHomeShopPanel);
 }
 
 declare global {

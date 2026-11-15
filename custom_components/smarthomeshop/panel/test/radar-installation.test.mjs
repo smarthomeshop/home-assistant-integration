@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { settingsText } from '../src/utils/settings-translations.ts';
 import {
   RadarInstallationUpdateError,
+  expectedRadarHardwareMode,
   evaluateRadarOrientationWalk,
   parseRadarInstallationNumber,
   performConfirmedRadarUpdate,
@@ -11,6 +12,13 @@ import {
   radarInstallationEntityStatus,
   validateRadarDetectionSector,
 } from '../src/utils/radar-installation.ts';
+
+test('uses top mode for ceiling LD2460 and firmware-required mode for wall mounting', () => {
+  assert.equal(expectedRadarHardwareMode('ceiling', 'side'), 'top');
+  assert.equal(expectedRadarHardwareMode('wall', 'side'), 'side');
+  assert.equal(expectedRadarHardwareMode('wall', 'top'), 'side');
+  assert.equal(expectedRadarHardwareMode('wall', null), 'side');
+});
 
 test('validates the complete LD2460 height and angle ranges', () => {
   assert.equal(parseRadarInstallationNumber('0.10', 0.1, 10), 0.1);

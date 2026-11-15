@@ -4,6 +4,7 @@ import type {
   HomeAssistant,
   SmartHomeShopDevice,
   DeviceEntity,
+  RadarDeviceProfilePayload,
   Sps30QuietHoursCapability,
 } from '../types';
 import { settingsText } from '../utils/settings-translations';
@@ -21,6 +22,11 @@ import {
   sps30IdleIntervalAvailability,
   sps30IdleIntervalPresentation,
 } from '../utils/sps30-quiet-hours';
+import {
+  radarEntityState,
+  resolveRadarDeviceSettings,
+  type RadarFallRole,
+} from '../utils/radar-device-settings';
 
 interface SettingGroup {
   key: string;
@@ -129,7 +135,7 @@ export class SettingsPage extends LitElement {
   @state() private _contractActive = false;
   @state() private _contractName: string | null = null;
   @state() private _enablingEntities: Set<string> = new Set();
-  @state() private _runningEntity: string | null = null;
+  @state() private _runningEntities = new Set<string>();
   @state() private _entityFeedback: Record<string, { tone: 'success' | 'error'; text: string }> = {};
   @state() private _pendingEntityAction?: PendingEntityAction;
   @state() private _backgroundCorrection?: BackgroundCorrectionProgress;
@@ -141,7 +147,14 @@ export class SettingsPage extends LitElement {
   @state() private _quietHours?: Sps30QuietHoursCapability;
   @state() private _quietHoursPending?: string;
   @state() private _quietHoursError = '';
+  @state() private _radarProfile?: RadarDeviceProfilePayload | null;
+  @state() private _radarPending?: string;
+  @state() private _radarError = '';
+  @state() private _radarFeedback = '';
+  @state() private _radarDrafts: Record<string, string> = {};
   private _backgroundCorrectionTimer?: number;
+  private _deviceSelectionGeneration = 0;
+  private _entityLoadGeneration = 0;
 
   static styles = css`
     :host { display: block; max-width: 1100px; margin: 0 auto; --shs-primary: #4361ee; }
@@ -284,6 +297,34 @@ export class SettingsPage extends LitElement {
     .led-option label { display: block; margin-bottom: 4px; color: var(--secondary-text-color); font-size: 10.5px; }
     .led-option .setting-control { justify-content: flex-start; }
     .feature-heading.quiet > ha-icon { color: #6d5de7; }
+    .feature-heading.radar > ha-icon { color: #0f8ba8; }
+    .radar-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 0 18px 16px; }
+    .radar-overview-item { min-width: 0; padding: 11px 12px; border-radius: 9px; background: var(--secondary-background-color); }
+    .radar-overview-item span { display: block; color: var(--secondary-text-color); font-size: 10.5px; }
+    .radar-overview-item strong { display: block; margin-top: 3px; overflow: hidden; color: var(--primary-text-color); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .radar-section { padding: 15px 18px 17px; border-top: 1px solid var(--divider-color); }
+    .radar-section-head { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; }
+    .radar-section-head ha-icon { --mdc-icon-size: 19px; color: var(--shs-primary); }
+    .radar-section-title { color: var(--primary-text-color); font-size: 13.5px; font-weight: 650; }
+    .radar-section-copy { margin-top: 3px; color: var(--secondary-text-color); font-size: 11.5px; line-height: 1.45; }
+    .radar-control-grid { display: grid; grid-template-columns: repeat(3, minmax(130px, 1fr)); gap: 10px; }
+    .radar-control { min-width: 0; }
+    .radar-control label { display: block; margin-bottom: 5px; color: var(--secondary-text-color); font-size: 10.5px; font-weight: 600; }
+    .radar-control input, .radar-control select { box-sizing: border-box; width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--card-background-color); color: var(--primary-text-color); font: inherit; font-size: 13px; }
+    .radar-control input:focus-visible, .radar-control select:focus-visible { outline: 2px solid var(--shs-primary); outline-offset: 2px; }
+    .radar-control input:disabled, .radar-control select:disabled { cursor: not-allowed; opacity: .5; }
+    .radar-fall-toggle { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .radar-live-status { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+    .radar-live-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 29px; padding: 4px 9px; border: 1px solid var(--divider-color); border-radius: 999px; background: var(--secondary-background-color); color: var(--secondary-text-color); font-size: 11px; }
+    .radar-live-chip strong { color: var(--primary-text-color); font-weight: 650; }
+    .radar-live-chip.detected { border-color: color-mix(in srgb, var(--error-color, #dc2626) 34%, var(--divider-color)); background: color-mix(in srgb, var(--error-color, #dc2626) 9%, transparent); color: var(--error-color, #dc2626); }
+    .radar-live-chip ha-icon { --mdc-icon-size: 15px; }
+    .radar-note { display: flex; align-items: flex-start; gap: 7px; margin-top: 11px; color: var(--secondary-text-color); font-size: 11.5px; line-height: 1.45; }
+    .radar-note.warning { color: var(--warning-color, #b86100); }
+    .radar-note ha-icon { flex: 0 0 auto; margin-top: 1px; --mdc-icon-size: 16px; }
+    .radar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 13px; }
+    .radar-feedback { color: var(--success-color, #138747); font-size: 11.5px; }
+    .radar-feedback.error { color: var(--error-color, #dc2626); }
     .quiet-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 14px 18px; border-top: 1px solid var(--divider-color); }
     .quiet-summary-copy { min-width: 0; }
     .quiet-summary-title { color: var(--primary-text-color); font-size: 13.5px; font-weight: 600; }
@@ -402,6 +443,10 @@ export class SettingsPage extends LitElement {
       .quiet-state-row { align-items: flex-start; flex-direction: column; padding: 12px 14px; }
       .quiet-note { padding: 12px 14px 14px; }
       .quiet-error { margin: 0 14px 14px; }
+      .radar-overview { grid-template-columns: 1fr; padding: 0 14px 14px; }
+      .radar-section { padding: 14px; }
+      .radar-control-grid { grid-template-columns: 1fr; }
+      .radar-fall-toggle { align-items: stretch; flex-direction: column; }
     }
 
     /* Product settings (config entry options) */
@@ -458,14 +503,20 @@ export class SettingsPage extends LitElement {
 
   private async _loadEmbedded(): Promise<void> {
     this._loading = true;
+    this._deviceSelectionGeneration += 1;
     this._selectedDevice = { id: this.selectedDeviceId!, name: '', entity_count: 0 };
+    this._entities = [];
     await this._loadEntities(this.selectedDeviceId!);
     this._loading = false;
   }
 
   private async _selectDevice(device: SmartHomeShopDevice): Promise<void> {
     this._closeBackgroundCorrectionProgress();
+    this._deviceSelectionGeneration += 1;
     this._selectedDevice = device;
+    this._entities = [];
+    this._quietHours = undefined;
+    this._radarProfile = undefined;
     this._advancedOpen = false;
     this._filter = '';
     this._expandedGroups = new Set();
@@ -474,18 +525,26 @@ export class SettingsPage extends LitElement {
   }
 
   private async _loadEntities(deviceId: string): Promise<void> {
+    const generation = ++this._entityLoadGeneration;
     try {
       const result = await this.hass.callWS<{
         entities: DeviceEntity[];
         quiet_hours?: Sps30QuietHoursCapability;
+        radar_profile?: RadarDeviceProfilePayload | null;
       }>({ type: 'smarthomeshop/device/entities', device_id: deviceId });
+      if (generation !== this._entityLoadGeneration || this._selectedDevice?.id !== deviceId) return;
       // Keep the complete device entity set. Read-only sensor values, the media
       // player and the LED are used by the guided controls, while only actual
       // configuration entities are shown in the advanced list below.
       this._entities = result.entities;
       this._quietHours = result.quiet_hours;
+      this._radarProfile = result.radar_profile;
       this._quietHoursPending = undefined;
       this._quietHoursError = '';
+      this._radarPending = undefined;
+      this._radarError = '';
+      this._radarFeedback = '';
+      this._radarDrafts = {};
       this._calibrationDrafts = {};
       this._calibrationReferences = {};
       this._calibrationReferenceEntities = {};
@@ -493,16 +552,19 @@ export class SettingsPage extends LitElement {
       this._ledBrightnessDraft = undefined;
     } catch (err) {
       console.error('Failed to load entities:', err);
+      if (generation !== this._entityLoadGeneration || this._selectedDevice?.id !== deviceId) return;
       this._quietHours = undefined;
+      this._radarProfile = undefined;
       this._quietHoursPending = undefined;
       this._quietHoursError = '';
     }
-    await this._loadConfig(deviceId);
+    await this._loadConfig(deviceId, generation);
   }
 
-  private async _loadConfig(deviceId: string): Promise<void> {
+  private async _loadConfig(deviceId: string, generation: number): Promise<void> {
     try {
       const res = await this.hass.callWS<{ fields: any[]; product_type?: string; contract_active?: boolean; contract_name?: string | null }>({ type: 'smarthomeshop/device/config', device_id: deviceId });
+      if (generation !== this._entityLoadGeneration || this._selectedDevice?.id !== deviceId) return;
       this._configFields = res.fields || [];
       this._productType = res.product_type || '';
       this._contractActive = !!res.contract_active;
@@ -512,6 +574,7 @@ export class SettingsPage extends LitElement {
       this._configValues = values;
     } catch (err) {
       console.error('Failed to load config:', err);
+      if (generation !== this._entityLoadGeneration || this._selectedDevice?.id !== deviceId) return;
       this._configFields = [];
     }
   }
@@ -601,7 +664,7 @@ export class SettingsPage extends LitElement {
   }
 
   private _entityText(entity: DeviceEntity): string {
-    return `${entity.name} ${entity.entity_id}`.toLowerCase();
+    return `${entity.original_name || ''} ${entity.unique_id || ''} ${entity.entity_id}`.toLowerCase();
   }
 
   private _findEntity(domain: string, match: RegExp, exclude?: RegExp): DeviceEntity | undefined {
@@ -680,7 +743,7 @@ export class SettingsPage extends LitElement {
   }
 
   private _formatValue(value: number | null, decimals: number, unit: string, signed = false): string {
-    if (value === null || !Number.isFinite(value)) return '–';
+    if (value === null || !Number.isFinite(value)) return '-';
     const prefix = signed && value > 0 ? '+' : '';
     return `${prefix}${value.toFixed(decimals)}${unit}`;
   }
@@ -724,7 +787,7 @@ export class SettingsPage extends LitElement {
         entityId,
         name,
         value: null,
-        display: '–',
+        display: '-',
         tone: 'warning',
         message: this._text('calibration.reference_same_device'),
       };
@@ -734,7 +797,7 @@ export class SettingsPage extends LitElement {
         entityId,
         name,
         value: null,
-        display: '–',
+        display: '-',
         tone: 'warning',
         message: this._text('calibration.reference_unavailable', { name }),
       };
@@ -746,7 +809,7 @@ export class SettingsPage extends LitElement {
         entityId,
         name,
         value: null,
-        display: '–',
+        display: '-',
         tone: 'warning',
         message: this._text('calibration.reference_wrong_type'),
       };
@@ -759,7 +822,7 @@ export class SettingsPage extends LitElement {
         entityId,
         name,
         value: null,
-        display: '–',
+        display: '-',
         tone: 'warning',
         message: this._text('calibration.reference_invalid', { name }),
       };
@@ -776,7 +839,7 @@ export class SettingsPage extends LitElement {
           entityId,
           name,
           value: null,
-          display: '–',
+          display: '-',
           tone: 'warning',
           message: this._text('calibration.reference_wrong_unit'),
         };
@@ -786,7 +849,7 @@ export class SettingsPage extends LitElement {
         entityId,
         name,
         value: null,
-        display: '–',
+        display: '-',
         tone: 'warning',
         message: this._text('calibration.reference_wrong_unit'),
       };
@@ -843,7 +906,7 @@ export class SettingsPage extends LitElement {
     const referenceReading = this._calibrationReferenceReading(channel);
     const referenceEntityValid = referenceReading?.value !== null && referenceReading?.value !== undefined && raw !== null;
     const dirty = Math.abs(draftOffset - storedOffset) > 0.0001;
-    const running = this._runningEntity === channel.offset.entity_id;
+    const running = this._runningEntities.has(channel.offset.entity_id);
 
     return html`
       <div class="calibration-channel ${channel.kind}">
@@ -1040,7 +1103,7 @@ export class SettingsPage extends LitElement {
     const current = this._speakerVolume();
     const draft = this._speakerVolumeDraft ?? current;
     const runningEntity = volume || player;
-    const running = !!runningEntity && this._runningEntity === runningEntity.entity_id;
+    const running = !!runningEntity && this._runningEntities.has(runningEntity.entity_id);
     const feedback = runningEntity ? this._entityFeedback[runningEntity.entity_id] : undefined;
     const unavailable = player ? this._isEntityUnavailable(player, playerState) : volume ? this._isEntityUnavailable(volume, volumeState) : true;
 
@@ -1163,7 +1226,7 @@ export class SettingsPage extends LitElement {
     const lightState = this._stateObject(led.light);
     const lightOn = lightState?.state === 'on';
     const lightUnavailable = led.light ? this._isEntityUnavailable(led.light, lightState) : true;
-    const lightRunning = !!led.light && this._runningEntity === led.light.entity_id;
+    const lightRunning = !!led.light && this._runningEntities.has(led.light.entity_id);
     const brightness = this._ledBrightnessDraft ?? Math.round(Number(lightState?.attributes?.brightness ?? 255) / 255 * 100);
     return html`
       <section class="feature-card">
@@ -1408,7 +1471,7 @@ export class SettingsPage extends LitElement {
             <select id="quiet-start-hour" aria-label=${this._text('quiet.start')}
               ?disabled=${selectorsDisabled}
               @change=${(event: Event) => this._setQuietHour(startEntity, (event.target as HTMLSelectElement).value)}>
-              ${startHour === null ? html`<option value="" selected>—</option>` : nothing}
+              ${startHour === null ? html`<option value="" selected>-</option>` : nothing}
               ${QUIET_HOUR_VALUES.map(hour => html`
                 <option value=${String(hour)} ?selected=${hour === startHour}>${formatQuietHour(hour)}</option>
               `)}
@@ -1419,7 +1482,7 @@ export class SettingsPage extends LitElement {
             <select id="quiet-end-hour" aria-label=${this._text('quiet.end')}
               ?disabled=${selectorsDisabled}
               @change=${(event: Event) => this._setQuietHour(endEntity, (event.target as HTMLSelectElement).value)}>
-              ${endHour === null ? html`<option value="" selected>—</option>` : nothing}
+              ${endHour === null ? html`<option value="" selected>-</option>` : nothing}
               ${QUIET_HOUR_VALUES.map(hour => html`
                 <option value=${String(hour)} ?selected=${hour === endHour}>${formatQuietHour(hour)}</option>
               `)}
@@ -1455,7 +1518,7 @@ export class SettingsPage extends LitElement {
                     (event.target as HTMLSelectElement).value,
                   )}
                 >
-                  ${idleMinutes === null ? html`<option value="" selected>—</option>` : nothing}
+                  ${idleMinutes === null ? html`<option value="" selected>-</option>` : nothing}
                   ${idleMinutes !== null && !idleIsFriendlyChoice ? html`
                     <option value=${String(idleMinutes)} selected>
                       ${this._text('quiet.idle.current', { minutes: idleMinutes })}
@@ -1526,6 +1589,287 @@ export class SettingsPage extends LitElement {
       </section>`;
   }
 
+  private _radarEntity(entityId?: string | null): DeviceEntity | undefined {
+    return entityId ? this._entities.find(entity => entity.entity_id === entityId) : undefined;
+  }
+
+  private async _runRadarUpdate(
+    entity: DeviceEntity,
+    domain: 'switch' | 'select' | 'number',
+    service: 'turn_on' | 'turn_off' | 'select_option' | 'set_value',
+    data: Record<string, unknown>,
+    matches: (state: string) => boolean,
+  ): Promise<boolean> {
+    if (this._radarPending) return false;
+    const deviceId = this._selectedDevice?.id;
+    const selectionGeneration = this._deviceSelectionGeneration;
+    const currentState = this.hass.states[entity.entity_id]?.state;
+    if (currentState !== undefined && matches(currentState)) {
+      const drafts = { ...this._radarDrafts };
+      delete drafts[entity.entity_id];
+      this._radarDrafts = drafts;
+      this._radarFeedback = this._text('radar.device.saved');
+      return true;
+    }
+    this._radarPending = entity.entity_id;
+    this._radarError = '';
+    this._radarFeedback = '';
+    try {
+      await performConfirmedEntityUpdate(
+        () => this.hass.callService(domain, service, { entity_id: entity.entity_id, ...data }),
+        () => this.hass.states[entity.entity_id],
+        matches,
+        12_000,
+      );
+      if (selectionGeneration !== this._deviceSelectionGeneration || this._selectedDevice?.id !== deviceId) return false;
+      const drafts = { ...this._radarDrafts };
+      delete drafts[entity.entity_id];
+      this._radarDrafts = drafts;
+      this._radarFeedback = this._text('radar.device.saved');
+      return true;
+    } catch (error) {
+      console.error(`Failed to update radar entity ${entity.entity_id}:`, error);
+      if (selectionGeneration !== this._deviceSelectionGeneration || this._selectedDevice?.id !== deviceId) return false;
+      const drafts = { ...this._radarDrafts };
+      delete drafts[entity.entity_id];
+      this._radarDrafts = drafts;
+      this._radarError = this._text(error instanceof QuietHoursUpdateError && error.kind === 'timeout'
+        ? 'radar.device.error.timeout'
+        : 'radar.device.error.service');
+      return false;
+    } finally {
+      if (selectionGeneration === this._deviceSelectionGeneration && this._selectedDevice?.id === deviceId) {
+        this._radarPending = undefined;
+      }
+    }
+  }
+
+  private _setRadarNumber(entity: DeviceEntity, rawValue: string, minimum: number, maximum: number): void {
+    if (rawValue.trim() === '') {
+      this._radarError = this._text('radar.device.error.range', { minimum, maximum });
+      return;
+    }
+    const value = Number(rawValue);
+    if (!Number.isFinite(value) || value < minimum || value > maximum) {
+      this._radarError = this._text('radar.device.error.range', { minimum, maximum });
+      return;
+    }
+    const profile = this._radarProfile?.profile;
+    if (entity.entity_id === profile?.detection_start_angle_entity_id) {
+      const end = Number(this.hass.states[profile.detection_end_angle_entity_id || '']?.state);
+      if (Number.isFinite(end) && value >= end) {
+        this._radarError = this._text('radar.sector.error.angle_order');
+        return;
+      }
+    }
+    if (entity.entity_id === profile?.detection_end_angle_entity_id) {
+      const start = Number(this.hass.states[profile.detection_start_angle_entity_id || '']?.state);
+      if (Number.isFinite(start) && value <= start) {
+        this._radarError = this._text('radar.sector.error.angle_order');
+        return;
+      }
+    }
+    void this._runRadarUpdate(
+      entity,
+      'number',
+      'set_value',
+      { value },
+      state => Math.abs(Number(state) - value) < .005,
+    );
+  }
+
+  private _radarNumberControl(
+    entity: DeviceEntity | undefined,
+    labelKey: string,
+    minimum: number,
+    maximum: number,
+    step: number,
+  ) {
+    if (!entity || entity.disabled_by) return nothing;
+    const status = radarEntityState(entity, this.hass.states);
+    const state = this.hass.states[entity.entity_id]?.state ?? entity.state ?? '';
+    const value = this._radarDrafts[entity.entity_id] ?? state;
+    return html`
+      <div class="radar-control">
+        <label for=${`radar-${entity.entity_id.replace(/[^a-z0-9_-]/gi, '-')}`}>${this._text(labelKey)}</label>
+        <input id=${`radar-${entity.entity_id.replace(/[^a-z0-9_-]/gi, '-')}`} type="number" inputmode="decimal"
+          min=${minimum} max=${maximum} step=${step} .value=${value}
+          ?disabled=${status !== 'ready' || !!this._radarPending}
+          @input=${(event: Event) => { this._radarDrafts = { ...this._radarDrafts, [entity.entity_id]: (event.target as HTMLInputElement).value }; }}
+          @change=${(event: Event) => this._setRadarNumber(entity, (event.target as HTMLInputElement).value, minimum, maximum)} />
+      </div>`;
+  }
+
+  private _openFloorplan(): void {
+    this.dispatchEvent(new CustomEvent('navigate', {
+      detail: { page: 'zones' },
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _radarModeLabel(mode: unknown): string {
+    if (mode === 'top') return this._text('radar.device.mode_top');
+    if (mode === 'side') return this._text('radar.device.mode_side');
+    if (mode === 'unknown' || mode === 'unavailable') return this._text('radar.device.not_reported');
+    return typeof mode === 'string' && mode.trim()
+      ? mode
+      : this._text('radar.device.not_reported');
+  }
+
+  private _renderRadarSettingsCard() {
+    const capability = resolveRadarDeviceSettings(this._entities, this._radarProfile);
+    const device = capability.profile;
+    if (!device) return nothing;
+    const profile = device.profile;
+    const model = (profile.radar_model || 'radar').toUpperCase();
+    const modeEntity = this._radarEntity(profile.installation_mode_entity_id);
+    const reportedModeEntity = this._radarEntity(profile.reported_installation_mode_entity_id);
+    const heightEntity = this._radarEntity(profile.installation_height_entity_id);
+    const angleEntity = this._radarEntity(profile.installation_angle_entity_id);
+    const distanceEntity = this._radarEntity(profile.detection_distance_entity_id);
+    const startEntity = this._radarEntity(profile.detection_start_angle_entity_id);
+    const endEntity = this._radarEntity(profile.detection_end_angle_entity_id);
+    const selectedModeState = modeEntity
+      ? (this.hass.states[modeEntity.entity_id]?.state ?? modeEntity.state)
+      : profile.current_hardware_mode;
+    const modeState = reportedModeEntity
+      ? (this.hass.states[reportedModeEntity.entity_id]?.state ?? reportedModeEntity.state)
+      : profile.current_hardware_mode;
+    const requiredMode = profile.required_installation_mode;
+    const modeReady = !requiredMode || modeState === requiredMode || profile.hardware_mode_capability === 'fixed';
+    const installationEntities = [heightEntity, angleEntity].filter(Boolean);
+    const installationPartial = profile.radar_model === 'ld2460' && installationEntities.length > 0 && installationEntities.length < 2;
+    const installationControlsDisabled = [modeEntity, ...installationEntities].some(entity => !!entity?.disabled_by);
+    const sectorEntities = [distanceEntity, startEntity, endEntity].filter(Boolean);
+    const sectorControlsReady = sectorEntities.length === 3 && sectorEntities.every(entity => !entity?.disabled_by);
+    const sectorControlsDisabled = sectorEntities.length === 3 && sectorEntities.some(entity => !!entity?.disabled_by);
+    const fallEntity = (role: RadarFallRole) => this._radarEntity(capability.fall.entities[role]);
+    const fallEnabled = fallEntity('enabled');
+    const fallEnabledState = fallEnabled ? this.hass.states[fallEnabled.entity_id]?.state ?? fallEnabled.state : undefined;
+    const fallSignals = [
+      { entity: fallEntity('possible_fall'), label: 'radar.fall.possible' },
+      { entity: fallEntity('prolonged_low'), label: 'radar.fall.prolonged' },
+    ].filter(signal => !!signal.entity) as Array<{ entity: DeviceEntity; label: string }>;
+    const requiredFallEntities = (['enabled', 'mounting_height', 'low_height', 'fall_hold', 'low_hold'] as RadarFallRole[])
+      .map(fallEntity).filter(Boolean) as DeviceEntity[];
+    const fallControlsReady = capability.fall.status === 'complete'
+      && requiredFallEntities.length === 5
+      && requiredFallEntities.every(entity => !entity.disabled_by);
+    const fallControlsDisabled = capability.fall.status === 'complete'
+      && requiredFallEntities.some(entity => !!entity.disabled_by);
+
+    return html`
+      <section class="feature-card">
+        <div class="feature-header">
+          <div class="feature-heading radar">
+            <ha-icon icon="mdi:radar"></ha-icon>
+            <div>
+              <h2 class="feature-title">${this._text('radar.device.title')}</h2>
+              <p class="feature-description">${this._text('radar.device.description')}</p>
+            </div>
+          </div>
+        </div>
+        <div class="radar-overview">
+          <div class="radar-overview-item"><span>${this._text('radar.device.model')}</span><strong>${model}</strong></div>
+          <div class="radar-overview-item"><span>${this._text('radar.device.mounting')}</span><strong>${this._text(profile.mounting_mode === 'ceiling' ? 'radar.device.ceiling' : 'radar.device.wall')}</strong></div>
+          <div class="radar-overview-item"><span>${this._text('radar.device.mode')}</span><strong>${this._radarModeLabel(modeState)}</strong></div>
+        </div>
+
+        ${modeEntity || installationEntities.length ? html`
+          <div class="radar-section">
+            <div class="radar-section-head">
+              <ha-icon icon="mdi:angle-acute"></ha-icon>
+              <div><div class="radar-section-title">${this._text('radar.device.installation')}</div><div class="radar-section-copy">${this._text('radar.device.installation_description')}</div></div>
+            </div>
+            <div class="radar-control-grid">
+              ${modeEntity && !modeEntity.disabled_by ? html`
+                <div class="radar-control">
+                  <label for="radar-installation-mode">${this._text('radar.device.installation_mode')}</label>
+                  <select id="radar-installation-mode"
+                    ?disabled=${radarEntityState(modeEntity, this.hass.states) !== 'ready' || !!this._radarPending}
+                    @change=${async (event: Event) => {
+                      const select = event.currentTarget as HTMLSelectElement;
+                      const option = select.value;
+                      const succeeded = await this._runRadarUpdate(modeEntity, 'select', 'select_option', { option }, state => state === option);
+                      if (!succeeded) select.value = selectedModeState || '';
+                    }}>
+                    ${(profile.installation_mode_options?.length ? profile.installation_mode_options : ['top', 'side']).map(option => html`<option value=${option} ?selected=${option === selectedModeState}>${this._radarModeLabel(option)}</option>`)}
+                  </select>
+                </div>` : nothing}
+              ${this._radarNumberControl(heightEntity, 'radar.installation.height', .1, 10, .01)}
+              ${this._radarNumberControl(angleEntity, 'radar.installation.angle', 0, 90, .1)}
+            </div>
+            ${installationPartial ? html`<div class="feature-status warning"><ha-icon icon="mdi:update"></ha-icon><div><strong>${this._text('radar.device.firmware_update')}</strong>${this._text('radar.device.installation_partial')}</div></div>` : nothing}
+            ${installationControlsDisabled ? html`<div class="feature-status warning"><ha-icon icon="mdi:lock-outline"></ha-icon><div><strong>${this._text('radar.device.controls_disabled')}</strong>${this._text('radar.device.controls_disabled_body')}</div></div>` : nothing}
+            ${!modeReady ? html`<div class="radar-note warning"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${this._text('radar.device.mode_required', { mode: this._radarModeLabel(requiredMode) })}</span></div>` : nothing}
+          </div>` : nothing}
+
+        ${profile.radar_model === 'ld2460' ? html`
+          <div class="radar-section">
+            <div class="radar-section-head">
+              <ha-icon icon="mdi:vector-arc"></ha-icon>
+              <div><div class="radar-section-title">${this._text('radar.sector.title')}</div><div class="radar-section-copy">${this._text('radar.sector.description')}</div></div>
+            </div>
+            ${sectorControlsReady ? html`
+              <div class="radar-control-grid">
+                ${this._radarNumberControl(distanceEntity, 'radar.sector.distance', .1, 6, .1)}
+                ${this._radarNumberControl(startEntity, 'radar.sector.start_angle', -60, 60, 1)}
+                ${this._radarNumberControl(endEntity, 'radar.sector.end_angle', -60, 60, 1)}
+              </div>
+              <div class="radar-note"><ha-icon icon="mdi:information-outline"></ha-icon><span>${this._text('radar.sector.directions')}</span></div>
+              <div class="radar-note warning"><ha-icon icon="mdi:pause-circle-outline"></ha-icon><span>${this._text('radar.sector.pause_notice')}</span></div>
+            ` : html`<div class="feature-status warning"><ha-icon icon=${sectorControlsDisabled ? 'mdi:lock-outline' : 'mdi:update'}></ha-icon><div><strong>${this._text(sectorControlsDisabled ? 'radar.device.controls_disabled' : 'radar.device.firmware_update')}</strong>${this._text(sectorControlsDisabled ? 'radar.device.controls_disabled_body' : 'radar.sector.firmware_update')}</div></div>`}
+          </div>` : nothing}
+
+        ${profile.radar_model === 'ld6002b' && capability.fall.status !== 'unsupported' ? html`
+          <div class="radar-section">
+            <div class="radar-section-head">
+              <ha-icon icon="mdi:human-cane"></ha-icon>
+              <div><div class="radar-section-title">${this._text('radar.fall.title')}</div><div class="radar-section-copy">${this._text('radar.fall.description')}</div></div>
+            </div>
+            ${fallControlsReady && fallEnabled ? html`
+              <div class="radar-fall-toggle">
+                <div><div class="radar-section-title">${this._text('radar.fall.enabled')}</div><div class="radar-section-copy">${this._text('radar.fall.enabled_description')}</div></div>
+                <button class="toggle ${fallEnabledState === 'on' ? 'on' : ''}" role="switch" aria-checked=${fallEnabledState === 'on'}
+                  aria-label=${this._text('radar.fall.enabled')}
+                  ?disabled=${radarEntityState(fallEnabled, this.hass.states) !== 'ready' || !!this._radarPending}
+                  @click=${() => void this._runRadarUpdate(fallEnabled, 'switch', fallEnabledState === 'on' ? 'turn_off' : 'turn_on', {}, state => state === (fallEnabledState === 'on' ? 'off' : 'on'))}></button>
+              </div>
+              <div class="radar-control-grid" style="margin-top: 13px;">
+                ${this._radarNumberControl(fallEntity('mounting_height'), 'radar.fall.height', 0, 10, .01)}
+                ${this._radarNumberControl(fallEntity('low_height'), 'radar.fall.low_height', .1, 1, .01)}
+                ${this._radarNumberControl(fallEntity('fall_hold'), 'radar.fall.hold', .1, 3600, .1)}
+                ${this._radarNumberControl(fallEntity('low_hold'), 'radar.fall.low_hold', .1, 3600, .1)}
+              </div>
+              ${fallSignals.length ? html`
+                <div class="radar-live-status" aria-label=${this._text('radar.fall.live_status')} aria-live="polite">
+                  ${fallSignals.map(({ entity, label }) => {
+                    const state = radarEntityState(entity, this.hass.states);
+                    const detected = state === 'ready' && (this.hass.states[entity.entity_id]?.state ?? entity.state) === 'on';
+                    const statusKey = state === 'ready' ? (detected ? 'radar.fall.detected' : 'radar.fall.clear') : 'radar.fall.unavailable';
+                    return html`<span class="radar-live-chip ${detected ? 'detected' : ''}"><ha-icon icon=${detected ? 'mdi:alert-circle' : state === 'ready' ? 'mdi:check-circle-outline' : 'mdi:cloud-alert-outline'}></ha-icon><strong>${this._text(label)}</strong> ${this._text(statusKey)}</span>`;
+                  })}
+                </div>` : nothing}
+            ` : html`<div class="feature-status warning"><ha-icon icon=${fallControlsDisabled ? 'mdi:lock-outline' : 'mdi:update'}></ha-icon><div><strong>${this._text(fallControlsDisabled ? 'radar.device.controls_disabled' : 'radar.device.firmware_update')}</strong>${this._text(fallControlsDisabled ? 'radar.device.controls_disabled_body' : 'radar.fall.partial')}</div></div>`}
+            <div class="radar-note warning"><ha-icon icon="mdi:shield-alert-outline"></ha-icon><span>${this._text('radar.fall.warning')}</span></div>
+          </div>` : nothing}
+
+        <div class="radar-section">
+          <div class="radar-section-head">
+            <ha-icon icon="mdi:floor-plan"></ha-icon>
+            <div><div class="radar-section-title">${this._text('radar.device.room_setup')}</div><div class="radar-section-copy">${this._text('radar.device.room_setup_description')}</div></div>
+          </div>
+          <div class="radar-actions">
+            <button class="secondary-button" @click=${this._openFloorplan}><ha-icon icon="mdi:floor-plan"></ha-icon> ${this._text('radar.device.open_floorplan')}</button>
+            ${this._radarPending ? html`<ha-circular-progress active></ha-circular-progress>` : nothing}
+            ${this._radarFeedback ? html`<span class="radar-feedback" role="status">${this._radarFeedback}</span>` : nothing}
+            ${this._radarError ? html`<span class="radar-feedback error" role="alert">${this._radarError}</span>` : nothing}
+          </div>
+        </div>
+      </section>`;
+  }
+
   private _specialEntityIds(): Set<string> {
     const ids = new Set<string>();
     for (const channel of this._calibrationChannels()) ids.add(channel.offset.entity_id);
@@ -1538,11 +1882,35 @@ export class SettingsPage extends LitElement {
       const entity = this._quietHoursEntity(key);
       if (entity) ids.add(entity.entity_id);
     }
+    const radar = resolveRadarDeviceSettings(this._entities, this._radarProfile);
+    const profile = radar.profile?.profile;
+    const addIfGuided = (entityId?: string | null): void => {
+      const entity = entityId ? this._radarEntity(entityId) : undefined;
+      if (entity && !entity.disabled_by) ids.add(entity.entity_id);
+    };
+    addIfGuided(profile?.installation_mode_entity_id);
+    addIfGuided(profile?.installation_height_entity_id);
+    addIfGuided(profile?.installation_angle_entity_id);
+    const sectorIds = [
+      profile?.detection_distance_entity_id,
+      profile?.detection_start_angle_entity_id,
+      profile?.detection_end_angle_entity_id,
+    ];
+    const sectorEntities = sectorIds.map(entityId => entityId ? this._radarEntity(entityId) : undefined);
+    if (sectorEntities.length === 3 && sectorEntities.every(entity => entity && !entity.disabled_by)) {
+      for (const entityId of sectorIds) addIfGuided(entityId);
+    }
+    const requiredFallRoles: RadarFallRole[] = ['enabled', 'mounting_height', 'low_height', 'fall_hold', 'low_hold'];
+    const fallEntities = requiredFallRoles.map(role => this._radarEntity(radar.fall.entities[role]));
+    if (radar.fall.status === 'complete' && fallEntities.every(entity => entity && !entity.disabled_by)) {
+      for (const role of requiredFallRoles) addIfGuided(radar.fall.entities[role]);
+    }
     return ids;
   }
 
   private _renderFeatureCards() {
     const cards = [
+      this._renderRadarSettingsCard(),
       this._renderCalibrationCard(),
       this._renderQuietHoursCard(),
       this._renderSpeakerCard(),
@@ -1685,17 +2053,51 @@ export class SettingsPage extends LitElement {
     service: string,
     data: Record<string, unknown> = {},
   ): Promise<boolean> {
-    if (this._runningEntity === entity.entity_id) return false;
-    this._runningEntity = entity.entity_id;
+    if (this._runningEntities.has(entity.entity_id)) return false;
+    const deviceId = this._selectedDevice?.id;
+    const selectionGeneration = this._deviceSelectionGeneration;
+    this._runningEntities = new Set([...this._runningEntities, entity.entity_id]);
     try {
-      await this.hass.callService(domain, service, { entity_id: entity.entity_id, ...data });
+      const expected = domain === 'switch' && (service === 'turn_on' || service === 'turn_off')
+        ? (state: string) => state === (service === 'turn_on' ? 'on' : 'off')
+        : domain === 'select' && typeof data.option === 'string'
+          ? (state: string) => state === data.option
+          : domain === 'number' && Number.isFinite(Number(data.value))
+            ? (state: string) => Math.abs(Number(state) - Number(data.value)) < .005
+            : null;
+      if (expected) {
+        const currentState = this.hass.states[entity.entity_id]?.state;
+        if (currentState !== undefined && expected(currentState)) {
+          if (selectionGeneration === this._deviceSelectionGeneration && this._selectedDevice?.id === deviceId) {
+            this._setEntityFeedback(entity.entity_id, 'success', this._text('status.saved'));
+          }
+          return true;
+        }
+        await performConfirmedEntityUpdate(
+          () => this.hass.callService(domain, service, { entity_id: entity.entity_id, ...data }),
+          () => this.hass.states[entity.entity_id],
+          expected,
+          10_000,
+        );
+        if (selectionGeneration === this._deviceSelectionGeneration && this._selectedDevice?.id === deviceId) {
+          this._setEntityFeedback(entity.entity_id, 'success', this._text('status.saved'));
+        }
+      } else {
+        await this.hass.callService(domain, service, { entity_id: entity.entity_id, ...data });
+      }
       return true;
     } catch (err) {
       console.error(`Failed to run ${domain}.${service}:`, err);
-      this._setEntityFeedback(entity.entity_id, 'error', this._text('error.run'));
+      if (selectionGeneration === this._deviceSelectionGeneration && this._selectedDevice?.id === deviceId) {
+        this._setEntityFeedback(entity.entity_id, 'error', this._text(
+          err instanceof QuietHoursUpdateError && err.kind === 'timeout' ? 'error.unconfirmed' : 'error.run',
+        ));
+      }
       return false;
     } finally {
-      this._runningEntity = null;
+      const running = new Set(this._runningEntities);
+      running.delete(entity.entity_id);
+      this._runningEntities = running;
     }
   }
 
@@ -1797,7 +2199,7 @@ export class SettingsPage extends LitElement {
   private _renderConfirmation() {
     const pending = this._pendingEntityAction;
     if (!pending) return nothing;
-    const running = this._runningEntity === pending.entity.entity_id;
+    const running = this._runningEntities.has(pending.entity.entity_id);
     return html`
       <div class="confirm-backdrop" role="presentation"
         @click=${(event: MouseEvent) => {
@@ -1890,7 +2292,7 @@ export class SettingsPage extends LitElement {
     const state = stateObj?.state;
     const attrs = (stateObj?.attributes || {}) as Record<string, unknown>;
     const unavailable = this._isEntityUnavailable(entity, stateObj);
-    const running = this._runningEntity === entity.entity_id;
+    const running = this._runningEntities.has(entity.entity_id);
 
     if (entity.disabled_by) {
       const enabling = this._enablingEntities.has(entity.entity_id);
@@ -1916,8 +2318,13 @@ export class SettingsPage extends LitElement {
     if (entity.domain === 'select') {
       const options = (attrs.options as string[]) || [];
       return html`
-        <select ?disabled=${unavailable}
-          @change=${(e: Event) => void this._executeEntityService(entity, 'select', 'select_option', { option: (e.target as HTMLSelectElement).value })}>
+        <select aria-label=${entity.name} ?disabled=${unavailable || running}
+          @change=${async (e: Event) => {
+            const select = e.currentTarget as HTMLSelectElement;
+            const option = select.value;
+            const succeeded = await this._executeEntityService(entity, 'select', 'select_option', { option });
+            if (!succeeded) select.value = state || '';
+          }}>
           ${options.map(opt => html`<option value=${opt} ?selected=${opt === state}>${opt}</option>`)}
         </select>
       `;
@@ -1926,7 +2333,7 @@ export class SettingsPage extends LitElement {
     if (entity.domain === 'number') {
       const unit = attrs.unit_of_measurement as string | undefined;
       return html`
-        <input type="number" .value=${unavailable ? '' : String(state)}
+        <input type="number" aria-label=${entity.name} .value=${unavailable ? '' : String(state)}
           min=${(attrs.min as number) ?? nothing} max=${(attrs.max as number) ?? nothing} step=${(attrs.step as number) ?? nothing}
           ?disabled=${unavailable || running}
           @change=${(e: Event) => {
@@ -1987,7 +2394,7 @@ export class SettingsPage extends LitElement {
                     <span>${this._text('admin.only')}</span>
                   </div>` : nothing}
                 ${feedback ? html`
-                  <div class="setting-state ${feedback.tone}">
+                  <div class="setting-state ${feedback.tone}" role=${feedback.tone === 'error' ? 'alert' : 'status'}>
                     <ha-icon icon=${feedback.tone === 'success' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'}></ha-icon>
                     <span>${feedback.text}</span>
                   </div>` : nothing}

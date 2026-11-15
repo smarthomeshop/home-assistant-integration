@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 
 /**
@@ -7,7 +7,6 @@ import type { HomeAssistant } from '../types';
  * The integration itself is fully local; this only pulls live spot prices
  * from the SmartHomeShop.io account API when a key is provided.
  */
-@customElement('shs-account-prices')
 export class AccountPrices extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ attribute: false }) public refreshToken = '';
@@ -567,6 +566,10 @@ export class AccountPrices extends LitElement {
       </div>
     `;
   }
+}
+
+if (!customElements.get('shs-account-prices')) {
+  customElements.define('shs-account-prices', AccountPrices);
 }
 
 declare global {

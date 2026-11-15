@@ -182,11 +182,42 @@ export const parseRoomExportText = (text: string): Room => {
 
 export const makeImportedRoom = (room: Room, id: string, name: string): Room => {
   const validated = validateRoom(room) as Room & Record<string, unknown>;
-  const { created_at: _createdAt, updated_at: _updatedAt, house: _house, ...portableRoom } = validated;
+  const {
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    house: _house,
+    sensor: legacySensor,
+    ...portableRoom
+  } = validated;
+  const importedSources = Array.isArray(validated.sensors) && validated.sensors.length
+    ? validated.sensors
+    : isRecord(legacySensor)
+      ? [legacySensor]
+      : [];
   return cloneRoom(validateRoom({
     ...portableRoom,
     id,
     name: name.trim(),
+    sensors: importedSources.map(source => {
+      const {
+        deviceId: _deviceId,
+        device_id: _legacyDeviceId,
+        ...portableSource
+      } = source as typeof source & { device_id?: string };
+      return {
+        ...portableSource,
+        deviceId: null,
+        z_mapping: { mode: 'raw', verified: false },
+      };
+    }),
+    aggregation: validated.aggregation ? {
+      ...validated.aggregation,
+      tracking: {
+        ...validated.aggregation.tracking,
+        experimental_fusion: false,
+        source_alignments: {},
+      },
+    } : undefined,
   }));
 };
 

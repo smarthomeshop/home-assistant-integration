@@ -53,7 +53,8 @@ test('contains the Live Home Lovelace-card translations in every required langua
     assert.notEqual(LIVE_HOME_CARD_TRANSLATIONS[language]['Live Home'], 'Live Home');
     assert.ok(LIVE_HOME_CARD_TRANSLATIONS[language]['Data unavailable']);
     assert.ok(LIVE_HOME_CARD_TRANSLATIONS[language]['{offline} of {total} sensors offline']);
-    assert.ok(LIVE_HOME_CARD_TRANSLATIONS[language]['Rooms and radar sensors are managed in SmartHomeShop Room Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.']);
+    assert.ok(LIVE_HOME_CARD_TRANSLATIONS[language]['Presence detected · sensor data incomplete']);
+    assert.ok(LIVE_HOME_CARD_TRANSLATIONS[language]['Rooms and radar sensors are managed in the SmartHomeShop Floorplan Designer. Exact positions are shown when the radar supplies coordinates; otherwise the card shows honest room-level presence.']);
   }
 });
 

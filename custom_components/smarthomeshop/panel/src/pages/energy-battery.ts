@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 import { panelText } from '../utils/panel-translations';
 
@@ -98,7 +98,6 @@ function plannerAutomation(alias: string) {
   };
 }
 
-@customElement('shs-energy-battery')
 export class EnergyBattery extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceName = '';
@@ -895,6 +894,10 @@ export class EnergyBattery extends LitElement {
       ${this._renderModal()}
     `;
   }
+}
+
+if (!customElements.get('shs-energy-battery')) {
+  customElements.define('shs-energy-battery', EnergyBattery);
 }
 
 declare global {

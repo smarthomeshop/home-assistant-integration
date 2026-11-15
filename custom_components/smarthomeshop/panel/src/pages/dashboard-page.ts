@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant, SmartHomeShopDevice, DeviceEntity } from '../types';
 import { panelText } from '../utils/panel-translations';
 import {
@@ -12,6 +12,7 @@ import { volumeToLiters } from '../utils/water-units';
 import './settings-page';
 import './automations-page';
 import '../components/ha-energy-sync';
+import '../components/device-radar-view';
 
 interface DeviceWithEntities extends SmartHomeShopDevice {
   entities?: DeviceEntity[];
@@ -49,7 +50,6 @@ const PRODUCT_CONFIG: Record<string, ProductConfig> = {
   wallsense: { icon: 'mdi:wall', category: 'sensor', color: '#4361ee' },
 };
 
-@customElement('shs-dashboard-page')
 export class DashboardPage extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public selectedDeviceId?: string;
@@ -62,6 +62,7 @@ export class DashboardPage extends LitElement {
   @state() private _deviceFilter: DeviceFilter | null = null;
   @state() private _detailDevice: DeviceWithEntities | null = null;
   @state() private _insights: any | null = null;
+  @state() private _insightsUnavailable = false;
   @state() private _showMeterForm = false;
   @state() private _meterInput = '';
   @state() private _detailTab: 'overview' | 'automations' | 'settings' = 'overview';
@@ -74,6 +75,8 @@ export class DashboardPage extends LitElement {
   @state() private _removeError = '';
   @state() private _removalNotice = '';
   private _insightsTimer?: number;
+  private _insightsRequestGeneration = 0;
+  private _insightsRequest?: { deviceId: string; token: symbol };
   private _deviceLoadInFlight = false;
 
   static styles = css`
@@ -1074,8 +1077,11 @@ export class DashboardPage extends LitElement {
   }
 
   private _openDetail(device: DeviceWithEntities): void {
+    this._insightsRequestGeneration += 1;
+    if (this._insightsTimer) clearInterval(this._insightsTimer);
     this._detailDevice = device;
     this._insights = null;
+    this._insightsUnavailable = false;
     this._detailTab = 'overview';
     this._linking = false;
     this._linkError = '';
@@ -1084,8 +1090,10 @@ export class DashboardPage extends LitElement {
   }
 
   private _closeDetail(): void {
+    this._insightsRequestGeneration += 1;
     this._detailDevice = null;
     this._insights = null;
+    this._insightsUnavailable = false;
     this._showMeterForm = false;
     this._meterInput = '';
     if (this._insightsTimer) {
@@ -1101,13 +1109,25 @@ export class DashboardPage extends LitElement {
 
   private async _fetchInsights(): Promise<void> {
     if (!this._detailDevice) return;
+    const deviceId = this._detailDevice.id;
+    if (this._insightsRequest?.deviceId === deviceId) return;
+    const generation = this._insightsRequestGeneration;
+    const request = { deviceId, token: Symbol(deviceId) };
+    this._insightsRequest = request;
     try {
-      this._insights = await this.hass.callWS<any>({
+      const insights = await this.hass.callWS<any>({
         type: 'smarthomeshop/device/insights',
-        device_id: this._detailDevice.id,
+        device_id: deviceId,
       });
+      if (generation !== this._insightsRequestGeneration || this._detailDevice?.id !== deviceId) return;
+      this._insights = insights;
+      this._insightsUnavailable = false;
     } catch (err) {
       console.error('Failed to load insights:', err);
+      if (generation !== this._insightsRequestGeneration || this._detailDevice?.id !== deviceId) return;
+      this._insightsUnavailable = true;
+    } finally {
+      if (this._insightsRequest === request) this._insightsRequest = undefined;
     }
   }
 
@@ -1409,6 +1429,17 @@ export class DashboardPage extends LitElement {
         </a>
       </div>
 
+      ${this._insightsUnavailable && !ins ? html`
+        <div class="load-warning" role="alert">
+          <ha-icon icon="mdi:cloud-alert-outline"></ha-icon>
+          <div class="load-warning-copy">
+            <strong>${panelText(this.hass, 'Live device data is temporarily unavailable.')}</strong>
+            <span>${panelText(this.hass, 'The device page will retry automatically. You can also try again now.')}</span>
+          </div>
+          <button type="button" @click=${() => this._fetchInsights()}>${panelText(this.hass, 'Try again')}</button>
+        </div>
+      ` : nothing}
+
       ${ins && ins.configured === false ? (ins.entry_exists ? html`
         <div class="not-configured">
           ${ins.entry_disabled ? html`
@@ -1500,7 +1531,7 @@ export class DashboardPage extends LitElement {
         ${config.category === 'sensor' ? html`
           <div class="insight-card" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
             <div>
-              <div style="font-size: 14px; font-weight: 600; color: var(--primary-text-color);">Room Designer</div>
+              <div style="font-size: 14px; font-weight: 600; color: var(--primary-text-color);">${this.hass.language?.startsWith('nl') ? 'Plattegrond' : 'Floorplan Designer'}</div>
               <div style="font-size: 12.5px; color: var(--secondary-text-color); margin-top: 2px;">Draw the room, place sensors and configure zones and entry lines for this device.</div>
             </div>
             <button class="designer-btn" @click=${() => this.dispatchEvent(new CustomEvent('navigate', { detail: { page: 'zones' } }))}>
@@ -1847,7 +1878,15 @@ export class DashboardPage extends LitElement {
       ` : nothing}
 
       ${ins?.radar ? html`
-        <div class="chips-row">
+        ${ins.radar.live_view?.supported ? html`
+          <shs-device-radar-view
+            .hass=${this.hass}
+            .radar=${ins.radar.live_view}
+            .unavailable=${this._insightsUnavailable}>
+          </shs-device-radar-view>
+        ` : nothing}
+
+        ${!this._insightsUnavailable ? html`<div class="chips-row">
           ${ins.radar.presence !== undefined ? html`
             <div class="chip-card">
               <div class="chip-label">Presence</div>
@@ -1872,7 +1911,7 @@ export class DashboardPage extends LitElement {
               <div class="chip-value ${ins.radar.last_crossing === 'in' ? 'good' : ''}">${ins.radar.last_crossing === 'in' ? 'In' : 'Out'}</div>
             </div>
           ` : nothing}
-        </div>
+        </div>` : nothing}
 
         ${(ins.radar.zones || []).length > 0 ? html`
           <div class="insight-card">
@@ -1896,7 +1935,7 @@ export class DashboardPage extends LitElement {
 
         <div class="insight-card" style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
           <div>
-            <div style="font-size: 14px; font-weight: 600; color: var(--primary-text-color);">Room Designer</div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--primary-text-color);">${this.hass.language?.startsWith('nl') ? 'Plattegrond' : 'Floorplan Designer'}</div>
             <div style="font-size: 12.5px; color: var(--secondary-text-color); margin-top: 2px;">Draw the room, place sensors and configure zones and entry lines for this device.</div>
           </div>
           <button class="designer-btn" @click=${() => this.dispatchEvent(new CustomEvent('navigate', { detail: { page: 'zones' } }))}>
@@ -2355,14 +2394,14 @@ export class DashboardPage extends LitElement {
               <div class="remove-warning">
                 <ha-icon icon="mdi:information-outline"></ha-icon>
                 <span>
-                  This is reversible. Use “Hidden devices” below the device list to show it again. Nothing is removed from ESPHome.
+                  This is reversible. Use "Hidden devices" below the device list to show it again. Nothing is removed from ESPHome.
                 </span>
               </div>
             ` : html`
               <div class="remove-warning">
                 <ha-icon icon="mdi:information-outline"></ha-icon>
                 <span>
-                  The device stays visible here as “Not linked” because ESPHome still supplies it. You can link it to SmartHomeShop again later.
+                  The device stays visible here as "Not linked" because ESPHome still supplies it. You can link it to SmartHomeShop again later.
                 </span>
               </div>
             `}
@@ -2379,7 +2418,7 @@ export class DashboardPage extends LitElement {
               @click=${this._confirmDeviceRemoval}
             >
               ${this._removeBusy
-                ? 'Removing…'
+                ? 'Removing...'
                 : fullRemoval
                   ? 'Remove from Home Assistant'
                   : hideRemoval
@@ -2620,19 +2659,11 @@ export class DashboardPage extends LitElement {
         <h2 class="section-title">${panelText(this.hass, 'Tools')}</h2>
       </div>
       <div class="tools-list">
-        <button class="tool-row" @click=${() => this._navigateTo('home')}>
-          <span class="tool-icon"><ha-icon icon="mdi:home-account"></ha-icon></span>
-          <span class="tool-text">
-            <span class="tool-title">${panelText(this.hass, 'Live Home')}</span>
-            <p class="tool-desc">${panelText(this.hass, 'See live presence across every room and floor')}</p>
-          </span>
-          <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
-        </button>
         <button class="tool-row" @click=${() => this._navigateTo('zones')}>
           <span class="tool-icon"><ha-icon icon="mdi:floor-plan"></ha-icon></span>
           <span class="tool-text">
-            <span class="tool-title">${panelText(this.hass, 'Room Designer')}</span>
-            <p class="tool-desc">${panelText(this.hass, 'Draw your room, place sensors and configure zones and entry lines')}</p>
+            <span class="tool-title">${this.hass.language?.startsWith('nl') ? 'Plattegrond' : 'Floorplan Designer'}</span>
+            <p class="tool-desc">${this.hass.language?.startsWith('nl') ? 'Teken je woning, plaats je sensoren en bekijk live detecties.' : 'Draw your home, place your sensors and see live detections.'}</p>
           </span>
           <ha-icon class="tool-chevron" icon="mdi:chevron-right"></ha-icon>
         </button>
@@ -2650,4 +2681,8 @@ export class DashboardPage extends LitElement {
     `;
   }
 
+}
+
+if (!customElements.get('shs-dashboard-page')) {
+  customElements.define('shs-dashboard-page', DashboardPage);
 }

@@ -189,7 +189,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
   @state() private _roomViewMode: '2d' | '3d' = '2d';
   @state() private _trends: Record<string, TrendSeries> = {};
 
-  // Shared 3D renderer (identical to the Room Designer panel)
+  // Shared 3D renderer (identical to the Floorplan Designer panel)
   private _room3d = new Room3DRenderer();
   private _isDragging3D = false;
   private _lastMouseX = 0;
@@ -1564,7 +1564,10 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
     const endPoint = trend.points[trend.points.length - 1];
     const endX = x(endPoint.t);
     const endY = y(endPoint.v);
-    const rangeLabel = `${minimum.toFixed(decimals)}–${maximum.toFixed(decimals)}${unit ? ` ${unit}` : ''}`;
+    const rangeLow = minimum.toFixed(decimals);
+    const rangeHigh = maximum.toFixed(decimals);
+    const rangeSeparator = rangeLow.startsWith('-') || rangeHigh.startsWith('-') ? ' to ' : '-';
+    const rangeLabel = `${rangeLow}${rangeSeparator}${rangeHigh}${unit ? ` ${unit}` : ''}`;
 
     return html`
       <div class="env-card-trend" title="Change over the last ${hours} ${hourWord}">
@@ -1811,7 +1814,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
             : 'Loading rooms...'}</div>
           ${this._roomsLoaded ? html`
             <div style="font-size: 0.8rem; margin-top: 8px;">
-              Link this exact device to a sensor placement in Room Designer, or select a room override in the card editor.
+              Link this exact device to a sensor placement in the Floorplan Designer, or select a room override in the card editor.
             </div>
           ` : nothing}
         </div>
@@ -3186,7 +3189,7 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
                     <div class="trend-hours-row">
                       <div class="trend-hours-label">
                         History range
-                        <div class="trend-hours-hint">Show the latest 1–168 hours</div>
+                        <div class="trend-hours-hint">Show the latest 1 to 168 hours</div>
                       </div>
                       <div class="trend-hours-control">
                         <input id="trend_hours" type="number" min="1" max="168" step="1"
@@ -3288,7 +3291,7 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
               )}
             >
               <option value="" ?selected=${!this._config.room_id}>
-                Automatic${this._automaticRoom()?.name ? ` — ${this._automaticRoom()?.name}` : ''}
+                Automatic${this._automaticRoom()?.name ? ` (${this._automaticRoom()?.name})` : ''}
               </option>
               ${this._rooms.map(room => html`
                 <option value=${room.id} ?selected=${this._config.room_id === room.id}>
@@ -3300,8 +3303,8 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
               ${this._roomsError
                 ? this._roomsError
                 : !this._roomsLoaded
-                  ? 'Loading rooms…'
-                  : 'Automatic uses the Room Designer room linked to this exact Home Assistant device.'}
+                  ? 'Loading rooms...'
+                  : 'Automatic uses the room this exact Home Assistant device is linked to in the Floorplan Designer.'}
             </div>
           </div>
 
@@ -3323,10 +3326,10 @@ export class SmartHomeShopUltimateSensorCardEditor extends LitElement {
                 Number((e.target as HTMLSelectElement).value),
               )}
             >
-              <option value="300" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 300}>Compact — 300 px</option>
-              <option value="360" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 360}>Standard — 360 px</option>
-              <option value="480" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 480}>Large — 480 px</option>
-              <option value="600" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 600}>Extra large — 600 px</option>
+              <option value="300" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 300}>Compact (300 px)</option>
+              <option value="360" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 360}>Standard (360 px)</option>
+              <option value="480" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 480}>Large (480 px)</option>
+              <option value="600" ?selected=${normaliseRoomViewHeight(this._config.room_height) === 600}>Extra large (600 px)</option>
             </select>
             <div class="info">In a Sections dashboard you can also drag the card wider. The card requests the full row by default.</div>
           </div>

@@ -1,10 +1,12 @@
 import { LitElement, html, svg, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { DeviceEntity, HomeAssistant } from '../types';
 import '../components/account-prices';
 import '../components/ha-energy-sync';
 import './energy-sources';
 import './energy-battery';
+import './energy-ev';
+import './energy-loads';
 import './energy-automations';
 
 interface Sources {
@@ -118,10 +120,9 @@ declare global {
   }
 }
 
-type EnergySettingsTab = 'connection' | 'sources' | 'ha-energy' | 'automations' | 'battery';
-type EnergySettingsFocus = 'account' | 'sources' | 'ha-energy' | 'solar-control' | 'battery' | '';
+type EnergySettingsTab = 'connection' | 'sources' | 'ha-energy' | 'automations' | 'loads' | 'battery' | 'ev';
+type EnergySettingsFocus = 'account' | 'sources' | 'ha-energy' | 'solar-control' | 'loads' | 'battery' | 'ev' | '';
 
-@customElement('shs-energy-hub')
 export class EnergyHub extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
 
@@ -2780,9 +2781,19 @@ export class EnergyHub extends LitElement {
             <div><div class="smart-name">Schedules</div><div class="smart-detail">${activeSchedules > 0 ? `${activeSchedules} running now` : nextSchedule ? `Next at ${this._hm(nextSchedule)}` : 'Created on a device page (Automations)'}</div></div>
           </div>
           <div class="smart-item">
+            <div class="smart-icon"><ha-icon icon="mdi:calendar-lightning-bolt"></ha-icon></div>
+            <div><div class="smart-name">Smart Loads</div><div class="smart-detail">Plan flexible household devices around prices, solar, EV charging, the battery and P1 capacity</div></div>
+            ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('loads')}>Open</button>` : nothing}
+          </div>
+          <div class="smart-item">
             <div class="smart-icon ${batteryOn ? 'good' : ''}"><ha-icon icon="mdi:home-battery-outline"></ha-icon></div>
             <div><div class="smart-name">Battery control</div><div class="smart-detail">${batteryOn ? this._batterySummary() : 'Not configured'}</div></div>
             ${!batteryOn && this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('battery')}>Set up</button>` : nothing}
+          </div>
+          <div class="smart-item">
+            <div class="smart-icon"><ha-icon icon="mdi:car-electric"></ha-icon></div>
+            <div><div class="smart-name">Smart EV</div><div class="smart-detail">Ready-by charging with prices, solar, home battery and P1 safety</div></div>
+            ${this.hass.user?.is_admin ? html`<button class="cta-btn ghost" @click=${() => this._openSettings('ev')}>Open</button>` : nothing}
           </div>
         </div>
       </section>
@@ -2895,6 +2906,8 @@ export class EnergyHub extends LitElement {
       ${this._renderDailyElectricityCost(priceOk)}
       ${this._sources.show_smart_savings !== false ? this._renderSavings(priceOk) : nothing}
       ${this._renderPowerSection(grid)}
+      <section class="section"><shs-energy-loads .hass=${this.hass} .compact=${true}></shs-energy-loads></section>
+      <section class="section"><shs-energy-ev .hass=${this.hass} .compact=${true}></shs-energy-ev></section>
       ${this._renderSmartEnergy(priceOk, activeSchedules, batteryOn)}
       ${this._renderCompareNudge(priceOk)}
     `;
@@ -3106,7 +3119,9 @@ export class EnergyHub extends LitElement {
     if (focus === 'sources') return 'sources';
     if (focus === 'ha-energy') return 'ha-energy';
     if (focus === 'solar-control') return 'automations';
+    if (focus === 'loads') return 'loads';
     if (focus === 'battery') return 'battery';
+    if (focus === 'ev') return 'ev';
     return 'connection';
   }
 
@@ -3123,7 +3138,7 @@ export class EnergyHub extends LitElement {
   }
 
   private _onSettingsTabKeydown(event: KeyboardEvent, current: EnergySettingsTab): void {
-    const tabs: EnergySettingsTab[] = ['connection', 'sources', 'ha-energy', 'automations', 'battery'];
+    const tabs: EnergySettingsTab[] = ['connection', 'sources', 'ha-energy', 'automations', 'loads', 'battery', 'ev'];
     const index = tabs.indexOf(current);
     let next: EnergySettingsTab | undefined;
     if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
@@ -3336,6 +3351,24 @@ export class EnergyHub extends LitElement {
       `;
     }
 
+    if (tab === 'ev') {
+      return html`
+        <div class="settings-panel" id="energy-settings-ev" role="tabpanel"
+          aria-labelledby="energy-settings-tab-ev" tabindex="-1">
+          <shs-energy-ev .hass=${this.hass}></shs-energy-ev>
+        </div>
+      `;
+    }
+
+    if (tab === 'loads') {
+      return html`
+        <div class="settings-panel" id="energy-settings-loads" role="tabpanel"
+          aria-labelledby="energy-settings-tab-loads" tabindex="-1">
+          <shs-energy-loads .hass=${this.hass}></shs-energy-loads>
+        </div>
+      `;
+    }
+
     return html`
       <div class="settings-panel" id="energy-settings-battery" role="tabpanel"
         aria-labelledby="energy-settings-tab-battery" tabindex="-1">
@@ -3361,7 +3394,9 @@ export class EnergyHub extends LitElement {
       { id: 'sources', label: 'Sources', icon: 'mdi:solar-power-variant-outline' },
       { id: 'ha-energy', label: 'HA Energy', icon: 'mdi:home-lightning-bolt-outline' },
       { id: 'automations', label: 'Automations', icon: 'mdi:robot-outline' },
+      { id: 'loads', label: 'Smart Loads', icon: 'mdi:calendar-lightning-bolt' },
       { id: 'battery', label: 'Battery', icon: 'mdi:home-battery-outline' },
+      { id: 'ev', label: 'EV', icon: 'mdi:car-electric' },
     ];
 
     return html`
@@ -3373,7 +3408,7 @@ export class EnergyHub extends LitElement {
           </button>
           <div class="eyebrow">Smart Energy</div>
           <h1>Energy settings</h1>
-          <div class="subtitle">Configure your connection, energy sources, Home Assistant Energy, automations and battery.</div>
+          <div class="subtitle">Configure your connection, energy sources, Home Assistant Energy, automations, flexible loads, battery and electric vehicles.</div>
         </header>
         <div class="settings-tabs-shell">
           <nav class="settings-tabs" role="tablist" aria-label="Energy settings sections">
@@ -3530,6 +3565,10 @@ export class EnergyHub extends LitElement {
     const timestamp = new Date(iso).getTime();
     return Number.isFinite(timestamp) ? this._time(timestamp) : '';
   }
+}
+
+if (!customElements.get('shs-energy-hub')) {
+  customElements.define('shs-energy-hub', EnergyHub);
 }
 
 declare global {

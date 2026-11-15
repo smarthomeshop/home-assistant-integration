@@ -38,6 +38,7 @@ export interface HassState {
   attributes: Record<string, unknown>;
   last_changed: string;
   last_updated: string;
+  last_reported?: string;
 }
 
 export interface HassDevice {
@@ -113,7 +114,7 @@ export interface DevicePlacement {
   deviceId?: string;
 }
 
-/** Position of one Room Designer room in the whole-home model. */
+/** Position of one Floorplan Designer room in the whole-home model. */
 export interface HousePlacement {
   x: number;
   y: number;
@@ -294,6 +295,61 @@ export interface RoomMirror {
   reflectionDepthMm: number;
 }
 
+export interface RoomSensorSource {
+  id: string;
+  deviceId?: string | null;
+  x?: number;
+  y?: number;
+  rotation?: number;
+  range?: number;
+  fov?: number;
+  heightMm?: number;
+  mountingMode?: 'wall' | 'ceiling';
+  source_version?: number;
+  x_m?: number;
+  y_m?: number;
+  height_m?: number;
+  orientation_deg?: number;
+  radar_modules?: string[];
+  capabilities?: Record<string, unknown>;
+  configured_at?: string;
+  z_mapping?: {
+    mode: 'raw' | 'floor_up' | 'sensor_down';
+    verified: boolean;
+    verification_fingerprint?: string;
+  };
+}
+
+export type RoomClimateStrategy = 'average' | 'primary' | 'separate';
+
+export interface RoomAggregationSettings {
+  version: number;
+  presence: {
+    freshness_seconds: number;
+    vacancy_delay_seconds: number;
+    source_ids: string[];
+  };
+  climate: Record<'temperature' | 'humidity' | 'co2', {
+    strategy: RoomClimateStrategy;
+    primary_source_id: string | null;
+  }>;
+  tracking: {
+    experimental_fusion: boolean;
+    alignment_revoked_at?: string;
+    duplicate_distance_mm: number;
+    observation_freshness_ms: number;
+    handoff_hold_ms: number;
+    z_tolerance_mm: number;
+    source_alignments: Record<string, {
+      placement_fingerprint: string;
+      verified_at: string;
+      sample_count: number;
+      rmse_mm: number;
+      duplicate_distance_mm: number;
+    }>;
+  };
+}
+
 export interface Room {
   id: string;
   name: string;
@@ -304,7 +360,9 @@ export interface Room {
   mirrors?: RoomMirror[];
   doors?: Array<Record<string, unknown>>;
   windows?: Array<Record<string, unknown>>;
-  sensors?: Array<Record<string, unknown>>;
+  sensors?: RoomSensorSource[];
+  aggregation?: RoomAggregationSettings;
+  schema_version?: number;
   calibration?: RoomCalibration;
   tracking?: RadarTrackingSettings;
   house?: HousePlacement;

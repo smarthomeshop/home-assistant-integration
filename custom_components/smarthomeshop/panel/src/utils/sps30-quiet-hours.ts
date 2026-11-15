@@ -3,6 +3,7 @@ export type QuietHoursEntityStatus = 'ready' | 'unknown' | 'unavailable' | 'miss
 export interface QuietHoursStateSnapshot {
   state: string;
   last_updated?: string;
+  last_reported?: string;
 }
 
 export class QuietHoursUpdateError extends Error {
@@ -30,7 +31,7 @@ export const parseQuietHour = (value: unknown): number | null => {
 
 export const formatQuietHour = (value: unknown): string => {
   const hour = parseQuietHour(value);
-  return hour === null ? '—' : `${String(hour).padStart(2, '0')}:00`;
+  return hour === null ? '-' : `${String(hour).padStart(2, '0')}:00`;
 };
 
 export const isQuietScheduleAllDay = (start: unknown, end: unknown): boolean => {
@@ -95,6 +96,7 @@ export const performConfirmedEntityUpdate = async (
     const receivedUpdate = !!current && (
       !previous
       || current.last_updated !== previous.last_updated
+      || current.last_reported !== previous.last_reported
       || current.state !== previous.state
     );
     if (current && receivedUpdate && matchesExpectedState(current.state)) return current;

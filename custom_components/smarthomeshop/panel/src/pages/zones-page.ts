@@ -1,6 +1,13 @@
 import { LitElement, html, css, svg, nothing, PropertyValues } from 'lit';
-import { customElement, property, state, query } from 'lit/decorators.js';
-import type { HomeAssistant, RadarDeviceProfilePayload, RadarTargetEntityMap, Room } from '../types';
+import { property, state, query } from 'lit/decorators.js';
+import type {
+  HomeAssistant,
+  RadarDeviceProfilePayload,
+  RadarTargetEntityMap,
+  Room,
+  RoomAggregationSettings,
+  RoomClimateStrategy,
+} from '../types';
 import '../components/sensor-coverage-calibration';
 import type { CalibrationPoint } from '../components/sensor-coverage-calibration';
 import { panelText } from '../utils/panel-translations';
@@ -22,6 +29,7 @@ import {
   LD2460_DETECTION_DISTANCE_RANGE,
   LD2460_HEIGHT_RANGE,
   RadarInstallationUpdateError,
+  expectedRadarHardwareMode,
   parseRadarInstallationNumber,
   performConfirmedRadarUpdate,
   radarInstallationAvailability,
@@ -37,6 +45,7 @@ import {
   allocateReflectionExclusions,
   createMirrorReflectionPolygons,
   pointInPolygon,
+  safelyOutsideRoom,
 } from '../utils/reflection-protection';
 import {
   MAX_ROOM_IMPORT_BYTES,
@@ -52,6 +61,44 @@ import {
   parseAppleRoomPlanText,
   type RoomPlanWarning,
 } from '../utils/roomplan-import';
+import {
+  CrossSourceAssociationGate,
+  MultiSensorTrackEngine,
+  alignmentCaptureFingerprint,
+  assessRoomTrackingStatus,
+  assessPairwiseAlignmentNetwork,
+  exclusionsExplainAggregatePresence,
+  fuseObservations,
+  fusionReadiness,
+  isFreshObservation,
+  mapReportedZToRoom,
+  reconcileReportedTargetCount,
+  roomFusionOptions,
+  shouldRevokeAlignment,
+  sourcePlacementFingerprint,
+  type RoomTrack,
+  type TrackObservation,
+  type ZMapping,
+} from '../utils/multi-sensor-tracking';
+import {
+  EntityReportReceiptTracker,
+  latestIndependentReportTimestamp,
+  radarEvidenceEntityIds,
+  safeSuppressionRoomPolygon,
+} from '../utils/whole-home';
+import {
+  applyInstallationChangeToOriginRoom,
+  authoritativeAlignmentRevocation,
+  fusionCanRun,
+  mergeHardwareRoomMetadata,
+  reconcileRoomAfterAlignmentRevocation,
+  roomWithFusionRevoked,
+  zoneAppliesToSensor,
+  type AlignmentRevocationResult,
+} from '../utils/room-safety';
+
+const PENDING_ALIGNMENT_REVOCATIONS_KEY = 'smarthomeshop.pending-alignment-revocations.v1';
+const PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX = `${PENDING_ALIGNMENT_REVOCATIONS_KEY}.room.`;
 
 interface Point { x: number; y: number; }
 interface Point3D { x: number; y: number; z: number; }
@@ -86,7 +133,65 @@ interface WindowItem { id: string; wallIndex: number; position: number; width: n
 interface MirrorItem { id: string; wallIndex: number; position: number; width: number; height: number; protectionEnabled: boolean; reflectionDepthMm: number; }
 type SensorMountingMode = 'wall' | 'ceiling';
 type RadarProductFamily = 'ceilsense' | 'ultimate-sensor' | 'unknown';
-interface SensorInstance { id: string; deviceId: string | null; x: number; y: number; rotation: number; range: number; fov: number; heightMm: number; mountingMode: SensorMountingMode; }
+interface SensorInstance {
+  id: string;
+  deviceId: string | null;
+  x: number;
+  y: number;
+  rotation: number;
+  range: number;
+  fov: number;
+  heightMm: number;
+  mountingMode: SensorMountingMode;
+  sourceVersion?: number;
+  configuredAt?: string;
+  radarModules?: string[];
+  capabilities?: Record<string, unknown>;
+  zMapping?: ZMapping;
+}
+interface LiveTarget {
+  index: number;
+  x: number;
+  y: number;
+  active: boolean;
+  rawZMm: number | null;
+  roomZMm: number | null;
+  observedAtMs: number;
+  excluded: boolean;
+}
+interface RoomRuntimeSource {
+  source_id: string;
+  device_id: string | null;
+  name: string;
+  status: 'positive' | 'negative' | 'unknown';
+  age_seconds: number | null;
+  radar_modules: string[];
+  positioning: boolean;
+  climate: Record<string, { fresh: boolean; value: number | null }>;
+}
+interface RoomRuntimeSnapshot {
+  presence: { occupied: boolean | null; status: string; degraded: boolean; unknown_sources: string[] };
+  climate: Record<string, { value: number | null; available: boolean; degraded: boolean }>;
+  sources: RoomRuntimeSource[];
+  tracking: RoomAggregationSettings['tracking'];
+}
+const createDefaultAggregation = (): RoomAggregationSettings => ({
+  version: 2,
+  presence: { freshness_seconds: 120, vacancy_delay_seconds: 30, source_ids: [] },
+  climate: {
+    temperature: { strategy: 'average', primary_source_id: null },
+    humidity: { strategy: 'average', primary_source_id: null },
+    co2: { strategy: 'average', primary_source_id: null },
+  },
+  tracking: {
+    experimental_fusion: false,
+    duplicate_distance_mm: 650,
+    observation_freshness_ms: 5000,
+    handoff_hold_ms: 1800,
+    z_tolerance_mm: 700,
+    source_alignments: {},
+  },
+});
 interface RadarCapabilities {
   targetCount: number;
   availableTargetCount: number;
@@ -218,7 +323,7 @@ const normalizeZone = (raw: Partial<ZoneData>, index: number): ZoneData => {
     points: type === 'entry' ? points.slice(0, 2) : (parts[0] || points),
     parts: type === 'entry' ? undefined : parts,
     inDirection: raw.inDirection,
-    sensorId: raw.sensorId,
+    sensorId: raw.sensorId || (raw as Partial<ZoneData> & { sensor_id?: string }).sensor_id,
     profile: type === 'detection' ? { ...baseProfile, ...raw.profile, preset } : undefined,
   };
 };
@@ -227,13 +332,17 @@ const normalizeZone = (raw: Partial<ZoneData>, index: number): ZoneData => {
 // The icon is drawn procedurally with simple shapes (head sphere, body/arms/legs as rounded boxes)
 
 
-@customElement('shs-zones-page')
 export class ZonesPage extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property({ type: Array }) rooms: Room[] = [];
+  @property({ type: Boolean }) hardwareOnly = false;
+  @property({ attribute: false }) hardwareContext?: { roomId?: string; sensorId?: string; readOnly: boolean };
+  @state() private _hardwareLoading = true;
+  @state() private _hardwareFeedback: { message: string; status: 'success' | 'warning'; conflict?: boolean } | null = null;
 
   // Room state
   @state() private _roomsError: string | null = null;
+  @state() private _invalidRoomCount = 0;
   @state() private _selectedRoomId: string | null = null;
   @state() private _roomPoints: Point[] = [];
   @state() private _furniture: LocalFurnitureItem[] = [];
@@ -243,6 +352,14 @@ export class ZonesPage extends LitElement {
 
   // Sensor state (multiple sensors per room)
   @state() private _sensors: SensorInstance[] = [];
+  @state() private _aggregation: RoomAggregationSettings = createDefaultAggregation();
+  @state() private _roomRuntime: Record<string, RoomRuntimeSnapshot> = {};
+  @state() private _roomRuntimeAvailable = false;
+  private _runtimeUpdateInterval: number | null = null;
+  private _runtimeExpiryTimer: number | null = null;
+  private _runtimeRequest = 0;
+  private _runtimePending = false;
+  private _runtimeReceivedAt = 0;
   @state() private _selectedSensorIndex: number | null = null;
   @state() private _draggingSensorIndex: number | null = null;
   @state() private _radarDevices: RadarDevice[] = [];
@@ -279,7 +396,17 @@ export class ZonesPage extends LitElement {
   @state() private _editingZoneIndex: number | null = null;
 
   // Live tracking, keyed by sensor instance id
-  @state() private _liveTargets: Record<string, Array<{index: number, x: number, y: number, active: boolean}>> = {};
+  @state() private _liveTargets: Record<string, LiveTarget[]> = {};
+  @state() private _roomTracks: RoomTrack[] = [];
+  @state() private _alignmentSamples: Array<Record<string, Point>> = [];
+  private _alignmentSampleFingerprint: string | null = null;
+  @state() private _alignmentFeedback = '';
+  @state() private _alignmentRevocationError = '';
+  @state() private _fusionAssociationAmbiguous = false;
+  private _latestRoomObservations: TrackObservation[] = [];
+  private readonly _roomTrackEngine = new MultiSensorTrackEngine();
+  private readonly _associationGate = new CrossSourceAssociationGate();
+  private readonly _targetReportReceipts = new EntityReportReceiptTracker();
 
   // Zone sync state
   @state() private _entryExitEnabled = false;
@@ -294,11 +421,17 @@ export class ZonesPage extends LitElement {
   @state() private _saving = false;
   @state() private _isDragging = false;
   @state() private _dirty = false;
+  private _editRevision = 0;
+  private readonly _pendingAlignmentRevocationRoomIds = this._loadPendingAlignmentRevocations();
+  private readonly _alignmentRevocationInFlight = new Set<string>();
+  private readonly _alignmentRevocationBlockedRoomIds = new Set<string>();
 
-  /** Whether there are unsaved Room Designer changes (read by the top nav). */
+  /** Whether there are unsaved Floorplan Designer changes (read by the top nav). */
   public get isDirty(): boolean {
     return this._dirty;
   }
+
+  public get hardwareBusy(): boolean { return this._saving || this._pushingToESPHome; }
 
   // Design mode: room layout editing vs sensors & zones
   @state() private _designMode: DesignMode = 'layout';
@@ -374,6 +507,7 @@ export class ZonesPage extends LitElement {
   @state() private _viewMode: ViewMode = '2d';
   private _camera3d: Camera3D = { azimuth: 45, elevation: 35, distance: 8000, targetX: 0, targetY: 0, targetZ: 1000 };
   private _isDragging3D = false;
+  private _active3DPointerId: number | null = null;
   private _lastMouseX = 0;
   private _lastMouseY = 0;
 
@@ -381,7 +515,7 @@ export class ZonesPage extends LitElement {
 
   static styles = css`
     :host {
-      /* Room Designer theme tokens: follow the active HA theme. The old
+      /* Floorplan Designer theme tokens: follow the active HA theme. The old
          hardcoded slate palette only suited dark mode. */
       --rd-deep: var(--secondary-background-color, #0f172a);
       --rd-panel: var(--card-background-color, #1e293b);
@@ -455,6 +589,45 @@ export class ZonesPage extends LitElement {
     .settings-panel { padding: 12px; margin-bottom: 14px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 10px; }
     .settings-panel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--rd-text); font-size: 13px; font-weight: 600; }
     .settings-panel-header ha-icon { --mdc-icon-size: 18px; color: #4361ee; }
+    :host([hardwareonly]) { display: block; min-height: 0; height: auto; padding: 0; background: transparent; }
+    .radar-settings { padding: 18px 20px 24px; }
+    .radar-settings h3 { margin: 0; font-size: 15px; line-height: 1.35; color: var(--rd-text); }
+    .radar-settings p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--rd-dim2); }
+    .radar-fields { display: grid; gap: 12px; }
+    .radar-field { position: relative; display: grid; min-width: 0; gap: 6px; color: var(--rd-text); font-size: 13px; font-weight: 650; }
+    .radar-field::after {
+      content: ""; position: absolute; inset-inline-end: 16px; bottom: 19px; width: 7px; height: 7px;
+      border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); pointer-events: none;
+    }
+    .radar-field select {
+      appearance: none; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 0 32px 0 12px;
+      border: 1px solid var(--rd-line); border-radius: 8px; background: var(--rd-deep); color: var(--rd-text);
+      font: inherit; font-size: 15px; font-weight: 400;
+    }
+    .radar-settings :is(select, button):focus-visible { outline: 2px solid var(--primary-color, #4361ee); outline-offset: 2px; }
+    .radar-section { display: grid; gap: 9px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--rd-line); }
+    .radar-section-title, .radar-actions { display: flex; align-items: center; gap: 8px; }
+    .radar-actions { flex-wrap: wrap; }
+    .radar-section-title ha-icon, .radar-notice ha-icon { --mdc-icon-size: 18px; color: var(--rd-dim2); }
+    .radar-section .radar-count { margin-inline-start: auto; font-size: 12px; color: var(--rd-dim2); }
+    .radar-settings .radar-action {
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 12px;
+      border: 1px solid var(--rd-line); border-radius: 8px; background: var(--rd-deep); color: var(--rd-text);
+      cursor: pointer; font: inherit; font-size: 13px; font-weight: 650;
+    }
+    .radar-action ha-icon { --mdc-icon-size: 17px; }
+    .radar-settings .radar-action:hover:not(:disabled) { border-color: var(--primary-color, #4361ee); }
+    .radar-settings .radar-action:disabled { opacity: .58; cursor: default; }
+    .radar-settings .radar-primary:not(:disabled) { border-color: #4261e4; background: #4261e4; color: #fafbff; }
+    .radar-notice {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 9px;
+      margin-top: 14px; padding: 12px; border: 1px solid var(--rd-line); border-radius: 8px; background: var(--rd-deep);
+    }
+    .radar-notice p { overflow-wrap: anywhere; white-space: pre-wrap; }
+    .radar-notice[data-status="warning"] ha-icon { color: var(--warning-color, #b97025); }
+    .radar-notice[data-status="success"] ha-icon { color: var(--success-color, #23834b); }
+    .radar-notice button { margin-top: 8px; }
+    @media (max-width: 600px) { .radar-settings { padding: 15px; } }
     .settings-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-top: 10px; }
     .settings-row label { color: var(--rd-dim2); font-size: 12px; }
     .settings-row input[type="number"], .corner-row input { width: 82px; padding: 7px 8px; box-sizing: border-box; border: 1px solid var(--rd-line); border-radius: 6px; background: var(--rd-panel); color: var(--rd-text); }
@@ -559,9 +732,11 @@ export class ZonesPage extends LitElement {
     .radar-diagnostics dd { margin: 0; color: var(--rd-text); overflow-wrap: anywhere; }
     .radar-diagnostics p { margin: 7px 0 0; color: #d97706; line-height: 1.4; }
     .sensor-list { display: flex; flex-direction: column; gap: 6px; }
-    .sensor-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; cursor: pointer; }
+    .sensor-item { display: flex; align-items: center; gap: 4px; padding: 4px; background: var(--rd-deep); border: 1px solid var(--rd-line); border-radius: 8px; }
     .sensor-item:hover { border-color: var(--rd-line-strong); }
     .sensor-item.selected { border-color: #4361ee; background: rgba(67, 97, 238, 0.1); }
+    .sensor-select { display: flex; flex: 1; min-width: 0; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+    .sensor-select:focus-visible, .canvas3d:focus-visible { outline: 2px solid #4361ee; outline-offset: 2px; }
     .sensor-dot { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 700; flex-shrink: 0; }
     .sensor-dot.small { width: 18px; height: 18px; font-size: 10px; }
     .sensor-item-info { flex: 1; min-width: 0; }
@@ -570,6 +745,52 @@ export class ZonesPage extends LitElement {
     .add-sensor-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px; border: 2px dashed var(--rd-line-strong); border-radius: 8px; background: transparent; color: var(--rd-dim2); font-size: 13px; cursor: pointer; }
     .add-sensor-btn:hover { border-color: #4361ee; color: #4361ee; }
     .add-sensor-btn ha-icon { --mdc-icon-size: 16px; }
+    .room-aggregation { margin-top: 14px; padding: 12px; border: 1px solid var(--rd-line); border-radius: 10px; background: color-mix(in srgb, var(--rd-deep) 72%, transparent); }
+    .room-aggregation-header { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px; align-items: start; }
+    .room-aggregation-header > ha-icon { --mdc-icon-size: 21px; color: var(--rd-accent); margin-top: 2px; }
+    .room-aggregation-header strong, .room-aggregation-header span { display: block; overflow-wrap: anywhere; }
+    .room-aggregation-header strong { color: var(--rd-text); font-size: 12px; }
+    .room-aggregation-header span { margin-top: 3px; color: var(--rd-dim); font-size: 10.5px; line-height: 1.4; }
+    .aggregation-status { display: flex; align-items: center; gap: 7px; margin-top: 11px; padding: 8px 9px; border-radius: 7px; background: color-mix(in srgb, #64748b 10%, var(--rd-panel)); color: var(--rd-dim2); font-size: 11px; font-weight: 650; }
+    .aggregation-status.occupied { background: color-mix(in srgb, #22c55e 11%, var(--rd-panel)); color: #16844a; }
+    .aggregation-status.clear { background: color-mix(in srgb, #4361ee 9%, var(--rd-panel)); color: #4361ee; }
+    .aggregation-status.unknown, .aggregation-status.clearing { background: color-mix(in srgb, #d97706 10%, var(--rd-panel)); color: #b45309; }
+    .aggregation-status ha-icon { --mdc-icon-size: 16px; flex: 0 0 auto; }
+    .aggregation-block { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--rd-line); }
+    .aggregation-block h4 { margin: 0; color: var(--rd-text); font-size: 11.5px; }
+    .aggregation-help { margin: 4px 0 0; color: var(--rd-dim); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+    .source-health-list { display: grid; gap: 6px; margin-top: 8px; }
+    .source-health { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 7px 8px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-panel); }
+    .source-health input { width: 16px; height: 16px; accent-color: var(--rd-accent); }
+    .source-health-main { min-width: 0; }
+    .source-health-main strong, .source-health-main small { display: block; overflow-wrap: anywhere; }
+    .source-health-main strong { color: var(--rd-text); font-size: 10.5px; }
+    .source-health-main small { margin-top: 2px; color: var(--rd-dim); font-size: 9.5px; }
+    .source-state { padding: 3px 5px; border-radius: 4px; background: var(--rd-deep); color: var(--rd-dim); font-size: 9px; font-weight: 750; text-transform: uppercase; }
+    .source-state.positive { color: #16844a; }
+    .source-state.unknown { color: #b45309; }
+    .aggregation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 8px; }
+    .aggregation-field { min-width: 0; }
+    .aggregation-field label { display: block; color: var(--rd-dim2); font-size: 9.5px; line-height: 1.3; }
+    .aggregation-field input, .aggregation-field select { width: 100%; min-width: 0; box-sizing: border-box; margin-top: 4px; padding: 7px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-panel); color: var(--rd-text); font: inherit; font-size: 10.5px; }
+    .aggregation-field input:focus-visible, .aggregation-field select:focus-visible { outline: 2px solid var(--rd-accent); outline-offset: 1px; }
+    .climate-row { display: grid; grid-template-columns: minmax(70px, .7fr) minmax(0, 1fr); gap: 7px; align-items: center; margin-top: 7px; }
+    .climate-row > label { color: var(--rd-dim2); font-size: 10.5px; }
+    .climate-controls { display: grid; gap: 5px; min-width: 0; }
+    .climate-controls select { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-panel); color: var(--rd-text); font: inherit; font-size: 10.5px; }
+    .fusion-toggle { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; align-items: center; margin-top: 8px; }
+    .fusion-toggle label { color: var(--rd-text); font-size: 10.5px; font-weight: 650; }
+    .fusion-toggle input { width: 18px; height: 18px; accent-color: var(--rd-accent); }
+    .fusion-calibration, .z-mapping-panel { margin-top: 9px; padding: 9px; border: 1px solid var(--rd-line); border-radius: 8px; background: var(--rd-panel); }
+    .fusion-calibration strong, .z-mapping-panel > strong { color: var(--rd-text); font-size: 10.5px; }
+    .fusion-calibration-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .fusion-calibration-actions .secondary-action { display: inline-flex; align-items: center; gap: 5px; }
+    .z-mapping-row { display: grid; grid-template-columns: minmax(90px, .6fr) minmax(0, 1.4fr); gap: 7px; align-items: center; margin-top: 8px; }
+    .z-mapping-row > label { color: var(--rd-dim2); font-size: 10px; overflow-wrap: anywhere; }
+    .z-mapping-row select { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--rd-line); border-radius: 7px; background: var(--rd-deep); color: var(--rd-text); font: inherit; font-size: 10px; }
+    .z-confirmation { grid-column: 2; display: flex; gap: 6px; align-items: flex-start; color: var(--rd-dim); line-height: 1.35; }
+    .z-confirmation input { flex: 0 0 auto; margin-top: 1px; accent-color: var(--rd-accent); }
+    @media (max-width: 460px) { .aggregation-grid, .climate-row, .z-mapping-row { grid-template-columns: 1fr; } .z-confirmation { grid-column: 1; } }
     .live-sensor-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
     .live-sensor-name { flex: 1; color: var(--rd-dim2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .live-sensor-count { color: var(--rd-text); font-weight: 600; }
@@ -747,29 +968,137 @@ export class ZonesPage extends LitElement {
     .view-toggle-btn:hover { background: rgba(67, 97, 238, 0.1); color: #4361ee; }
     .view-toggle-btn.active { background: #4361ee; color: white; }
     .view-toggle-btn ha-icon { --mdc-icon-size: 16px; }
-    .canvas3d { flex: 1; display: block; cursor: grab; background: var(--rd-canvas); }
+    .canvas3d { flex: 1; display: block; cursor: grab; background: var(--rd-canvas); touch-action: none; }
     .canvas3d:active { cursor: grabbing; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     .view3d-info { position: absolute; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 8px; background: var(--rd-panel); border: 1px solid var(--rd-line); border-radius: 9px; padding: 10px 12px; z-index: 10; font-size: 12px; color: var(--rd-dim2); box-shadow: 0 6px 18px color-mix(in srgb, #000 14%, transparent); }
     .view3d-info ha-icon { --mdc-icon-size: 18px; color: var(--rd-accent); }
+    .view3d-controls { position: absolute; right: 16px; bottom: 16px; display: flex; gap: 6px; z-index: 11; padding: 6px; border: 1px solid var(--rd-line); border-radius: 10px; background: var(--rd-panel); box-shadow: 0 6px 18px color-mix(in srgb, #000 14%, transparent); }
+    @media (max-width: 760px) {
+      .canvas3d { touch-action: pan-y pinch-zoom; }
+      .view3d-info { right: 12px; bottom: 72px; left: 12px; }
+      .view3d-controls { right: 12px; bottom: 12px; }
+    }
   `;
 
   connectedCallback() {
     super.connectedCallback();
-    this._loadRooms();
+    void this._loadRooms().then(() => {
+      for (const roomId of this._pendingAlignmentRevocationRoomIds) {
+        this._clearRoomFusionSafetyState(roomId);
+        void this._persistAlignmentRevocation(roomId);
+      }
+    });
     this._loadRadarProfiles();
     this._startTargetUpdates();
+    this._startRuntimeUpdates();
     window.addEventListener('keydown', this._handleKeyDown);
+    window.addEventListener('storage', this._handleAlignmentRevocationStorage);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopTargetUpdates();
+    this._stopRuntimeUpdates();
+    this._runtimeRequest += 1;
+    this._runtimePending = false;
+    this._runtimeReceivedAt = 0;
+    if (this._runtimeExpiryTimer !== null) window.clearTimeout(this._runtimeExpiryTimer);
+    this._runtimeExpiryTimer = null;
     if (this._sectorDebounceTimer !== null) window.clearTimeout(this._sectorDebounceTimer);
     window.removeEventListener('keydown', this._handleKeyDown);
+    window.removeEventListener('storage', this._handleAlignmentRevocationStorage);
   }
 
   private _markDirty() {
+    this._editRevision += 1;
     this._dirty = true;
+  }
+
+  private _loadPendingAlignmentRevocations(): Set<string> {
+    if (typeof window === 'undefined') return new Set();
+    const pending = new Set<string>();
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(PENDING_ALIGNMENT_REVOCATIONS_KEY) || '[]');
+      if (Array.isArray(stored)) {
+        stored.filter(value => typeof value === 'string').forEach(roomId => pending.add(roomId));
+      }
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        if (!key?.startsWith(PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX)) continue;
+        try {
+          pending.add(decodeURIComponent(key.slice(PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX.length)));
+        } catch {
+          // Ignore malformed keys owned by older or manually edited storage.
+        }
+      }
+      for (const roomId of pending) {
+        window.localStorage.setItem(
+          `${PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX}${encodeURIComponent(roomId)}`,
+          '1',
+        );
+      }
+      window.localStorage.removeItem(PENDING_ALIGNMENT_REVOCATIONS_KEY);
+    } catch {
+      // Keep any entries that were read before storage became unavailable.
+    }
+    return pending;
+  }
+
+  private _setPendingAlignmentRevocation(roomId: string, pending: boolean): void {
+    if (pending) this._pendingAlignmentRevocationRoomIds.add(roomId);
+    else this._pendingAlignmentRevocationRoomIds.delete(roomId);
+    if (typeof window === 'undefined') return;
+    try {
+      const key = `${PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX}${encodeURIComponent(roomId)}`;
+      if (pending) window.localStorage.setItem(key, '1');
+      else window.localStorage.removeItem(key);
+    } catch {
+      // The in-memory safety latch remains active when browser storage is unavailable.
+    }
+  }
+
+  private _handleAlignmentRevocationStorage = (event: StorageEvent): void => {
+    if (!event.key?.startsWith(PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX)) return;
+    let roomId: string;
+    try {
+      roomId = decodeURIComponent(event.key.slice(PENDING_ALIGNMENT_REVOCATION_ROOM_PREFIX.length));
+    } catch {
+      return;
+    }
+    if (!roomId) return;
+    if (event.newValue === null) {
+      this._pendingAlignmentRevocationRoomIds.delete(roomId);
+      this._alignmentRevocationBlockedRoomIds.delete(roomId);
+    } else {
+      this._pendingAlignmentRevocationRoomIds.add(roomId);
+      this._clearRoomFusionSafetyState(roomId);
+    }
+    this.requestUpdate();
+  };
+
+  private _alignmentRevocationPending(roomId = this._selectedRoomId): boolean {
+    return Boolean(roomId && this._pendingAlignmentRevocationRoomIds.has(roomId));
+  }
+
+  private _clearRoomFusionSafetyState(roomId: string): void {
+    const defaults = createDefaultAggregation();
+    this.rooms = this.rooms.map(room => room.id !== roomId
+      ? room
+      : roomWithFusionRevoked(room.aggregation ? room : { ...room, aggregation: defaults }));
+    if (this._selectedRoomId === roomId) {
+      this._aggregation = {
+        ...this._aggregation,
+        tracking: {
+          ...this._aggregation.tracking,
+          experimental_fusion: false,
+          source_alignments: {},
+        },
+      };
+      this._roomTrackEngine.reset();
+      this._associationGate.reset();
+      this._fusionAssociationAmbiguous = false;
+    }
   }
 
   private _commitNumberInput(
@@ -817,7 +1146,12 @@ export class ZonesPage extends LitElement {
   private _updateSensor(index: number, patch: Partial<SensorInstance>) {
     const previous = this._sensors[index];
     if (!previous) return;
-    const next = { ...previous, ...patch };
+    let next = { ...previous, ...patch };
+    const hardwareChanged = previous.deviceId !== next.deviceId
+      || previous.mountingMode !== next.mountingMode;
+    if (hardwareChanged) {
+      next = { ...next, zMapping: { mode: 'raw', verified: false } };
+    }
     const placementChanged = previous.x !== next.x
       || previous.y !== next.y
       || previous.rotation !== next.rotation;
@@ -837,6 +1171,15 @@ export class ZonesPage extends LitElement {
       };
     }
     this._sensors = this._sensors.map((sensor, i) => i === index ? next : sensor);
+    if (placementChanged || previous.heightMm !== next.heightMm || hardwareChanged) {
+      this._aggregation = {
+        ...this._aggregation,
+        tracking: { ...this._aggregation.tracking, experimental_fusion: false },
+      };
+      this._alignmentSamples = [];
+      this._alignmentSampleFingerprint = null;
+      this._alignmentFeedback = panelText(this.hass, 'Sensor placement changed. Repeat the neighbouring overlap alignment before enabling fusion.');
+    }
     this._markDirty();
   }
 
@@ -902,6 +1245,19 @@ export class ZonesPage extends LitElement {
     return live !== null ? Math.round(live * 1000) : sensor.heightMm;
   }
 
+  private _radarLinkedRoomName(deviceId: string): string | null {
+    const physicalId = this._findRadarDevice(deviceId)?.id || deviceId;
+    for (const room of this.rooms) {
+      if (room.id === this._selectedRoomId) continue;
+      const linked = (room.sensors || []).some((source) => {
+        if (!source.deviceId) return false;
+        return (this._findRadarDevice(source.deviceId)?.id || source.deviceId) === physicalId;
+      });
+      if (linked) return room.name;
+    }
+    return null;
+  }
+
   private _radarDetectionSector(radar: RadarDevice | undefined): {
     distanceM: number;
     startAngleDeg: number;
@@ -928,6 +1284,19 @@ export class ZonesPage extends LitElement {
   private _selectRadarDevice(index: number, deviceId: string | null) {
     const sensor = this._sensors[index];
     if (!sensor) return;
+    if (deviceId && this._sensors.some((item, itemIndex) => itemIndex !== index && item.deviceId === deviceId)) {
+      this._alignmentFeedback = panelText(this.hass, 'This radar is already placed in this room. Choose another device.');
+      return;
+    }
+    const linkedRoom = deviceId ? this._radarLinkedRoomName(deviceId) : null;
+    if (linkedRoom) {
+      this._alignmentFeedback = panelText(
+        this.hass,
+        'This radar is already linked to {room}. Unlink it there before using it in this room.',
+        { room: linkedRoom },
+      );
+      return;
+    }
     const radar = this._findRadarDevice(deviceId);
     const isFirstLink = sensor.deviceId === null && radar !== undefined;
     if (!isFirstLink) {
@@ -958,9 +1327,16 @@ export class ZonesPage extends LitElement {
     });
   }
 
+  private _requiredHardwareMode(radar: RadarDevice | undefined): 'top' | 'side' | null {
+    if (!radar) return null;
+    const sensor = this._sensors.find(source =>
+      this._findRadarDevice(source.deviceId)?.id === radar.id);
+    return expectedRadarHardwareMode(sensor?.mountingMode, radar.profile.requiredInstallationMode);
+  }
+
   private _hardwareModeMismatch(radar: RadarDevice | undefined): boolean {
     if (!radar || radar.profile.hardwareModeCapability !== 'top_or_side') return false;
-    const required = radar.profile.requiredInstallationMode;
+    const required = this._requiredHardwareMode(radar);
     const current = this._currentHardwareMode(radar);
     return Boolean(required && current && required !== current);
   }
@@ -975,9 +1351,12 @@ export class ZonesPage extends LitElement {
   }
 
   private _ld2460InstallationReady(radar: RadarDevice | undefined): boolean {
-    if (!radar || radar.profile.radarModel !== 'ld2460') return true;
-    if (radar.profile.requiredInstallationMode !== 'side') return false;
-    if (this._currentHardwareMode(radar) !== 'side') return false;
+    if (!radar || !['ld2460', 'ld6002b'].includes(radar.profile.radarModel)) return true;
+    const currentMode = this._currentHardwareMode(radar);
+    const requiredMode = this._requiredHardwareMode(radar);
+    if (requiredMode && (!currentMode || currentMode !== requiredMode)) return false;
+    if (radar.profile.radarModel === 'ld6002b') return true;
+    if (currentMode === 'top') return true;
     const height = radar.profile.installationHeightEntityId;
     const angle = radar.profile.installationAngleEntityId;
     return Boolean(
@@ -990,8 +1369,11 @@ export class ZonesPage extends LitElement {
 
   private async _applyRequiredHardwareMode(radar: RadarDevice): Promise<void> {
     const entityId = radar.profile.installationModeEntityId;
-    const required = radar.profile.requiredInstallationMode;
+    const required = this._requiredHardwareMode(radar);
     if (!entityId || !required || this._changingHardwareMode) return;
+    const originRoomId = this._selectedRoomId;
+    const originSourceId = this._sensors.find(sensor =>
+      this._findRadarDevice(sensor.deviceId)?.id === radar.id)?.id || null;
     const accepted = confirm(panelText(
       this.hass,
       '{name} is currently set to {current}. Change the radar hardware to {required} mode for this {mounting} mounting?',
@@ -1020,12 +1402,10 @@ export class ZonesPage extends LitElement {
       this._radarDevices = this._radarDevices.map(device => device.id === radar.id
         ? { ...device, profile: { ...device.profile, currentHardwareMode: required } }
         : device);
+      this._invalidateOriginRoomAfterInstallationChange(originRoomId, originSourceId);
       await this._loadRadarProfiles();
-    } catch (error: any) {
-      const detail = error instanceof RadarInstallationUpdateError
-        ? error.message
-        : error?.message;
-      alert(detail || panelText(this.hass, 'Could not set {name} to {mode} mode.', {
+    } catch {
+      alert(panelText(this.hass, 'Could not set {name} to {mode} mode.', {
         name: radar.name,
         mode: panelText(this.hass, required),
       }));
@@ -1082,6 +1462,8 @@ export class ZonesPage extends LitElement {
       ? radar.profile.installationHeightEntityId
       : radar.profile.installationAngleEntityId;
     if (!entityId || this._installationUpdateEntityId) return;
+    const originRoomId = this._selectedRoomId;
+    const originSourceId = this._sensors[sensorIndex]?.id || null;
 
     const range = isHeight ? LD2460_HEIGHT_RANGE : LD2460_ANGLE_RANGE;
     const fallback = isHeight
@@ -1136,7 +1518,6 @@ export class ZonesPage extends LitElement {
           return confirmed !== null && Math.abs(confirmed - requested) < range.step / 2;
         },
       );
-      if (isHeight) this._updateSensor(sensorIndex, { heightMm: Math.round(requested * 1000) });
       this._radarDevices = this._radarDevices.map(device => device.id === radar.id
         ? {
           ...device,
@@ -1151,6 +1532,11 @@ export class ZonesPage extends LitElement {
       const drafts = { ...this._installationDrafts };
       delete drafts[entityId];
       this._installationDrafts = drafts;
+      this._invalidateOriginRoomAfterInstallationChange(
+        originRoomId,
+        originSourceId,
+        isHeight ? Math.round(requested * 1000) : null,
+      );
       this._setInstallationFeedback(entityId, 'success', this._text('radar.installation.saved'));
       await this._loadRadarProfiles();
     } catch (error: any) {
@@ -1296,8 +1682,32 @@ export class ZonesPage extends LitElement {
       const remaining = { ...this._liveTargets };
       delete remaining[removed.id];
       this._liveTargets = remaining;
-      // Detach entry lines counted by this sensor
-      this._zones = this._zones.map(z => z.sensorId === removed.id ? { ...z, sensorId: undefined } : z);
+      // Removing a source must remove its owned zones. Turning them into
+      // shared zones would silently broaden exclusions to every radar.
+      this._zones = this._zones.filter(z => z.sensorId !== removed.id);
+      this._aggregation = {
+        ...this._aggregation,
+        presence: {
+          ...this._aggregation.presence,
+          source_ids: this._aggregation.presence.source_ids.filter(id => id !== removed.id),
+        },
+        climate: Object.fromEntries(
+          Object.entries(this._aggregation.climate).map(([metric, setting]) => [
+            metric,
+            setting.primary_source_id === removed.id
+              ? { ...setting, primary_source_id: null }
+              : setting,
+          ]),
+        ) as RoomAggregationSettings['climate'],
+        tracking: {
+          ...this._aggregation.tracking,
+          experimental_fusion: false,
+          source_alignments: Object.fromEntries(
+            Object.entries(this._aggregation.tracking.source_alignments)
+              .filter(([sourceId]) => sourceId !== removed.id),
+          ),
+        },
+      };
     }
     this._selectedSensorIndex = this._sensors.length > 0 ? 0 : null;
     this._markDirty();
@@ -1597,11 +2007,25 @@ export class ZonesPage extends LitElement {
         { x1: -halfW, y1: halfL, x2: -halfW, y2: -halfL },
       ];
     }
-    const newRoom: Room = { id: 'room_' + Date.now(), name: this._newRoomName.trim(), walls, furniture: [], devices: [], zones: [] } as any;
+    const newRoom: Room = {
+      id: 'room_' + Date.now(),
+      name: this._newRoomName.trim(),
+      walls,
+      furniture: [],
+      devices: [],
+      zones: [],
+      sensors: [],
+      aggregation: createDefaultAggregation(),
+      schema_version: 2,
+    };
     try {
-      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: newRoom });
-      this.rooms = [...this.rooms, newRoom];
-      this._selectRoom(newRoom.id);
+      const result = await this.hass.callWS<{ room: Room }>({
+        type: 'smarthomeshop/room/save',
+        create: true,
+        room: newRoom,
+      });
+      this.rooms = [...this.rooms, result.room];
+      this._selectRoom(result.room.id);
       this._showNewRoomDialog = false;
     } catch (err) {
       console.error('Failed to create room:', err);
@@ -1636,6 +2060,55 @@ export class ZonesPage extends LitElement {
       rotationDeg: item.rotation,
     }));
 
+    const sensors = this._sensors.map((source) => {
+      const { zMapping, ...serializableSource } = source;
+      const radar = this._findRadarDevice(source.deviceId);
+      const trackingSource = radar ? this._trackingSource(source) : source;
+      const stored = room.sensors?.find(item => item.id === source.id);
+      const configurationChanged = !stored
+        || stored.deviceId !== source.deviceId
+        || Number(stored.x) !== source.x
+        || Number(stored.y) !== source.y
+        || Number(stored.rotation ?? 0) !== source.rotation
+        || Number(stored.heightMm ?? 2000) !== source.heightMm
+        || stored.mountingMode !== source.mountingMode;
+      const sourceVersion = Math.max(1, Number(stored?.source_version ?? source.sourceVersion ?? 1));
+      const discoveredModules = radar
+        ? Array.from(new Set([
+            radar.profile.radarModel,
+            ...radar.profile.supplementaryPresenceSensors.flatMap(entityId =>
+              ['ld2412', 'ld2450', 'ld2460', 'ld6002b'].filter(module => entityId.toLowerCase().includes(module))),
+          ].filter(module => module && module !== 'unknown')))
+        : null;
+      return {
+        ...serializableSource,
+        z_mapping: zMapping ? {
+          mode: zMapping.mode,
+          verified: zMapping.verified,
+          ...(zMapping.verificationFingerprint
+            ? { verification_fingerprint: zMapping.verificationFingerprint }
+            : {}),
+        } : { mode: 'raw', verified: false },
+        source_version: configurationChanged && stored ? sourceVersion + 1 : sourceVersion,
+        configured_at: configurationChanged || !stored?.configured_at
+          ? new Date().toISOString()
+          : stored.configured_at,
+        x_m: Number((source.x / 1000).toFixed(4)),
+        y_m: Number((source.y / 1000).toFixed(4)),
+        height_m: Number((source.heightMm / 1000).toFixed(4)),
+        orientation_deg: ((source.rotation % 360) + 360) % 360,
+        radar_modules: discoveredModules ?? source.radarModules,
+        capabilities: radar ? {
+          ...(trackingSource.capabilities || {}),
+          positioning: radar.profile.positioningAvailable,
+          maximum_targets: radar.profile.maximumTargets,
+          coordinate_projection: radar.profile.coordinateProjection,
+          coordinate_frame: radar.profile.coordinateFrame,
+          supplementary_presence: radar.profile.supplementaryPresenceSensors.length > 0,
+        } : source.capabilities,
+      };
+    });
+
     return {
       ...room,
       walls,
@@ -1644,11 +2117,37 @@ export class ZonesPage extends LitElement {
       windows: this._windows,
       mirrors: this._mirrors,
       sensor,
-      sensors: this._sensors,
+      sensors,
+      aggregation: this._aggregation,
+      schema_version: 2,
       zones: this._zones,
       calibration: this._calibration,
       tracking: this._tracking,
     } as unknown as Room;
+  }
+
+  /**
+   * The hardware drawer is deliberately a metadata-only editor.  Floorplan
+   * geometry belongs to the floor planner and must survive a radar-settings
+   * save byte-for-byte (including custom IDs and future schema fields).
+   */
+  private _hardwareRoomSnapshot(room: Room): Room {
+    const zMappings = new Map(this._sensors.map((source) => {
+      const mapping = source.zMapping;
+      return [source.id, mapping ? {
+          mode: mapping.mode,
+          verified: mapping.verified,
+          ...(mapping.verificationFingerprint
+            ? { verification_fingerprint: mapping.verificationFingerprint }
+            : {}),
+        } : { mode: 'raw' as const, verified: false }] as const;
+    }));
+    return mergeHardwareRoomMetadata(
+      room,
+      this._aggregation,
+      this._calibration,
+      zMappings,
+    );
   }
 
   private _openRoomImport(): void {
@@ -1776,21 +2275,25 @@ export class ZonesPage extends LitElement {
     try {
       const suffix = Math.random().toString(36).slice(2, 8);
       const importedRoom = makeImportedRoom(this._pendingImportedRoom, `room_${Date.now()}_${suffix}`, name);
-      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: importedRoom });
+      const result = await this.hass.callWS<{ room: Room }>({
+        type: 'smarthomeshop/room/save',
+        create: true,
+        room: importedRoom,
+      });
+      const savedRoom = result.room || importedRoom;
       this._dirty = false;
-      this.rooms = [...this.rooms, importedRoom];
+      this.rooms = [...this.rooms, savedRoom];
       this._showImportRoomDialog = false;
       this._pendingImportedRoom = null;
       this._pendingImportedRoomOptions = [];
       this._importRoomWarnings = [];
-      this._selectRoom(importedRoom.id);
+      this._selectRoom(savedRoom.id);
       this._roomTransferNotice = {
         tone: 'success',
         text: panelText(this.hass, '{name} was imported as a new room.', { name }),
       };
-    } catch (error: any) {
-      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
-      this._roomActionError = `${panelText(this.hass, 'Could not import the room. Check that you are an administrator and try again.')}${detail}`;
+    } catch {
+      this._roomActionError = panelText(this.hass, 'Could not import the room. Check that you are an administrator and try again.');
     } finally {
       this._roomTransferBusy = false;
     }
@@ -1805,6 +2308,42 @@ export class ZonesPage extends LitElement {
     this._showRenameRoomDialog = true;
   }
 
+  private _roomMutationError(error: unknown, fallback: string): string {
+    const detail = error as { code?: string; message?: string } | undefined;
+    if (detail?.code === 'conflict') {
+      return panelText(this.hass, 'This room changed or was removed in another browser. Reload the Floorplan Designer before saving again.');
+    }
+    if (detail?.code === 'unauthorized') {
+      return panelText(this.hass, 'Only an administrator can change rooms.');
+    }
+    if (detail?.code === 'invalid_format') {
+      return panelText(this.hass, 'The room contains an invalid setting. Review the room and try again.');
+    }
+    if (detail?.code === 'duplicate_device' || detail?.code === 'invalid_device') {
+      return panelText(this.hass, 'One physical radar can only be linked to one room. Unlink it from the other room and try again.');
+    }
+    return panelText(this.hass, fallback);
+  }
+
+  private _replaceRoomFromServer(candidate: Room): void {
+    this.rooms = this.rooms.map((current) => {
+      if (current.id !== candidate.id) return current;
+      const currentRevision = Date.parse(current.updated_at || '');
+      const candidateRevision = Date.parse(candidate.updated_at || '');
+      if (Number.isFinite(currentRevision)
+        && Number.isFinite(candidateRevision)
+        && candidateRevision < currentRevision) return current;
+      return candidate;
+    });
+  }
+
+  private async _reloadRoomAfterConflict(roomId: string): Promise<void> {
+    this._dirty = false;
+    this._selectedRoomId = null;
+    await this._loadRooms();
+    if (this.rooms.some(room => room.id === roomId)) this._selectRoom(roomId);
+  }
+
   private async _renameRoom(): Promise<void> {
     const name = this._renameRoomName.trim();
     const room = this.rooms.find(item => item.id === this._renameRoomId);
@@ -1814,13 +2353,12 @@ export class ZonesPage extends LitElement {
     this._roomActionError = '';
     try {
       const updatedRoom = { ...room, name };
-      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
-      this.rooms = this.rooms.map(item => item.id === room.id ? updatedRoom : item);
+      const result = await this.hass.callWS<{ room: Room }>({ type: 'smarthomeshop/room/save', room: updatedRoom });
+      this._replaceRoomFromServer(result.room);
       this._showRenameRoomDialog = false;
       this._renameRoomId = null;
-    } catch (error: any) {
-      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
-      this._roomActionError = `Could not rename the room.${detail}`;
+    } catch (error: unknown) {
+      this._roomActionError = this._roomMutationError(error, 'Could not rename the room. Check the connection and try again.');
     } finally {
       this._roomActionBusy = false;
     }
@@ -1857,6 +2395,8 @@ export class ZonesPage extends LitElement {
     this._roomActionError = '';
     try {
       await this.hass.callWS({ type: 'smarthomeshop/room/delete', room_id: roomId });
+      this._setPendingAlignmentRevocation(roomId, false);
+      this._alignmentRevocationBlockedRoomIds.delete(roomId);
       const deletedSelectedRoom = this._selectedRoomId === roomId;
       this.rooms = this.rooms.filter(item => item.id !== roomId);
       if (deletedSelectedRoom) {
@@ -1865,15 +2405,15 @@ export class ZonesPage extends LitElement {
       }
       this._showDeleteRoomDialog = false;
       this._deleteRoomId = null;
-    } catch (error: any) {
-      const detail = typeof error?.message === 'string' ? ` ${error.message}` : '';
-      this._roomActionError = `Could not delete the room.${detail}`;
+    } catch (error: unknown) {
+      this._roomActionError = this._roomMutationError(error, 'Could not delete the room. Check the connection and try again.');
     } finally {
       this._roomActionBusy = false;
     }
   }
 
   private _handleKeyDown = (e: KeyboardEvent) => {
+    if (this.hardwareOnly) return;
     const target = e.composedPath()[0] as HTMLElement | undefined;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return;
     if (e.key === 'Escape') {
@@ -1920,42 +2460,50 @@ export class ZonesPage extends LitElement {
     }
   }
 
+  private _serverNowMs(nowMs: number): number {
+    return latestIndependentReportTimestamp(
+      this.hass.states,
+      radarEvidenceEntityIds(this._radarDevices),
+      nowMs,
+    );
+  }
+
+  private _startRuntimeUpdates(): void {
+    this._stopRuntimeUpdates();
+    this._runtimeUpdateInterval = window.setInterval(() => {
+      void this._refreshRoomRuntime();
+    }, 5000);
+  }
+
+  private _stopRuntimeUpdates(): void {
+    if (this._runtimeUpdateInterval !== null) {
+      window.clearInterval(this._runtimeUpdateInterval);
+      this._runtimeUpdateInterval = null;
+    }
+  }
+
   private _updateTargets() {
     if (!this.hass) return;
 
     let changed = false;
-    const next: Record<string, Array<{index: number, x: number, y: number, active: boolean}>> = {};
+    const next: Record<string, LiveTarget[]> = {};
+    const roomObservations: TrackObservation[] = [];
+    const nowMs = Date.now();
+    const serverNowMs = this._serverNowMs(nowMs);
 
     for (const sensor of this._sensors) {
       if (!sensor.deviceId) continue;
       const radar = this._findRadarDevice(sensor.deviceId);
-      const targetMaps = radar?.targets.length
-        ? radar.targets
-        : Array.from({ length: 5 }, (_, offset) => {
-            const index = offset + 1;
-            const x = this._findTargetEntity(sensor.deviceId!, index, 'x');
-            const y = this._findTargetEntity(sensor.deviceId!, index, 'y');
-            return x && y ? { index, x_entity_id: x.entity_id, y_entity_id: y.entity_id } : null;
-          }).filter((target): target is RadarTargetEntityMap => target !== null);
-      const targets: Array<{index: number, x: number, y: number, active: boolean}> = [];
+      const targetMaps = radar?.targets || [];
+      const targets: LiveTarget[] = [];
       let trails = this._targetTrails[sensor.id];
       const maximumTargets = Math.max(1, radar?.profile.maximumTargets || targetMaps.length || 5);
       if (!trails || trails.length !== maximumTargets) {
         trails = Array.from({ length: maximumTargets }, () => []);
         this._targetTrails[sensor.id] = trails;
       }
-
-      const globalPresenceState = radar?.profile.trackingPresenceEntityId
-        ? String(this.hass.states[radar.profile.trackingPresenceEntityId]?.state || '').toLowerCase()
-        : null;
-      const countState = radar?.profile.trackingTargetCountEntityId
-        ? normalizeRadarCoordinate(this.hass.states[radar.profile.trackingTargetCountEntityId]?.state, 1)
-        : null;
-      const reportedTargetCount = countState !== null
-        ? Math.max(0, Math.min(maximumTargets, Math.trunc(countState)))
-        : null;
-      if (globalPresenceState === 'off' || globalPresenceState === 'unknown' || globalPresenceState === 'unavailable') {
-        for (let index = 0; index < trails.length; index++) trails[index] = [];
+      if (radar && !this._ld2460InstallationReady(radar)) {
+        trails.forEach((_trail, index) => { trails[index] = []; });
         next[sensor.id] = [];
         if ((this._liveTargets[sensor.id] || []).length) changed = true;
         continue;
@@ -1963,10 +2511,6 @@ export class ZonesPage extends LitElement {
 
       for (const targetMap of targetMaps) {
         const trailIndex = targetMap.index - 1;
-        if (reportedTargetCount !== null && targetMap.index > reportedTargetCount) {
-          if (trails[trailIndex]?.length) trails[trailIndex] = [];
-          continue;
-        }
         const xEntity = this.hass.states[targetMap.x_entity_id];
         const yEntity = this.hass.states[targetMap.y_entity_id];
         if (!xEntity || !yEntity) {
@@ -1976,25 +2520,68 @@ export class ZonesPage extends LitElement {
         const scale = radar?.profile.coordinateScaleToMm ?? 1;
         const x = this._targetCoordinateMm(xEntity, scale);
         const y = this._targetCoordinateMm(yEntity, scale);
-        if (x === null || y === null) {
+        const xTimestamp = this._reportTimestamp(targetMap.x_entity_id, xEntity, nowMs, serverNowMs);
+        const yTimestamp = this._reportTimestamp(targetMap.y_entity_id, yEntity, nowMs, serverNowMs);
+        if (x === null || y === null
+          || xTimestamp === null
+          || yTimestamp === null) {
           if (trails[trailIndex]?.length) trails[trailIndex] = [];
           continue;
         }
         const presenceState = targetMap.presence_entity_id
           ? this.hass.states[targetMap.presence_entity_id]?.state
           : null;
-        if (presenceState && ['unknown', 'unavailable'].includes(presenceState)) {
+        // Current non-zero coordinates are direct radar evidence. A lagging
+        // per-target flag may make the count uncertain, but never hide them.
+        const active = x !== 0 || y !== 0;
+        const roomTarget = projectRadarTargetToRoom({ x, y }, sensor, this._coordinateProjection(sensor));
+        const excluded = active && this._targetFallsInExclusion(roomTarget, sensor);
+        const zEntity = targetMap.z_entity_id ? this.hass.states[targetMap.z_entity_id] : undefined;
+        const zTimestamp = this._reportTimestamp(targetMap.z_entity_id || '', zEntity, nowMs, serverNowMs);
+        const zIsFresh = isFreshObservation(
+          zTimestamp,
+          nowMs,
+          this._aggregation.tracking.observation_freshness_ms,
+        );
+        const rawZMm = zEntity && zIsFresh
+          ? this._targetCoordinateMm(zEntity, scale)
+          : null;
+        const roomZMm = mapReportedZToRoom(
+          rawZMm,
+          this._effectiveSensorHeightMm(sensor),
+          this._effectiveZMapping(sensor),
+        );
+        const xIsFresh = isFreshObservation(
+          xTimestamp,
+          nowMs,
+          this._aggregation.tracking.observation_freshness_ms,
+        );
+        const yIsFresh = isFreshObservation(
+          yTimestamp,
+          nowMs,
+          this._aggregation.tracking.observation_freshness_ms,
+        );
+        // Home Assistant's last_reported keeps a stationary axis current when
+        // firmware repeats it. Without independent proof for both axes, the
+        // target degrades to position-unknown instead of retaining stale X/Y.
+        if (!xIsFresh || !yIsFresh) {
           if (trails[trailIndex]?.length) trails[trailIndex] = [];
           continue;
         }
-        const active = presenceState === 'on'
-          ? true
-          : presenceState === 'off'
-            ? false
-            : x !== 0 || y !== 0;
-        const roomTarget = projectRadarTargetToRoom({ x, y }, sensor, this._coordinateProjection(sensor));
-        const excluded = active && this._targetFallsInExclusion(roomTarget, sensor);
-        targets.push({ index: targetMap.index, x, y, active: active && !excluded });
+        const observedAtMs = Math.max(xTimestamp, yTimestamp);
+        const targetActive = active && !excluded;
+        targets.push({ index: targetMap.index, x, y, active: targetActive, rawZMm, roomZMm, observedAtMs, excluded });
+        if (targetActive) {
+          roomObservations.push({
+            sourceId: sensor.id,
+            localTrackId: String(targetMap.index),
+            x: roomTarget.x,
+            y: roomTarget.y,
+            rawZMm,
+            roomZMm,
+            observedAtMs,
+          });
+        }
 
         // Record trail history (sensor-local coords, capped length)
         const trail = trails[trailIndex] || (trails[trailIndex] = []);
@@ -2016,6 +2603,312 @@ export class ZonesPage extends LitElement {
       this._liveTargets = next;
       this._updateTargetCirclesInDOM();
     }
+    this._latestRoomObservations = roomObservations;
+    const positioningSources = this._positioningSources();
+    const readiness = fusionReadiness(
+      positioningSources,
+      this._aggregation.tracking.source_alignments,
+      this._aggregation.tracking.duplicate_distance_mm,
+    );
+    const revocationPending = Boolean(
+      this._selectedRoomId
+      && this._pendingAlignmentRevocationRoomIds.has(this._selectedRoomId),
+    );
+    if (this._aggregation.tracking.experimental_fusion && fusionCanRun(readiness.ready, revocationPending)) {
+      const fusionOptions = roomFusionOptions(
+        this._aggregation.tracking.duplicate_distance_mm,
+        this._aggregation.tracking.z_tolerance_mm,
+        this._aggregation.tracking.observation_freshness_ms,
+      );
+      const association = this._associationGate.update(roomObservations, fusionOptions);
+      this._fusionAssociationAmbiguous = association.ambiguous;
+      const fused = fuseObservations(roomObservations, fusionOptions, association.confirmedPairs);
+      this._setRoomTracks(this._roomTrackEngine.update(fused, nowMs, {
+        matchDistanceMm: Math.max(900, this._aggregation.tracking.duplicate_distance_mm * 1.5),
+        holdMs: this._aggregation.tracking.handoff_hold_ms,
+      }));
+    } else {
+      this._roomTrackEngine.reset();
+      this._associationGate.reset();
+      this._fusionAssociationAmbiguous = false;
+      this._setRoomTracks(roomObservations.map(observation => ({
+        id: `${observation.sourceId}:${observation.localTrackId}`,
+        x: observation.x,
+        y: observation.y,
+        rawZMm: observation.rawZMm,
+        roomZMm: observation.roomZMm,
+        observedAtMs: observation.observedAtMs,
+        memberIds: [`${observation.sourceId}:${observation.localTrackId}`],
+        sourceIds: [observation.sourceId],
+        held: false,
+      })));
+    }
+  }
+
+  private _setRoomTracks(tracks: RoomTrack[]): void {
+    if (JSON.stringify(tracks) !== JSON.stringify(this._roomTracks)) this._roomTracks = tracks;
+  }
+
+  private _reportTimestamp(
+    entityId: string,
+    state: HomeAssistant['states'][string] | undefined,
+    nowMs: number,
+    serverNowMs: number,
+  ): number | null {
+    if (!state || ['unknown', 'unavailable', 'nan'].includes(String(state.state).toLowerCase())) return null;
+    const tracked = this._targetReportReceipts.state(entityId, state, nowMs, serverNowMs);
+    const receivedAtMs = tracked?.received_at_ms;
+    return Number.isFinite(receivedAtMs) ? Number(receivedAtMs) : null;
+  }
+
+  private _positioningSources(): SensorInstance[] {
+    return this._sensors.filter(sensor => {
+      const radar = this._findRadarDevice(sensor.deviceId);
+      return Boolean(sensor.deviceId && radar?.profile.positioningAvailable && radar.targets.length);
+    }).map(sensor => this._trackingSource(sensor));
+  }
+
+  private _trackingSource(sensor: SensorInstance): SensorInstance {
+    const radar = this._findRadarDevice(sensor.deviceId);
+    if (!radar) return sensor;
+    const angle = radar.profile.installationAngleEntityId
+      ? parseRadarInstallationNumber(
+        this.hass.states[radar.profile.installationAngleEntityId]?.state,
+        LD2460_ANGLE_RANGE.minimum,
+        LD2460_ANGLE_RANGE.maximum,
+      )
+      : radar.profile.installationAngleDeg;
+    return {
+      ...sensor,
+      heightMm: this._effectiveSensorHeightMm(sensor),
+      capabilities: {
+        ...(sensor.capabilities || {}),
+        radar_model: radar.profile.radarModel,
+        coordinate_frame: radar.profile.coordinateFrame || '',
+        coordinate_projection: radar.profile.coordinateProjection,
+        installation_mode: this._currentHardwareMode(radar) || '',
+        installation_height_mm: this._effectiveSensorHeightMm(sensor),
+        installation_angle_tenths: angle === null ? 0 : Math.round(angle * 10),
+      },
+    };
+  }
+
+  private _effectiveZMapping(sensor: SensorInstance): ZMapping {
+    const mapping = sensor.zMapping || { mode: 'raw' as const, verified: false };
+    if (!mapping.verified || mapping.mode === 'raw') return { ...mapping, verified: false };
+    return {
+      ...mapping,
+      verified: mapping.verificationFingerprint
+        === sourcePlacementFingerprint(this._trackingSource(sensor)),
+    };
+  }
+
+  private _fusionStatus() {
+    return fusionReadiness(
+      this._positioningSources(),
+      this._aggregation.tracking.source_alignments,
+      this._aggregation.tracking.duplicate_distance_mm,
+    );
+  }
+
+  private _invalidateAlignmentAfterInstallationChange(): void {
+    this._aggregation = {
+      ...this._aggregation,
+      tracking: {
+        ...this._aggregation.tracking,
+        experimental_fusion: false,
+        source_alignments: {},
+      },
+    };
+    this._alignmentSamples = [];
+    this._alignmentSampleFingerprint = null;
+    this._alignmentFeedback = panelText(
+      this.hass,
+      'Radar installation changed. Repeat the neighbouring overlap alignment.',
+    );
+    this._roomTrackEngine.reset();
+    this._associationGate.reset();
+    this._fusionAssociationAmbiguous = false;
+    this._markDirty();
+  }
+
+  /**
+   * Apply an asynchronous hardware change to the room that started it.
+   *
+   * A user may select another room while ESPHome confirms a number/select
+   * write. Never use the old numeric sensor index against that new room. The
+   * originating room is instead made safe immediately and its persisted
+   * fusion calibration is revoked in the background.
+   */
+  private _invalidateOriginRoomAfterInstallationChange(
+    roomId: string | null,
+    sourceId: string | null,
+    heightMm: number | null = null,
+  ): void {
+    if (!roomId) return;
+    if (this._selectedRoomId === roomId) {
+      if (heightMm !== null && sourceId) {
+        const currentIndex = this._sensors.findIndex(sensor => sensor.id === sourceId);
+        if (currentIndex >= 0) {
+          this._sensors = this._sensors.map((sensor, index) => index === currentIndex
+            ? { ...sensor, heightMm }
+            : sensor);
+        }
+      }
+      this._invalidateAlignmentAfterInstallationChange();
+      return;
+    }
+
+    this.rooms = applyInstallationChangeToOriginRoom(
+      this.rooms,
+      roomId,
+      sourceId,
+      heightMm,
+    );
+    this._setPendingAlignmentRevocation(roomId, true);
+    this._clearRoomFusionSafetyState(roomId);
+    void this._persistAlignmentRevocation(roomId);
+  }
+
+  private _captureAlignmentPoint(): void {
+    if (this._alignmentRevocationPending()) {
+      this._alignmentFeedback = panelText(
+        this.hass,
+        'Safety revocation is pending. Fusion and alignment controls stay disabled.',
+      );
+      return;
+    }
+    const sources = this._positioningSources();
+    const captureFingerprint = alignmentCaptureFingerprint(sources);
+    if (this._alignmentSampleFingerprint !== captureFingerprint) {
+      if (this._alignmentSamples.length) {
+        this._alignmentFeedback = panelText(
+          this.hass,
+          'Radar installation changed. Repeat the neighbouring overlap alignment.',
+        );
+      }
+      this._alignmentSamples = [];
+      this._alignmentSampleFingerprint = captureFingerprint;
+    }
+    if (!this._alignmentSamples.length) {
+      this._aggregation = {
+        ...this._aggregation,
+        tracking: {
+          ...this._aggregation.tracking,
+          experimental_fusion: false,
+          source_alignments: {},
+        },
+      };
+      this._roomTrackEngine.reset();
+      this._associationGate.reset();
+    }
+    const snapshot: Record<string, Point> = {};
+    for (const source of sources) {
+      const observations = this._latestRoomObservations.filter(item => item.sourceId === source.id);
+      if (observations.length === 1) snapshot[source.id] = { x: observations[0].x, y: observations[0].y };
+    }
+    if (Object.keys(snapshot).length < 2) {
+      this._alignmentFeedback = panelText(
+        this.hass,
+        'Keep exactly one person visible to at least two neighbouring positioning sensors, then capture again.',
+      );
+      return;
+    }
+    const samples = [...this._alignmentSamples, snapshot].slice(-18);
+    this._alignmentSamples = samples;
+    const assessment = assessPairwiseAlignmentNetwork(
+      samples,
+      sources.map(source => source.id),
+      1000,
+      Math.min(450, this._aggregation.tracking.duplicate_distance_mm * 0.6),
+    );
+    if (!assessment.ready) {
+      const pairAssessments = Object.values(assessment.pairAssessments);
+      const worstDisagreement = Math.max(0, ...pairAssessments.map(item => item.maximumDisagreementMm));
+      const captured = Math.max(0, ...pairAssessments.map(item => item.sampleCount));
+      if (shouldRevokeAlignment(assessment)) {
+        this._aggregation = {
+          ...this._aggregation,
+          tracking: {
+            ...this._aggregation.tracking,
+            experimental_fusion: false,
+            source_alignments: {},
+          },
+        };
+        this._roomTrackEngine.reset();
+        this._associationGate.reset();
+        this._fusionAssociationAmbiguous = false;
+        this._markDirty();
+        // Persist this fail-closed safety mutation independently from the
+        // editable room snapshot. A stale revision, concurrent save or
+        // discarded draft must never restore calibration disproved here.
+        if (this._selectedRoomId) {
+          this._setPendingAlignmentRevocation(this._selectedRoomId, true);
+          this._clearRoomFusionSafetyState(this._selectedRoomId);
+          void this._persistAlignmentRevocation(this._selectedRoomId);
+        }
+      }
+      this._alignmentFeedback = pairAssessments.some(item => item.reason === 'too_far_apart')
+        ? panelText(this.hass, 'The sensors disagree by {distance} mm. Correct their position or rotation and restart the test.', { distance: Math.round(worstDisagreement) })
+        : captured < 3
+          ? panelText(this.hass, 'Captured {count}/3 positions for this sensor pair. Walk to a clearly different part of their overlap.', { count: captured })
+          : panelText(this.hass, 'This sensor pair is verified. Move into the overlap with the next sensor until every sensor is connected.');
+      return;
+    }
+    const verifiedAt = new Date().toISOString();
+    const sourceAlignments = { ...this._aggregation.tracking.source_alignments };
+    sources.forEach(source => {
+      sourceAlignments[source.id] = {
+        placement_fingerprint: sourcePlacementFingerprint(source),
+        verified_at: verifiedAt,
+        sample_count: Math.max(3, assessment.sampleCount),
+        rmse_mm: Math.round(assessment.rmseMm),
+        duplicate_distance_mm: this._aggregation.tracking.duplicate_distance_mm,
+      };
+    });
+    this._aggregation = {
+      ...this._aggregation,
+      tracking: { ...this._aggregation.tracking, source_alignments: sourceAlignments },
+    };
+    this._alignmentFeedback = panelText(
+      this.hass,
+      'Alignment verified at {count} positions ({distance} mm average difference). Overlap fusion is ready.',
+      { count: assessment.sampleCount, distance: Math.round(assessment.rmseMm) },
+    );
+    this._markDirty();
+  }
+
+  private _resetAlignment(): void {
+    this._alignmentSamples = [];
+    this._alignmentSampleFingerprint = null;
+    this._alignmentFeedback = panelText(this.hass, 'Alignment test cleared. Capture three positions in each neighbouring overlap.');
+    this._aggregation = {
+      ...this._aggregation,
+      tracking: { ...this._aggregation.tracking, experimental_fusion: false, source_alignments: {} },
+    };
+    this._roomTrackEngine.reset();
+    this._associationGate.reset();
+    this._targetReportReceipts.clear();
+    this._fusionAssociationAmbiguous = false;
+    this._markDirty();
+  }
+
+  private _setSensorZMapping(sourceId: string, mode: ZMapping['mode'], verified: boolean): void {
+    this._sensors = this._sensors.map(source => {
+      if (source.id !== sourceId) return source;
+      const accepted = mode !== 'raw' && verified;
+      return {
+        ...source,
+        zMapping: {
+          mode,
+          verified: accepted,
+          verificationFingerprint: accepted
+            ? sourcePlacementFingerprint(this._trackingSource(source))
+            : undefined,
+        },
+      };
+    });
+    this._markDirty();
   }
 
   private _targetEntityIds(deviceId: string, target: number, axis: 'x' | 'y'): string[] {
@@ -2033,10 +2926,6 @@ export class ZonesPage extends LitElement {
     if (discoveredEntityId && this.hass.states[discoveredEntityId]) {
       return this.hass.states[discoveredEntityId];
     }
-    for (const entityId of this._targetEntityIds(deviceId, target, axis)) {
-      const entity = this.hass.states[entityId];
-      if (entity) return entity;
-    }
     return undefined;
   }
 
@@ -2053,128 +2942,21 @@ export class ZonesPage extends LitElement {
   private _getRadarCapabilities(deviceId: string | null): RadarCapabilities {
     const discovered = this._findRadarDevice(deviceId);
     if (discovered) return discovered.capabilities;
-    if (!deviceId) {
-      return {
-        targetCount: 0,
-        availableTargetCount: 0,
-        coordinateMode: 'unknown',
-        polygonZones: false,
-        entryLines: false,
-        zoneProfiles: false,
-        interferenceZones: false,
-        smoothing: false,
-        crossZoneTracking: false,
-      };
-    }
-
-    let targetCount = 0;
-    for (let target = 1; target <= 5; target++) {
-      if (this._findTargetEntity(deviceId, target, 'x') && this._findTargetEntity(deviceId, target, 'y')) {
-        targetCount++;
-      }
-    }
-    const coordinateMode = this._entityExists(`sensor.${deviceId}_tracking_target_1_x`)
-      || this._entityExists(`sensor.${deviceId}_tracking_target1_x`)
-      ? 'tracking-target'
-      : this._entityExists(`sensor.${deviceId}_target_1_x`) || this._entityExists(`sensor.${deviceId}_target1_x`)
-        ? 'target'
-        : 'unknown';
-
     return {
-      targetCount,
-      availableTargetCount: targetCount,
-      coordinateMode,
-      polygonZones: this._entityExists(`text.${deviceId}_polygon_zone_1`),
-      entryLines: this._entityExists(`text.${deviceId}_entry_line_1`),
-      zoneProfiles: this._entityExists(`text.${deviceId}_zone_profile_1`),
-      interferenceZones: this._entityExists(`text.${deviceId}_interference_zone_1`),
-      smoothing: this._entityExists(`switch.${deviceId}_target_smoothing_enabled`)
-        || this._entityExists(`number.${deviceId}_target_smoothing`),
-      crossZoneTracking: this._entityExists(`switch.${deviceId}_cross_zone_tracking`),
+      targetCount: 0,
+      availableTargetCount: 0,
+      coordinateMode: 'unknown',
+      polygonZones: false,
+      entryLines: false,
+      zoneProfiles: false,
+      interferenceZones: false,
+      smoothing: false,
+      crossZoneTracking: false,
     };
   }
 
   private _getRadarDevices(): RadarDevice[] {
-    return this._radarDevices.length ? this._radarDevices : this._getLegacyRadarDevices();
-  }
-
-  private _getLegacyRadarDevices(): RadarDevice[] {
-    if (!this.hass) return [];
-    const devices: RadarDevice[] = [];
-    const seen = new Set<string>();
-
-    Object.keys(this.hass.states).forEach(entityId => {
-      // Match the longer LD2460/modern Mini name first. A combined greedy
-      // expression would incorrectly treat "_tracking" as part of deviceId.
-      const match = entityId.match(/^sensor\.(.+)_tracking_target_?1_x$/)
-        || entityId.match(/^sensor\.(.+)_target_?1_x$/);
-      if (match) {
-        const deviceId = match[1];
-        if (!seen.has(deviceId)) {
-          seen.add(deviceId);
-          const name = deviceId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-          const productFamily = this._radarProductFamily(deviceId);
-          const capabilities = this._getRadarCapabilities(deviceId);
-          const model = capabilities.targetCount > 3 ? 'ld2460' : 'ld2450';
-          const firstX = this._findTargetEntity(deviceId, 1, 'x');
-          const unit = String(firstX?.attributes?.unit_of_measurement || '').trim().toLowerCase();
-          const coordinateScaleToMm = unit === 'm' ? 1000 : unit === 'cm' ? 10 : 1;
-          const mountingMode = productFamily === 'ceilsense' ? 'ceiling' : 'wall';
-          const targets: RadarTargetEntityMap[] = [];
-          for (let index = 1; index <= capabilities.targetCount; index++) {
-            const x = this._findTargetEntity(deviceId, index, 'x');
-            const y = this._findTargetEntity(deviceId, index, 'y');
-            if (x && y) targets.push({ index, x_entity_id: x.entity_id, y_entity_id: y.entity_id });
-          }
-          devices.push({
-            id: deviceId,
-            aliases: [deviceId],
-            entityPrefix: deviceId,
-            name,
-            capabilities,
-            productFamily,
-            recommendedMountingMode: mountingMode,
-            profile: {
-              mountingMode,
-              coordinateProjection: mountingMode === 'ceiling' ? 'floor_xy' : 'forward_xy',
-              requiredInstallationMode: mountingMode === 'ceiling' ? 'top' : 'side',
-              mountingHeightMm: mountingMode === 'ceiling' ? 2500 : 1500,
-              maximumRangeMm: 6000,
-              fieldOfViewDeg: 120,
-              radarModel: model,
-              coordinateFrame: 'x_lateral_y_forward',
-              coordinateScaleToMm,
-              maximumTargets: capabilities.targetCount,
-              hardwareModeCapability: model === 'ld2460' ? 'top_or_side' : 'fixed',
-              metadataSource: 'legacy_fallback',
-              detectedProduct: productFamily === 'ceilsense' ? 'ceilsense' : null,
-              supplementaryPresenceSensors: [],
-              currentHardwareMode: null,
-              reportedInstallationModeEntityId: null,
-              installationModeEntityId: null,
-              installationModeOptions: [],
-              installationHeightEntityId: null,
-              installationHeightM: null,
-              installationAngleEntityId: null,
-              installationAngleDeg: null,
-              detectionDistanceEntityId: null,
-              detectionDistanceM: null,
-              detectionStartAngleEntityId: null,
-              detectionStartAngleDeg: null,
-              detectionEndAngleEntityId: null,
-              detectionEndAngleDeg: null,
-              trackingPresenceEntityId: null,
-              trackingTargetCountEntityId: null,
-              missingMetadataEntities: ['Radar Mounting Mode', 'Radar Model'],
-              invalidMetadataEntities: [],
-              positioningAvailable: true,
-            },
-            targets,
-          });
-        }
-      }
-    });
-    return devices.sort((a, b) => a.name.localeCompare(b.name));
+    return this._radarDevices;
   }
 
   private _mapRadarProfile(device: RadarDeviceProfilePayload): RadarDevice {
@@ -2249,10 +3031,10 @@ export class ZonesPage extends LitElement {
       });
       this._radarDevices = (result.devices || []).map(device => this._mapRadarProfile(device));
       this._radarProfilesError = null;
-    } catch (error: any) {
-      const detail = typeof error?.message === 'string' ? error.message.trim() : '';
-      this._radarProfilesError = detail || 'Radar metadata is temporarily unavailable.';
-      this._radarDevices = this._getLegacyRadarDevices();
+    } catch {
+      this._radarProfilesError = panelText(this.hass, 'Radar metadata is temporarily unavailable.');
+      // Keep the last registry-backed snapshot. Generated entity IDs or a
+      // model guessed from target count can bind the wrong ESPHome device.
     } finally {
       this._radarProfilesLoading = false;
     }
@@ -2260,20 +3042,187 @@ export class ZonesPage extends LitElement {
 
   private async _loadRooms() {
     try {
-      const result = await this.hass.callWS<{ rooms: Room[] }>({ type: 'smarthomeshop/rooms' });
+      const result = await this.hass.callWS<{
+        rooms: Room[];
+        recovery?: { count?: number };
+      }>({ type: 'smarthomeshop/rooms' });
       this.rooms = result.rooms || [];
+      this._invalidRoomCount = Math.max(0, Number(result.recovery?.count) || 0);
       this._roomsError = null;
       if (this.rooms.length > 0 && !this._selectedRoomId) {
-        this._selectRoom(this.rooms[0].id);
+        const preferred = this.rooms.find(room => room.id === this.hardwareContext?.roomId);
+        this._selectRoom((preferred ?? this.rooms[0]).id);
+        if (preferred && this.hardwareContext?.sensorId) {
+          const index = this._sensors.findIndex(sensor => sensor.id === this.hardwareContext?.sensorId);
+          if (index >= 0) this._selectedSensorIndex = index;
+        }
       }
+      await this._refreshRoomRuntime();
     } catch (err: any) {
       console.error('Failed to load rooms:', err);
       // The saved rooms are untouched on disk, so a failed load must not look
       // like an empty designer: that invites building a duplicate room.
-      // Home Assistant rejects with a plain {code, message} object, not an
-      // Error, so the reason only comes out of err.message.
-      const detail = typeof err?.message === 'string' ? err.message.trim() : '';
-      this._roomsError = detail ? `Could not load your rooms: ${detail}` : 'Could not load your rooms.';
+      this._roomsError = 'Could not load your rooms.';
+    } finally {
+      this._hardwareLoading = false;
+    }
+  }
+
+  private async _refreshRoomRuntime(): Promise<void> {
+    if (!this.hass || document.hidden || this._runtimePending) return;
+    const request = ++this._runtimeRequest;
+    const requestedAt = Date.now();
+    this._runtimePending = true;
+    try {
+      const runtime = await this.hass.callWS<{ rooms: Record<string, RoomRuntimeSnapshot>; available: boolean }>({
+        type: 'smarthomeshop/rooms/runtime',
+      });
+      if (request !== this._runtimeRequest) return;
+      if (Date.now() - requestedAt > 7500) {
+        this._expireRoomRuntime();
+        return;
+      }
+      this._roomRuntime = runtime.rooms || {};
+      this._roomRuntimeAvailable = runtime.available === true;
+      this._runtimeReceivedAt = this._roomRuntimeAvailable ? Date.now() : 0;
+      this._scheduleRoomRuntimeExpiry();
+      this._applyAuthoritativeAlignmentRevocation();
+    } catch {
+      if (request !== this._runtimeRequest) return;
+      this._expireRoomRuntime();
+    } finally {
+      if (request === this._runtimeRequest) this._runtimePending = false;
+    }
+    for (const roomId of this._pendingAlignmentRevocationRoomIds) {
+      if (this._alignmentRevocationBlockedRoomIds.has(roomId)) continue;
+      void this._persistAlignmentRevocation(roomId);
+    }
+  }
+
+  private _scheduleRoomRuntimeExpiry(): void {
+    if (this._runtimeExpiryTimer !== null) window.clearTimeout(this._runtimeExpiryTimer);
+    this._runtimeExpiryTimer = null;
+    if (!this._roomRuntimeAvailable || !this._runtimeReceivedAt) return;
+    const acceptedAt = this._runtimeReceivedAt;
+    this._runtimeExpiryTimer = window.setTimeout(() => {
+      if (this._runtimeReceivedAt !== acceptedAt) return;
+      this._expireRoomRuntime();
+    }, 7500);
+  }
+
+  private _expireRoomRuntime(): void {
+    if (this._runtimeExpiryTimer !== null) window.clearTimeout(this._runtimeExpiryTimer);
+    this._runtimeExpiryTimer = null;
+    this._roomRuntimeAvailable = false;
+    this._runtimeReceivedAt = 0;
+    this.requestUpdate();
+  }
+
+  private _applyAuthoritativeAlignmentRevocation(): void {
+    for (const room of [...this.rooms]) {
+      const localMarker = room.id === this._selectedRoomId
+        ? this._aggregation.tracking.alignment_revoked_at
+        : room.aggregation?.tracking?.alignment_revoked_at;
+      const revokedAt = authoritativeAlignmentRevocation(
+        localMarker,
+        this._roomRuntime[room.id]?.tracking?.alignment_revoked_at,
+      );
+      if (!revokedAt) continue;
+      this._setPendingAlignmentRevocation(room.id, false);
+      this._alignmentRevocationBlockedRoomIds.delete(room.id);
+      this._clearRoomFusionSafetyState(room.id);
+      this.rooms = this.rooms.map(candidate => {
+        if (candidate.id !== room.id) return candidate;
+        const safe = roomWithFusionRevoked(candidate.aggregation
+          ? candidate
+          : { ...candidate, aggregation: createDefaultAggregation() });
+        return {
+          ...safe,
+          aggregation: {
+            ...safe.aggregation!,
+            tracking: { ...safe.aggregation!.tracking, alignment_revoked_at: revokedAt },
+          },
+        };
+      });
+      if (room.id === this._selectedRoomId) {
+        this._aggregation = {
+          ...this._aggregation,
+          tracking: {
+            ...this._aggregation.tracking,
+            experimental_fusion: false,
+            source_alignments: {},
+            alignment_revoked_at: revokedAt,
+          },
+        };
+        this._alignmentRevocationError = panelText(
+          this.hass,
+          'Fusion was disabled because this calibration was revoked elsewhere. Reload before saving other room changes.',
+        );
+      }
+    }
+  }
+
+  private async _persistAlignmentRevocation(roomId: string): Promise<void> {
+    if (this._alignmentRevocationInFlight.has(roomId)) return;
+    this._alignmentRevocationInFlight.add(roomId);
+    const requestedRevision = this.rooms.find(room => room.id === roomId)?.updated_at;
+    const retryMessage = panelText(
+      this.hass,
+      'The safety calibration could not be revoked yet. Fusion stays off here and retrying continues automatically.',
+    );
+    try {
+      const result = await this.hass.callWS<AlignmentRevocationResult>({
+        type: 'smarthomeshop/room/alignment/revoke',
+        room_id: roomId,
+      });
+      this._setPendingAlignmentRevocation(roomId, false);
+      this._alignmentRevocationBlockedRoomIds.delete(roomId);
+      const current = this.rooms.find(room => room.id === roomId);
+      if (current) {
+        const reconciled = reconcileRoomAfterAlignmentRevocation(current, result, requestedRevision);
+        this.rooms = this.rooms.map(room => room.id === roomId ? reconciled.room : room);
+        if (!reconciled.revisionAdopted) {
+          this._alignmentRevocationError = panelText(
+            this.hass,
+            'Safety calibration was revoked, but this room changed elsewhere. Reload the Floorplan Designer before saving other changes.',
+          );
+        } else {
+          this._alignmentRevocationError = '';
+        }
+      } else this._alignmentRevocationError = '';
+      this._clearRoomFusionSafetyState(roomId);
+      const revokedAt = result.room.aggregation?.tracking.alignment_revoked_at;
+      if (revokedAt && this._selectedRoomId === roomId) {
+        this._aggregation = {
+          ...this._aggregation,
+          tracking: { ...this._aggregation.tracking, alignment_revoked_at: revokedAt },
+        };
+      }
+      this.dispatchEvent(new CustomEvent('radar-calibration-saved', {
+        bubbles: true,
+        composed: true,
+        detail: { room: result.room, previousRevision: requestedRevision },
+      }));
+    } catch (error: unknown) {
+      console.error('Failed to revoke room alignment:', error);
+      const code = (error as { code?: string } | undefined)?.code;
+      if (code === 'not_found') {
+        this._setPendingAlignmentRevocation(roomId, false);
+        this._alignmentRevocationError = panelText(
+          this.hass,
+          'This room was removed elsewhere. Reload the Floorplan Designer to refresh the room list.',
+        );
+      } else if (code === 'unauthorized') {
+        this._alignmentRevocationBlockedRoomIds.add(roomId);
+        this._alignmentRevocationError = panelText(
+          this.hass,
+          'An administrator must open the Floorplan Designer to finish this safety revocation. Fusion stays disabled on this browser.',
+        );
+      } else {
+        this._alignmentRevocationError = retryMessage;
+      }
+    } finally {
+      this._alignmentRevocationInFlight.delete(roomId);
     }
   }
 
@@ -2284,6 +3233,14 @@ export class ZonesPage extends LitElement {
     this._dirty = false;
     this._targetTrails = {};
     this._liveTargets = {};
+    this._roomTracks = [];
+    this._latestRoomObservations = [];
+    this._alignmentSamples = [];
+    this._alignmentSampleFingerprint = null;
+    this._alignmentFeedback = '';
+    this._roomTrackEngine.reset();
+    this._associationGate.reset();
+    this._fusionAssociationAmbiguous = false;
     this._selectedRoomId = roomId;
     const room = this.rooms.find(r => r.id === roomId);
     if (room) {
@@ -2332,6 +3289,19 @@ export class ZonesPage extends LitElement {
           fov: sn.fov ?? 120,
           heightMm: sn.heightMm ?? 2000,
           mountingMode: sn.mountingMode ?? this._recommendedMountingMode(sn.deviceId ?? null),
+          sourceVersion: sn.source_version ?? 1,
+          configuredAt: sn.configured_at,
+          radarModules: Array.isArray(sn.radar_modules) ? sn.radar_modules : undefined,
+          capabilities: sn.capabilities && typeof sn.capabilities === 'object' ? sn.capabilities : undefined,
+          zMapping: ['floor_up', 'sensor_down'].includes(sn.z_mapping?.mode)
+            ? {
+              mode: sn.z_mapping.mode,
+              verified: sn.z_mapping.verified === true,
+              verificationFingerprint: typeof sn.z_mapping.verification_fingerprint === 'string'
+                ? sn.z_mapping.verification_fingerprint
+                : undefined,
+            }
+            : { mode: 'raw', verified: false },
         }));
       } else if (legacySensor) {
         this._sensors = [{
@@ -2348,6 +3318,55 @@ export class ZonesPage extends LitElement {
         this._sensors = [];
       }
       this._selectedSensorIndex = this._sensors.length > 0 ? 0 : null;
+
+      const savedAggregation = room.aggregation;
+      const defaults = createDefaultAggregation();
+      this._aggregation = {
+        version: 2,
+        presence: {
+          freshness_seconds: Math.min(600, Math.max(15, Number(savedAggregation?.presence?.freshness_seconds) || defaults.presence.freshness_seconds)),
+          vacancy_delay_seconds: Math.min(600, Math.max(0,
+            Number.isFinite(Number(savedAggregation?.presence?.vacancy_delay_seconds))
+              ? Number(savedAggregation?.presence?.vacancy_delay_seconds)
+              : defaults.presence.vacancy_delay_seconds)),
+          source_ids: Array.isArray(savedAggregation?.presence?.source_ids)
+            ? savedAggregation.presence.source_ids.filter(id => this._sensors.some(sensor => sensor.id === id))
+            : [],
+        },
+        climate: {
+          temperature: this._normaliseClimateSetting(savedAggregation?.climate?.temperature),
+          humidity: this._normaliseClimateSetting(savedAggregation?.climate?.humidity),
+          co2: this._normaliseClimateSetting(savedAggregation?.climate?.co2),
+        },
+        tracking: {
+          experimental_fusion: savedAggregation?.tracking?.experimental_fusion === true,
+          ...(savedAggregation?.tracking?.alignment_revoked_at
+            ? { alignment_revoked_at: savedAggregation.tracking.alignment_revoked_at }
+            : {}),
+          duplicate_distance_mm: Math.min(1500, Math.max(150, Number(savedAggregation?.tracking?.duplicate_distance_mm) || 650)),
+          observation_freshness_ms: Math.min(15000, Math.max(1000, Number(savedAggregation?.tracking?.observation_freshness_ms) || 5000)),
+          handoff_hold_ms: Math.min(5000, Math.max(0,
+            Number.isFinite(Number(savedAggregation?.tracking?.handoff_hold_ms))
+              ? Number(savedAggregation?.tracking?.handoff_hold_ms)
+              : 1800)),
+          z_tolerance_mm: Math.min(2000, Math.max(100, Number(savedAggregation?.tracking?.z_tolerance_mm) || 700)),
+          source_alignments: savedAggregation?.tracking?.source_alignments
+            && typeof savedAggregation.tracking.source_alignments === 'object'
+            ? Object.fromEntries(Object.entries(savedAggregation.tracking.source_alignments).filter(([sourceId, value]) =>
+                this._sensors.some(sensor => sensor.id === sourceId) && value && typeof value === 'object'))
+            : {},
+        },
+      };
+      if (this._pendingAlignmentRevocationRoomIds.has(roomId)) {
+        this._aggregation = {
+          ...this._aggregation,
+          tracking: {
+            ...this._aggregation.tracking,
+            experimental_fusion: false,
+            source_alignments: {},
+          },
+        };
+      }
 
       // New fields are optional so rooms saved by older releases remain usable.
       this._zones = Array.isArray((room as any).zones)
@@ -2378,24 +3397,398 @@ export class ZonesPage extends LitElement {
     this._selectedZoneIndex = null;
     this._selectedZonePartIndex = 0;
     this._drawingZone = [];
+    this._applyAuthoritativeAlignmentRevocation();
+  }
+
+  private _normaliseClimateSetting(
+    setting: { strategy?: RoomClimateStrategy; primary_source_id?: string | null } | undefined,
+  ): { strategy: RoomClimateStrategy; primary_source_id: string | null } {
+    const strategy: RoomClimateStrategy = ['average', 'primary', 'separate'].includes(setting?.strategy || '')
+      ? setting!.strategy as RoomClimateStrategy
+      : 'average';
+    const primary = typeof setting?.primary_source_id === 'string'
+      && this._sensors.some(sensor => sensor.id === setting.primary_source_id)
+      ? setting.primary_source_id
+      : null;
+    return { strategy, primary_source_id: primary };
+  }
+
+  private _setPresenceNumber(key: 'freshness_seconds' | 'vacancy_delay_seconds', value: number): void {
+    const minimum = key === 'freshness_seconds' ? 15 : 0;
+    this._aggregation = {
+      ...this._aggregation,
+      presence: {
+        ...this._aggregation.presence,
+        [key]: Math.min(600, Math.max(minimum, Math.round(value))),
+      },
+    };
+    this._markDirty();
+  }
+
+  private _togglePresenceSource(sourceId: string, enabled: boolean): void {
+    const linked = this._sensors.filter(sensor => sensor.deviceId).map(sensor => sensor.id);
+    const currentlySelected = linked.filter(id => this._presenceSourceEnabled(id));
+    if (!enabled && currentlySelected.length <= 1 && currentlySelected.includes(sourceId)) return;
+    const explicit = new Set(this._aggregation.presence.source_ids);
+    if (!explicit.size && !enabled) this._sensors.forEach(sensor => {
+      if (sensor.deviceId) explicit.add(sensor.id);
+    });
+    if (enabled) explicit.add(sourceId); else explicit.delete(sourceId);
+    const selected = linked.filter(id => explicit.has(id));
+    this._aggregation = {
+      ...this._aggregation,
+      presence: {
+        ...this._aggregation.presence,
+        source_ids: selected.length === linked.length ? [] : selected,
+      },
+    };
+    this._markDirty();
+  }
+
+  private _presenceSourceEnabled(sourceId: string): boolean {
+    return !this._aggregation.presence.source_ids.length
+      || this._aggregation.presence.source_ids.includes(sourceId);
+  }
+
+  private _setClimateStrategy(metric: 'temperature' | 'humidity' | 'co2', strategy: RoomClimateStrategy): void {
+    const current = this._aggregation.climate[metric];
+    const firstLinked = this._sensors.find(sensor => sensor.deviceId)?.id || null;
+    this._aggregation = {
+      ...this._aggregation,
+      climate: {
+        ...this._aggregation.climate,
+        [metric]: {
+          strategy,
+          primary_source_id: strategy === 'primary' ? current.primary_source_id || firstLinked : current.primary_source_id,
+        },
+      },
+    };
+    this._markDirty();
+  }
+
+  private _setClimatePrimary(metric: 'temperature' | 'humidity' | 'co2', sourceId: string): void {
+    this._aggregation = {
+      ...this._aggregation,
+      climate: {
+        ...this._aggregation.climate,
+        [metric]: { ...this._aggregation.climate[metric], primary_source_id: sourceId || null },
+      },
+    };
+    this._markDirty();
+  }
+
+  private _renderRoomAggregation() {
+    const runtime = this._roomRuntimeAvailable
+      && Date.now() - this._runtimeReceivedAt <= 7500
+      && this._selectedRoomId
+      ? this._roomRuntime[this._selectedRoomId]
+      : undefined;
+    const linkedSources = this._sensors.filter(source => source.deviceId);
+    const positioningSources = this._positioningSources();
+    const fusionStatus = this._fusionStatus();
+    const revocationPending = this._alignmentRevocationPending();
+    const fusionAvailable = fusionCanRun(fusionStatus.ready, revocationPending);
+    const presenceStatus = runtime?.presence?.status || 'unknown';
+    const presenceIcon = presenceStatus === 'occupied'
+      ? 'mdi:account-check'
+      : presenceStatus === 'clear'
+        ? 'mdi:home-outline'
+        : presenceStatus === 'clearing'
+          ? 'mdi:timer-sand'
+          : 'mdi:help-circle-outline';
+    const statusLabel = presenceStatus === 'occupied'
+      ? panelText(this.hass, 'Occupied')
+      : presenceStatus === 'clear'
+        ? panelText(this.hass, 'Clear')
+        : presenceStatus === 'clearing'
+          ? panelText(this.hass, 'Waiting before clearing')
+          : panelText(this.hass, 'Unknown, waiting for fresh sensor data');
+    const metrics: Array<{ id: 'temperature' | 'humidity' | 'co2'; label: string }> = [
+      { id: 'temperature', label: panelText(this.hass, 'Temperature') },
+      { id: 'humidity', label: panelText(this.hass, 'Humidity') },
+      { id: 'co2', label: 'CO₂' },
+    ];
+
+    return html`
+      <section class="room-aggregation" aria-labelledby="room-results-title">
+        <div class="room-aggregation-header">
+          <ha-icon icon="mdi:vector-combine"></ha-icon>
+          <div>
+            <strong id="room-results-title">${panelText(this.hass, 'Room-wide results')}</strong>
+            <span>${panelText(this.hass, 'Combine multiple CeilSense and UltimateSensor devices into reliable values for this room.')}</span>
+          </div>
+        </div>
+
+        <div class="aggregation-status ${presenceStatus}" role="status">
+          <ha-icon icon="${presenceIcon}"></ha-icon>
+          <span>${panelText(this.hass, 'Combined presence')}: ${statusLabel}${runtime?.presence?.degraded ? ` · ${panelText(this.hass, 'Degraded')}` : ''}</span>
+        </div>
+
+        <div class="aggregation-block">
+          <h4>${panelText(this.hass, 'Presence sources')}</h4>
+          <p class="aggregation-help">${panelText(this.hass, 'Any available positive sensor marks the room occupied. The room only clears when every selected sensor is available and clear.')}</p>
+          <div class="source-health-list">
+            ${linkedSources.length ? linkedSources.map((source, index) => {
+              const detail = runtime?.sources?.find(item => item.source_id === source.id);
+              const state = detail?.status || 'unknown';
+              const modules = detail?.radar_modules?.length
+                ? detail.radar_modules.map(module => module.toUpperCase()).join(' + ')
+                : panelText(this.hass, 'Capabilities not reported');
+              const age = detail?.age_seconds === null || detail?.age_seconds === undefined
+                ? panelText(this.hass, 'No fresh update')
+                : panelText(this.hass, '{seconds}s ago', { seconds: Math.round(detail.age_seconds) });
+              return html`
+                <label class="source-health">
+                  <input type="checkbox"
+                    .checked="${this._presenceSourceEnabled(source.id)}"
+                    ?disabled="${this._presenceSourceEnabled(source.id) && linkedSources.filter(item => this._presenceSourceEnabled(item.id)).length <= 1}"
+                    @change="${(event: Event) => this._togglePresenceSource(source.id, (event.target as HTMLInputElement).checked)}"
+                    aria-label="${panelText(this.hass, 'Use {name} for combined presence', { name: this._sensorLabel(source, index) })}"
+                  />
+                  <span class="source-health-main">
+                    <strong>${this._sensorLabel(source, index)}</strong>
+                    <small>${modules} · ${age}</small>
+                  </span>
+                  <span class="source-state ${state}">${panelText(this.hass, state === 'positive' ? 'Occupied' : state === 'negative' ? 'Clear' : 'Unknown')}</span>
+                </label>
+              `;
+            }) : html`<p class="aggregation-help">${panelText(this.hass, 'Link at least one supported sensor to create room-wide results.')}</p>`}
+          </div>
+          <div class="aggregation-grid">
+            <div class="aggregation-field">
+              <label for="room-clear-delay">${panelText(this.hass, 'Clear delay (seconds)')}</label>
+              <input id="room-clear-delay" type="number" min="0" max="600" step="5"
+                .value="${String(this._aggregation.presence.vacancy_delay_seconds)}"
+                @change="${(event: Event) => this._setPresenceNumber('vacancy_delay_seconds', this._commitNumberInput(event, 30, 0, 600))}" />
+            </div>
+          </div>
+        </div>
+
+        <div class="aggregation-block">
+          <h4>${panelText(this.hass, 'Room climate')}</h4>
+          <p class="aggregation-help">${panelText(this.hass, 'Average available readings, choose one primary sensor, or keep the individual sensor entities separate.')}</p>
+          ${metrics.map(metric => {
+            const setting = this._aggregation.climate[metric.id];
+            return html`
+              <div class="climate-row">
+                <label for="climate-${metric.id}">${metric.label}</label>
+                <div class="climate-controls">
+                  <select id="climate-${metric.id}" .value="${setting.strategy}"
+                    @change="${(event: Event) => this._setClimateStrategy(metric.id, (event.target as HTMLSelectElement).value as RoomClimateStrategy)}">
+                    <option value="average">${panelText(this.hass, 'Average available readings')}</option>
+                    <option value="primary">${panelText(this.hass, 'Primary sensor')}</option>
+                    <option value="separate">${panelText(this.hass, 'Keep separate')}</option>
+                  </select>
+                  ${setting.strategy === 'primary' ? html`
+                    <select aria-label="${panelText(this.hass, 'Primary sensor for {metric}', { metric: metric.label })}"
+                      .value="${setting.primary_source_id || ''}"
+                      @change="${(event: Event) => this._setClimatePrimary(metric.id, (event.target as HTMLSelectElement).value)}">
+                      <option value="">${panelText(this.hass, 'Select a sensor')}</option>
+                      ${linkedSources.map((source, index) => html`
+                        <option value="${source.id}">${this._sensorLabel(source, index)}</option>
+                      `)}
+                    </select>
+                  ` : nothing}
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+
+        <div class="aggregation-block">
+          <h4>${panelText(this.hass, 'Large-room tracking')}</h4>
+          <p class="aggregation-help">${panelText(this.hass, 'Create one continuous room track when a person walks from one radar range into another. Local track IDs always remain tied to their source sensor.')}</p>
+          <div class="aggregation-status ${fusionAvailable ? 'clear' : 'unknown'}" role="status">
+            <ha-icon icon="${fusionAvailable ? 'mdi:check-decagram-outline' : 'mdi:map-marker-alert-outline'}"></ha-icon>
+            <span>${revocationPending
+              ? panelText(this.hass, 'Safety revocation is pending. Fusion and alignment controls stay disabled.')
+              : fusionStatus.ready
+              ? panelText(this.hass, 'Alignment verified. Room-wide handover is ready.')
+              : positioningSources.length < 2
+                ? panelText(this.hass, 'Link at least two positioning radars to enable room-wide handover.')
+                : fusionStatus.staleSourceIds.length
+                  ? panelText(this.hass, 'A sensor placement changed. Repeat the alignment test before fusion can resume.')
+                  : panelText(this.hass, 'Walk test required before overlapping tracks can be merged.')}</span>
+          </div>
+          ${positioningSources.length >= 2 ? html`
+            <div class="fusion-calibration">
+              <div>
+                <strong>${panelText(this.hass, 'Neighbouring overlap alignment')}</strong>
+                <p class="aggregation-help">${panelText(this.hass, 'Keep one person visible to two neighbouring radars and capture three well-separated positions. Then repeat in the next overlap until all radars are connected. The test never rewrites radar coordinates.')}</p>
+              </div>
+              <div class="fusion-calibration-actions">
+                <button class="secondary-action" ?disabled=${revocationPending} @click=${this._captureAlignmentPoint}>
+                  <ha-icon icon="mdi:crosshairs-gps"></ha-icon>
+                  ${panelText(this.hass, 'Capture overlap position')}
+                </button>
+                <button class="secondary-action" ?disabled=${revocationPending} @click=${this._resetAlignment}>
+                  <ha-icon icon="mdi:restart"></ha-icon>${panelText(this.hass, 'Restart test')}
+                </button>
+              </div>
+              ${this._alignmentFeedback ? html`<p class="aggregation-help" role="status">${this._alignmentFeedback}</p>` : nothing}
+              ${this._alignmentRevocationError ? html`<p class="dialog-error" role="alert">${this._alignmentRevocationError}</p>` : nothing}
+            </div>
+          ` : nothing}
+          <div class="fusion-toggle">
+            <label for="experimental-fusion">${panelText(this.hass, 'Experimental overlapping-track fusion')}</label>
+            <input id="experimental-fusion" type="checkbox"
+              .checked="${this._aggregation.tracking.experimental_fusion && fusionAvailable}"
+              ?disabled="${!fusionAvailable}"
+              @change="${(event: Event) => {
+                if ((event.target as HTMLInputElement).checked && !fusionAvailable) return;
+                this._aggregation = {
+                  ...this._aggregation,
+                  tracking: { ...this._aggregation.tracking, experimental_fusion: (event.target as HTMLInputElement).checked },
+                };
+                this._markDirty();
+              }}" />
+          </div>
+          <p class="aggregation-help">${panelText(this.hass, 'Without verified alignment, every source track stays visible and the combined people count remains unknown. Held tracks are kept only briefly in this browser for smooth handover and are not uploaded.')}</p>
+          ${this._aggregation.tracking.experimental_fusion && fusionAvailable ? html`
+            <div class="aggregation-grid" style="margin-top: 8px;">
+              <div class="aggregation-field">
+              <label for="fusion-distance">${panelText(this.hass, 'Duplicate track distance (mm)')}</label>
+              <input id="fusion-distance" type="number" min="150" max="1500" step="50"
+                .value="${String(this._aggregation.tracking.duplicate_distance_mm)}"
+                @change="${(event: Event) => {
+                  const duplicateDistance = this._commitNumberInput(event, 650, 150, 1500);
+                  this._aggregation = {
+                    ...this._aggregation,
+                    tracking: {
+                      ...this._aggregation.tracking,
+                      duplicate_distance_mm: duplicateDistance,
+                      experimental_fusion: false,
+                      source_alignments: {},
+                    },
+                  };
+                  this._alignmentSamples = [];
+                  this._alignmentSampleFingerprint = null;
+                  this._alignmentFeedback = panelText(
+                    this.hass,
+                    'Duplicate distance changed. Repeat the neighbouring overlap alignment before fusion can resume.',
+                  );
+                  this._roomTrackEngine.reset();
+                  this._associationGate.reset();
+                  this._fusionAssociationAmbiguous = false;
+                  this._markDirty();
+                }}" />
+              </div>
+              <div class="aggregation-field">
+                <label for="fusion-z-distance">${panelText(this.hass, 'Verified Z difference (mm)')}</label>
+                <input id="fusion-z-distance" type="number" min="100" max="2000" step="50"
+                  .value="${String(this._aggregation.tracking.z_tolerance_mm)}"
+                  @change="${(event: Event) => {
+                    this._aggregation = { ...this._aggregation, tracking: {
+                      ...this._aggregation.tracking,
+                      z_tolerance_mm: this._commitNumberInput(event, 700, 100, 2000),
+                    } };
+                    this._markDirty();
+                  }}" />
+              </div>
+            </div>
+          ` : nothing}
+
+          ${positioningSources.some(source => this._findRadarDevice(source.deviceId)?.targets.some(target => target.z_entity_id)) ? html`
+            <div class="z-mapping-panel">
+              <strong>${panelText(this.hass, '3D target point')}</strong>
+              <p class="aggregation-help">${panelText(this.hass, 'A radar Z axis is not automatically body height. Keep Raw Z selected unless you have physically verified the axis. The 3D view labels the result as a target point, never as measured person height.')}</p>
+              ${positioningSources.map((source, index) => {
+                const hasZ = this._findRadarDevice(source.deviceId)?.targets.some(target => target.z_entity_id);
+                if (!hasZ) return nothing;
+                const storedMapping = source.zMapping || { mode: 'raw' as const, verified: false };
+                const mapping = this._effectiveZMapping(source);
+                return html`
+                  <div class="z-mapping-row">
+                    <label for="z-mode-${source.id}">${this._sensorLabel(source, index)}</label>
+                    <select id="z-mode-${source.id}" .value=${storedMapping.mode}
+                      @change=${(event: Event) => this._setSensorZMapping(
+                        source.id,
+                        (event.target as HTMLSelectElement).value as ZMapping['mode'],
+                        false,
+                      )}>
+                      <option value="raw">${panelText(this.hass, 'Raw Z only (no height claim)')}</option>
+                      <option value="floor_up">${panelText(this.hass, 'Verified: Z increases from the floor')}</option>
+                      <option value="sensor_down">${panelText(this.hass, 'Verified: Z is distance down from the sensor')}</option>
+                    </select>
+                    ${storedMapping.mode !== 'raw' ? html`
+                      <label class="z-confirmation">
+                        <input type="checkbox" .checked=${mapping.verified}
+                          @change=${(event: Event) => this._setSensorZMapping(source.id, storedMapping.mode, (event.target as HTMLInputElement).checked)} />
+                        ${panelText(this.hass, 'I verified this direction with a real movement test')}
+                      </label>
+                    ` : nothing}
+                  </div>
+                `;
+              })}
+            </div>
+          ` : nothing}
+        </div>
+      </section>
+    `;
   }
 
   private async _saveRoom() {
-    if (!this._selectedRoomId) return;
-    const room = this.rooms.find(r => r.id === this._selectedRoomId);
+    if (!this._selectedRoomId || this._saving || this.hardwareContext?.readOnly) return;
+    const roomId = this._selectedRoomId;
+    const room = this.rooms.find(r => r.id === roomId);
     if (!room) return;
+    const saveRevision = this._editRevision;
     this._saving = true;
+    if (this.hardwareOnly) this._hardwareFeedback = null;
 
     try {
-      const updatedRoom = this._currentRoomSnapshot(room);
-      await this.hass.callWS({ type: 'smarthomeshop/room/save', room: updatedRoom });
-      this.rooms = this.rooms.map(r => r.id === this._selectedRoomId ? updatedRoom : r);
-      this._dirty = false;
-    } catch (err) {
+      // The drawer owns only hardware/aggregation metadata. Never rebuild the
+      // room geometry here: doing so used to round coordinates, normalise zone
+      // IDs and silently invalidate the saved floorplan project.
+      const updatedRoom = this.hardwareOnly
+        ? this._hardwareRoomSnapshot(room)
+        : this._currentRoomSnapshot(room);
+      const result = await this.hass.callWS<{ room: Room }>({ type: 'smarthomeshop/room/save', room: updatedRoom });
+      this._replaceRoomFromServer(result.room);
+      if (this._selectedRoomId === roomId) {
+        const savedSources = new Map((result.room.sensors || []).map(source => [source.id, source]));
+        this._sensors = this._sensors.map(source => {
+          const saved = savedSources.get(source.id);
+          return saved ? {
+            ...source,
+            sourceVersion: saved.source_version ?? source.sourceVersion,
+            configuredAt: saved.configured_at ?? source.configuredAt,
+            radarModules: saved.radar_modules ?? source.radarModules,
+            capabilities: saved.capabilities ?? source.capabilities,
+          } : source;
+        });
+      }
+      await this._refreshRoomRuntime();
+      if (this._selectedRoomId === roomId && this._editRevision === saveRevision) this._dirty = false;
+      if (this.hardwareOnly) {
+        this._hardwareFeedback = { status: 'success', message: this._radarText('Calibration saved.', 'Kalibratie opgeslagen.') };
+        this.dispatchEvent(new CustomEvent('radar-calibration-saved', {
+          bubbles: true, composed: true, detail: { room: result.room, previousRevision: room.updated_at },
+        }));
+      }
+    } catch (err: unknown) {
       console.error('Failed to save room:', err);
-      window.alert(panelText(this.hass, 'Could not save the room. Check that you are an administrator and try again.'));
+      const code = (err as { code?: string } | undefined)?.code;
+      if (this.hardwareOnly) {
+        const conflict = code === 'conflict';
+        this._hardwareFeedback = { status: 'warning', conflict, message: conflict
+          ? this._radarText('This room changed elsewhere. Reload it before measuring again.', 'Deze kamer is elders gewijzigd. Herlaad de kamer voordat je opnieuw meet.')
+          : this._roomMutationError(err, 'Could not save the room. Check the connection and try again.') };
+        return;
+      }
+      if (code === 'conflict') {
+        const reload = window.confirm(panelText(
+          this.hass,
+          'This room changed or was removed in another browser. Reload the Floorplan Designer now? Unsaved changes in this room will be discarded.',
+        ));
+        if (reload) await this._reloadRoomAfterConflict(roomId);
+      } else {
+        window.alert(this._roomMutationError(err, 'Could not save the room. Check the connection and try again.'));
+      }
     }
-    finally { this._saving = false; }
+    finally {
+      this._saving = false;
+    }
   }
 
   @state() private _pushingToESPHome = false;
@@ -2441,39 +3834,53 @@ export class ZonesPage extends LitElement {
   }
 
   private async _pushToESPHome() {
+    if (this._pushingToESPHome || this.hardwareContext?.readOnly || (this.hardwareOnly && this._dirty)) return;
+    const notify = (message: string, status: 'success' | 'warning' = 'warning') => {
+      if (this.hardwareOnly) this._hardwareFeedback = { message, status };
+      else alert(message);
+    };
+    if (this.hardwareOnly) this._hardwareFeedback = null;
     const linkedSensors = this._sensors.filter(sn => sn.deviceId);
     if (linkedSensors.length === 0) {
-      alert('Add a sensor and link it to a device first!');
+      notify(panelText(this.hass, 'Add a sensor and link it to a device first!'));
       return;
     }
     const mismatched = linkedSensors
       .map(sensor => this._findRadarDevice(sensor.deviceId))
       .filter((radar): radar is RadarDevice => this._hardwareModeMismatch(radar));
     if (mismatched.length) {
-      alert(`Correct the radar hardware mode for ${mismatched.map(radar => radar.name).join(', ')} before pushing coordinate zones.`);
+      notify(panelText(this.hass, 'Set the required radar hardware mode for {names} before sending zones.', {
+        names: mismatched.map(radar => radar.name).join(', '),
+      }));
       return;
     }
-    const unreadyLd2460 = linkedSensors
+    const unreadyPositioningRadar = linkedSensors
       .map(sensor => this._findRadarDevice(sensor.deviceId))
-      .filter((radar): radar is RadarDevice => radar?.profile.radarModel === 'ld2460' && !this._ld2460InstallationReady(radar));
-    if (unreadyLd2460.length) {
-      alert(`Wait for side mode, mounting height and downward angle to be reported by ${unreadyLd2460.map(radar => radar.name).join(', ')} before pushing zones.`);
+      .filter((radar): radar is RadarDevice => Boolean(
+        radar
+        && ['ld2460', 'ld6002b'].includes(radar.profile.radarModel)
+        && !this._ld2460InstallationReady(radar),
+      ));
+    if (unreadyPositioningRadar.length) {
+      notify(panelText(this.hass, 'Wait until {names} reports the required mounting settings before sending zones.', {
+        names: unreadyPositioningRadar.map(radar => radar.name).join(', '),
+      }));
       return;
     }
-    const manualExclusionParts = this._zones
-      .filter(zone => zone.type === 'exclusion')
+    const manualExclusionPartsFor = (sensor: SensorInstance) => this._zones
+      .filter(zone => zone.type === 'exclusion' && zoneAppliesToSensor(zone, sensor.id))
       .flatMap(zone => getZoneParts(zone));
     const reflectionOverflow = linkedSensors.find(sensor =>
-      manualExclusionParts.length
+      manualExclusionPartsFor(sensor).length
         + createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor).length > ZONE_LIMITS.exclusion
     );
     if (reflectionOverflow) {
       const reflectionCount = createMirrorReflectionPolygons(this._roomPoints, this._mirrors, reflectionOverflow).length;
-      alert(panelText(
+      notify(panelText(
         this.hass,
         'Reflection protection needs {total} exclusion slots for {sensor}, but the radar supports 2. Disable protection for a mirror or remove a manual exclusion zone.',
         {
-          total: manualExclusionParts.length + reflectionCount,
+          total: manualExclusionPartsFor(reflectionOverflow).length + reflectionCount,
           sensor: this._sensorLabel(reflectionOverflow, linkedSensors.indexOf(reflectionOverflow)),
         },
       ));
@@ -2484,7 +3891,7 @@ export class ZonesPage extends LitElement {
       .flatMap(zone => getZoneParts(zone).map(points => ({ zone, points })))
       .find(item => item.points.length > 20);
     if (oversizedPolygon) {
-      alert(panelText(
+      notify(panelText(
         this.hass,
         '{name} has {count} vertices. LD2450 and LD2460 polygons support at most 20.',
         { name: oversizedPolygon.zone.name, count: oversizedPolygon.points.length },
@@ -2527,12 +3934,24 @@ export class ZonesPage extends LitElement {
             getZoneParts(zone).map(points => ({ zone, polygon: toPolygonStr(points) }))
           );
           if (slots.length > maxSlots) {
-            errors.push(`${deviceName}: ${label} uses ${slots.length} polygon parts, but this firmware supports ${maxSlots}; only the first ${maxSlots} were pushed`);
+            errors.push(panelText(
+              this.hass,
+              '{device}: {label} uses {count} polygon parts, but this firmware supports {maximum}; only the first {maximum} were pushed',
+              {
+                device: deviceName,
+                label: panelText(this.hass, label),
+                count: slots.length,
+                maximum: maxSlots,
+              },
+            ));
           }
           return slots.slice(0, maxSlots);
         };
-        const detectionSlots = toZoneSlots(detectionZones, 4, 'detection zones');
-        const manualExclusions = exclusionZones.flatMap(zone =>
+        const ownedDetectionZones = detectionZones.filter(zone => zoneAppliesToSensor(zone, sensor.id));
+        const ownedExclusionZones = exclusionZones.filter(zone => zoneAppliesToSensor(zone, sensor.id));
+        const ownedInterferenceZones = interferenceZones.filter(zone => zoneAppliesToSensor(zone, sensor.id));
+        const detectionSlots = toZoneSlots(ownedDetectionZones, 4, 'detection zones');
+        const manualExclusions = ownedExclusionZones.flatMap(zone =>
           getZoneParts(zone).map(points => ({ zone, points }))
         );
         const reflectionPolygons = createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor);
@@ -2571,7 +3990,9 @@ export class ZonesPage extends LitElement {
             const slot = detectionSlots[i];
             const entityId = deviceEntity('text', `polygon_zone_${i + 1}`, `Polygon Zone ${i + 1}`);
             const pushed = entityId ? await this._setTextEntityIfPresent(entityId, slot?.polygon || '') : false;
-            if (!pushed) errors.push(`${radar?.name || deviceName}: missing polygon zone ${i + 1} entity`);
+            if (!pushed) errors.push(panelText(this.hass, '{name}: firmware entity {entity} is missing.', {
+              name: radar?.name || deviceName, entity: `polygon zone ${i + 1}`,
+            }));
             const profileEntity = deviceEntity('text', `zone_profile_${i + 1}`, `Zone Profile ${i + 1}`);
             if (profileEntity) await this._setTextEntityIfPresent(profileEntity, toProfileStr(slot?.zone));
           }
@@ -2580,15 +4001,17 @@ export class ZonesPage extends LitElement {
             const slot = exclusionSlots[i];
             const entityId = deviceEntity('text', `polygon_exclusion_${i + 1}`, `Polygon Exclusion ${i + 1}`);
             const pushed = entityId ? await this._setTextEntityIfPresent(entityId, slot?.polygon || '') : false;
-            if (!pushed) errors.push(`${radar?.name || deviceName}: missing polygon exclusion ${i + 1} entity`);
+            if (!pushed) errors.push(panelText(this.hass, '{name}: firmware entity {entity} is missing.', {
+              name: radar?.name || deviceName, entity: `polygon exclusion ${i + 1}`,
+            }));
           }
 
           for (let i = 0; i < 2; i++) {
-            const zone = interferenceZones[i];
+            const zone = ownedInterferenceZones[i];
             const entityId = deviceEntity('text', `interference_zone_${i + 1}`, `Interference Zone ${i + 1}`);
             const polygon = zone ? toPolygonStr(getZoneParts(zone)[0] || []) : '';
             const pushed = entityId ? await this._setTextEntityIfPresent(entityId, polygon) : false;
-            if (zone && !pushed) errors.push(`${deviceName}: update firmware to use interference zones`);
+            if (zone && !pushed) errors.push(panelText(this.hass, '{name}: update the firmware to use interference zones.', { name: deviceName }));
           }
 
           const smoothingEnabled = deviceEntity('switch', 'target_smoothing_enabled', 'Target Smoothing Enabled');
@@ -2614,7 +4037,9 @@ export class ZonesPage extends LitElement {
             }
             const entityId = deviceEntity('text', `entry_line_${i + 1}`, `Entry Line ${i + 1}`);
             const pushed = entityId ? await this._setTextEntityIfPresent(entityId, lineStr) : false;
-            if (!pushed) errors.push(`${radar?.name || deviceName}: missing entry line ${i + 1} entity`);
+            if (!pushed) errors.push(panelText(this.hass, '{name}: firmware entity {entity} is missing.', {
+              name: radar?.name || deviceName, entity: `entry line ${i + 1}`,
+            }));
           }
 
           nativePushCount += 1;
@@ -2646,7 +4071,9 @@ export class ZonesPage extends LitElement {
           'set_entry_line',
           fallbackPrefixes,
         );
-        errors.push(`${radar?.name || deviceName}: native polygon text entities not found; used device-matched ESPHome services`);
+        errors.push(panelText(this.hass, '{name}: native polygon entities are unavailable; compatible ESPHome services were used.', {
+          name: radar?.name || deviceName,
+        }));
 
         // Detection zones: every sensor watches the same room zones
         for (let i = 0; polygonZoneService && i < 4; i++) {
@@ -2657,11 +4084,11 @@ export class ZonesPage extends LitElement {
               polygon: slot?.polygon || '',
             });
           } catch (e) {
-            errors.push(`${deviceName}: set_polygon_zone not available`);
+            errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: deviceName, service: 'set_polygon_zone' }));
             break;
           }
         }
-        if (!polygonZoneService) errors.push(`${radar?.name || deviceName}: set_polygon_zone service for this device not available`);
+        if (!polygonZoneService) errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: radar?.name || deviceName, service: 'set_polygon_zone' }));
 
         // Exclusion zones
         for (let i = 0; polygonExclusionService && i < 2; i++) {
@@ -2672,11 +4099,11 @@ export class ZonesPage extends LitElement {
               polygon: slot?.polygon || '',
             });
           } catch (e) {
-            errors.push(`${deviceName}: set_polygon_exclusion not available`);
+            errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: deviceName, service: 'set_polygon_exclusion' }));
             break;
           }
         }
-        if (!polygonExclusionService) errors.push(`${radar?.name || deviceName}: set_polygon_exclusion service for this device not available`);
+        if (!polygonExclusionService) errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: radar?.name || deviceName, service: 'set_polygon_exclusion' }));
 
         // Entry lines: each line is counted by exactly ONE sensor so people
         // walking through a doorway are not counted twice.
@@ -2696,24 +4123,24 @@ export class ZonesPage extends LitElement {
               line_data: lineStr,
             });
           } catch (e) {
-            errors.push(`${deviceName}: set_entry_line not available`);
+            errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: deviceName, service: 'set_entry_line' }));
             break;
           }
         }
-        if (!entryLineService) errors.push(`${radar?.name || deviceName}: set_entry_line service for this device not available`);
+        if (!entryLineService) errors.push(panelText(this.hass, '{name}: service {service} is unavailable.', { name: radar?.name || deviceName, service: 'set_entry_line' }));
         legacyPushCount += 1;
       }
 
       if (errors.length > 0) {
-        alert(`Push finished with warnings:\n${[...new Set(errors)].join('\n')}`);
+        notify(`${this._radarText('Push finished with warnings', 'Verzonden met meldingen')}:\n${[...new Set(errors)].join('\n')}`);
       } else {
-        const targetLabel = nativePushCount > 0 ? 'native LD2450 entity set' : 'sensor';
         const count = nativePushCount || legacyPushCount || linkedSensors.length;
-        alert(`Zones successfully pushed to ${count} ${targetLabel}${count !== 1 ? 's' : ''}!`);
+        notify(this.hardwareOnly ? this._radarText('Zones sent to the room\'s radars.', 'Zones naar de radars in deze kamer gestuurd.')
+          : panelText(this.hass, 'Zones were sent successfully to {count} radar(s).', { count }), 'success');
       }
     } catch (err) {
       console.error('Failed to push zones:', err);
-      alert(`Failed to push zones: ${err}`);
+      notify(panelText(this.hass, 'Failed to send zones. Check the connection and try again.'));
     } finally {
       this._pushingToESPHome = false;
     }
@@ -3352,11 +4779,18 @@ export class ZonesPage extends LitElement {
   }
 
   private _targetFallsInExclusion(roomTarget: Point, sensor: SensorInstance): boolean {
+    const roomPolygon = safeSuppressionRoomPolygon({
+      walls: this._roomPoints.map((point, index) => {
+        const next = this._roomPoints[(index + 1) % this._roomPoints.length] || point;
+        return { x1: point.x, y1: point.y, x2: next.x, y2: next.y };
+      }),
+    });
+    if (safelyOutsideRoom(roomTarget, roomPolygon)) return true;
     const manualExclusions = this._zones
       .filter(zone => zone.type === 'exclusion')
       .flatMap(zone => getZoneParts(zone));
     if (manualExclusions.some(points => pointInPolygon(roomTarget, points))) return true;
-    return createMirrorReflectionPolygons(this._roomPoints, this._mirrors, sensor)
+    return createMirrorReflectionPolygons(roomPolygon, this._mirrors, sensor)
       .some(item => pointInPolygon(roomTarget, item.points));
   }
 
@@ -3555,7 +4989,7 @@ export class ZonesPage extends LitElement {
   }
 
   private _openCoverageCalibration() {
-    if (!this._selectedSensor?.deviceId) return;
+    if (!this._selectedSensor?.deviceId || this.hardwareContext?.readOnly) return;
     const radar = this._findRadarDevice(this._selectedSensor.deviceId);
     if (!radar?.profile.positioningAvailable || !this._ld2460InstallationReady(radar)) return;
     this._coverageCalibrationStartsFresh = this._calibration.sensorId === this._selectedSensor.id
@@ -3572,8 +5006,13 @@ export class ZonesPage extends LitElement {
       corners,
       sensorId: sensor.id,
     });
+    this._closeCoverageWizard();
+  }
+
+  private _closeCoverageWizard(): void {
     this._coverageCalibrationStartsFresh = false;
     this._showCoverageCalibration = false;
+    if (this.hardwareOnly) void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLButtonElement>('.radar-primary')?.focus());
   }
 
   private _updateTracking(patch: Partial<TrackingSettings>) {
@@ -3756,7 +5195,7 @@ export class ZonesPage extends LitElement {
       case 'furniture':
         return { title: 'Place Furniture', text: this._selectedFurnitureType ? `Click the canvas to place the ${this._selectedFurnitureType.name.toLowerCase()}.` : 'Pick a furniture type on the right, or drag existing furniture. R rotates, Delete removes.' };
       default:
-        return { title: 'Room Designer', text: 'Pick a tool to get started.' };
+        return { title: 'Floorplan Designer', text: 'Pick a tool to get started.' };
     }
   }
 
@@ -4360,20 +5799,13 @@ private _draw3DZones(ctx: CanvasRenderingContext2D): void {
   }
 
 private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
-    // Flatten active targets from all sensors into world positions
-    const worldTargets: Array<{ x: number; y: number }> = [];
-    for (const sn of this._sensors) {
-      for (const t of (this._liveTargets[sn.id] || [])) {
-        if (!t.active) continue;
-        worldTargets.push(projectRadarTargetToRoom(t, sn, this._coordinateProjection(sn)));
-      }
-    }
-
-    for (let i = 0; i < worldTargets.length; i++) {
-      const worldX = worldTargets[i].x;
-      const worldY = worldTargets[i].y;
+    for (let i = 0; i < this._roomTracks.length; i++) {
+      const track = this._roomTracks[i];
+      const worldX = track.x;
+      const worldY = track.y;
 
       ctx.save();
+      ctx.globalAlpha = track.held ? 0.42 : 1;
 
       // Draw shadow on ground
       const shadowPos = this._project3D({ x: worldX + 80, y: worldY + 80, z: 5 });
@@ -4382,7 +5814,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       ctx.ellipse(shadowPos.x, shadowPos.y, 25, 10, 0.3, 0, Math.PI * 2);
       ctx.fill();
 
-      // Draw 3D capsule-style figure
+      // This neutral marker means presence at X/Y. Its visual height is not a
+      // measured body height and deliberately does not depend on raw radar Z.
       // Legs (3D cylinders)
       this._draw3DCapsule(ctx, worldX - 60, worldY, 0, 60, 700, '#8b9299', '#6b7280');
       this._draw3DCapsule(ctx, worldX + 60, worldY, 0, 60, 700, '#8b9299', '#6b7280');
@@ -4397,7 +5830,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       // Head (3D sphere)
       this._draw3DSphere(ctx, worldX, worldY, 1500, 110);
 
-      // Draw target number above head
+      // Draw stable room-track label above the neutral marker.
       const labelPos = this._project3D({ x: worldX, y: worldY, z: 1700 });
 
       ctx.fillStyle = 'rgba(239, 68, 68, 0.95)';
@@ -4413,7 +5846,32 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${i + 1}`, labelPos.x, labelPos.y);
+      ctx.fillText(track.id.replace('room-track-', '').slice(-4), labelPos.x, labelPos.y);
+
+      if (track.roomZMm !== null) {
+        const measured = this._project3D({ x: worldX, y: worldY, z: track.roomZMm });
+        const floor = this._project3D({ x: worldX, y: worldY, z: 0 });
+        ctx.setLineDash([3, 4]);
+        ctx.strokeStyle = 'rgba(14, 165, 233, .8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(floor.x, floor.y);
+        ctx.lineTo(measured.x, measured.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#0ea5e9';
+        ctx.beginPath();
+        ctx.arc(measured.x, measured.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = '600 10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(panelText(this.hass, '{height} m target point', { height: (track.roomZMm / 1000).toFixed(2) }), measured.x + 9, measured.y - 4);
+      } else if (track.rawZMm !== null) {
+        ctx.fillStyle = 'rgba(100, 116, 139, .95)';
+        ctx.font = '600 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(panelText(this.hass, 'raw Z {height} m', { height: (track.rawZMm / 1000).toFixed(2) }), labelPos.x, labelPos.y - 22);
+      }
 
       ctx.restore();
     }
@@ -4540,16 +5998,19 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     return `rgb(${r}, ${g}, ${b})`;
   }
 
-  private _handle3DMouseDown(e: MouseEvent): void {
-    if (e.button === 0) {
+  private _handle3DPointerDown(e: PointerEvent): void {
+    if (e.button === 0 || e.pointerType === 'touch') {
       this._isDragging3D = true;
+      this._active3DPointerId = e.pointerId;
+      this._canvas3d?.setPointerCapture?.(e.pointerId);
       this._lastMouseX = e.clientX;
       this._lastMouseY = e.clientY;
+      e.preventDefault();
     }
   }
 
-  private _handle3DMouseMove(e: MouseEvent): void {
-    if (!this._isDragging3D) return;
+  private _handle3DPointerMove(e: PointerEvent): void {
+    if (!this._isDragging3D || this._active3DPointerId !== e.pointerId) return;
 
     const dx = e.clientX - this._lastMouseX;
     const dy = e.clientY - this._lastMouseY;
@@ -4563,10 +6024,14 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     this._lastMouseX = e.clientX;
     this._lastMouseY = e.clientY;
     this._render3DScene();
+    e.preventDefault();
   }
 
-  private _handle3DMouseUp(): void {
+  private _handle3DPointerUp(e?: PointerEvent): void {
+    if (e && this._active3DPointerId !== null && e.pointerId !== this._active3DPointerId) return;
+    if (e && this._canvas3d?.hasPointerCapture?.(e.pointerId)) this._canvas3d.releasePointerCapture(e.pointerId);
     this._isDragging3D = false;
+    this._active3DPointerId = null;
   }
 
   private _handle3DWheel(e: WheelEvent): void {
@@ -4576,6 +6041,43 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       ...this._camera3d,
       distance: Math.max(2000, Math.min(20000, this._camera3d.distance * zoomFactor)),
     };
+    this._render3DScene();
+  }
+
+  private _zoom3D(factor: number): void {
+    this._camera3d = {
+      ...this._camera3d,
+      distance: Math.max(2000, Math.min(20000, this._camera3d.distance * factor)),
+    };
+    this._render3DScene();
+  }
+
+  private _rotate3D(deltaAzimuth: number, deltaElevation = 0): void {
+    this._camera3d = {
+      ...this._camera3d,
+      azimuth: (this._camera3d.azimuth + deltaAzimuth + 360) % 360,
+      elevation: Math.max(5, Math.min(85, this._camera3d.elevation + deltaElevation)),
+    };
+    this._render3DScene();
+  }
+
+  private _handle3DKeydown(e: KeyboardEvent): void {
+    const rotate = 7.5;
+    const zoom = 0.9;
+    let camera = this._camera3d;
+    if (e.key === 'ArrowLeft') camera = { ...camera, azimuth: (camera.azimuth + rotate) % 360 };
+    else if (e.key === 'ArrowRight') camera = { ...camera, azimuth: (camera.azimuth - rotate) % 360 };
+    else if (e.key === 'ArrowUp') camera = { ...camera, elevation: Math.min(85, camera.elevation + rotate) };
+    else if (e.key === 'ArrowDown') camera = { ...camera, elevation: Math.max(5, camera.elevation - rotate) };
+    else if (e.key === '+' || e.key === '=') camera = { ...camera, distance: Math.max(2000, camera.distance * zoom) };
+    else if (e.key === '-' || e.key === '_') camera = { ...camera, distance: Math.min(20000, camera.distance / zoom) };
+    else if (e.key === 'Home') {
+      this._reset3DCamera();
+      e.preventDefault();
+      return;
+    } else return;
+    e.preventDefault();
+    this._camera3d = camera;
     this._render3DScene();
   }
 
@@ -5371,7 +6873,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     super.updated(changedProperties);
 
     // Update target circles in DOM whenever _liveTargets changes
-    if (changedProperties.has('_liveTargets') || changedProperties.has('_sensors')) {
+    if (changedProperties.has('_liveTargets') || changedProperties.has('_roomTracks') || changedProperties.has('_sensors')) {
       this._updateTargetCirclesInDOM();
     }
 
@@ -5392,6 +6894,37 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
       ['#f97316', '#8b5cf6', '#06b6d4', '#84cc16', '#ec4899'],
       ['#ec4899', '#22c55e', '#94a3b8', '#f59e0b', '#3b82f6'],
     ];
+
+    const showRoomTracks = this._positioningSources().length > 1
+      && this._aggregation.tracking.experimental_fusion
+      && fusionCanRun(this._fusionStatus().ready, this._alignmentRevocationPending());
+    if (showRoomTracks) {
+      this._roomTracks.forEach((track, index) => {
+        const point = this._toCanvas(track);
+        const color = TARGET_COLORS[0][index % TARGET_COLORS[0].length];
+        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        circle.setAttribute('class', 'live-target');
+        circle.setAttribute('cx', point.x.toString());
+        circle.setAttribute('cy', point.y.toString());
+        circle.setAttribute('r', track.held ? '13' : '18');
+        circle.setAttribute('fill', color);
+        circle.setAttribute('fill-opacity', track.held ? '0.42' : '1');
+        circle.setAttribute('stroke', 'white');
+        circle.setAttribute('stroke-width', '4');
+        svgEl.appendChild(circle);
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('class', 'live-target');
+        text.setAttribute('x', point.x.toString());
+        text.setAttribute('y', (point.y + 6).toString());
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', 'white');
+        text.setAttribute('font-size', '14');
+        text.setAttribute('font-weight', 'bold');
+        text.textContent = String(index + 1);
+        svgEl.appendChild(text);
+      });
+      return;
+    }
 
     this._sensors.forEach((sensor, sensorIdx) => {
       const toWorld = (t: { x: number; y: number }) =>
@@ -5682,6 +7215,114 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     `;
   }
 
+  private _radarText(en: string, nl: string): string {
+    return this.hass?.language?.startsWith('nl') ? nl : panelText(this.hass, en);
+  }
+
+  private _renderHardwareSettings(selectedRadar: RadarDevice | undefined, canCalibrate: boolean, canPush: boolean) {
+    const t = (en: string, nl: string) => this._radarText(en, nl);
+    if (this._showCoverageCalibration) return html`<div class="radar-settings">${this._coverageWizard()}</div>`;
+    if (this._hardwareLoading || this._radarProfilesLoading) return html`
+      <div class="radar-settings"><p role="status">${t('Loading rooms and radars...', 'Kamers en radars laden...')}</p></div>`;
+    if (this._roomsError || this._radarProfilesError) return html`
+      <div class="radar-settings">
+        <p role="alert">${t('Rooms or radars could not be loaded.', 'Kamers of radars konden niet worden geladen.')}</p>
+        <div class="radar-section"><button type="button" class="radar-action" @click=${() => {
+          this._hardwareLoading = true;
+          void this._loadRooms();
+          void this._loadRadarProfiles();
+        }}>${t('Try again', 'Opnieuw proberen')}</button></div>
+      </div>`;
+    if (!this.rooms.length) return html`<div class="radar-settings">
+      <p>${t('Create and save a room in Floor plan first.', 'Maak en bewaar eerst een kamer in Plattegrond.')}</p>
+    </div>`;
+
+    const readOnly = this.hardwareContext?.readOnly;
+    const locked = this.hardwareBusy || this._dirty;
+    const feedback = this._hardwareFeedback;
+    const count = this._calibration.corners.length;
+    const zoneCount = this._zones.length;
+    return html`<section class="radar-settings">
+      <div class="radar-fields">
+        <label class="radar-field">${t('Room', 'Kamer')}
+          <select id="radar-tool-room" ?disabled=${locked} @change=${(event: Event) => {
+            this._hardwareFeedback = null;
+            this._selectRoom((event.target as HTMLSelectElement).value);
+          }}>
+            ${this.rooms.map(room => html`<option value=${room.id} ?selected=${this._selectedRoomId === room.id}>${room.name}</option>`)}
+          </select>
+        </label>
+        <label class="radar-field">Radar
+          <select id="radar-tool-sensor" ?disabled=${locked || !this._sensors.length} @change=${(event: Event) => {
+            this._hardwareFeedback = null;
+            const value = (event.target as HTMLSelectElement).value;
+            this._selectedSensorIndex = value === '' ? null : Number(value);
+          }}>
+            <option value="" ?selected=${this._selectedSensorIndex === null}>${this._sensors.length
+              ? t('Select a radar', 'Kies een radar') : t('No radar placed', 'Geen radar geplaatst')}</option>
+            ${this._sensors.map((sensor, index) => html`<option value=${index} ?selected=${this._selectedSensorIndex === index}>
+              ${this._findRadarDevice(sensor.deviceId) ? this._sensorLabel(sensor, index)
+                : `${t('Unavailable radar', 'Radar niet beschikbaar')}${this._sensors.length > 1 ? ` ${index + 1}` : ''}`}
+            </option>`)}
+          </select>
+        </label>
+      </div>
+      ${readOnly ? html`<div class="radar-notice" role="status"><ha-icon icon="mdi:information-outline" aria-hidden="true"></ha-icon>
+        <p>${t('Save the floor plan to measure or send zones.', 'Sla de plattegrond op om te meten of zones te versturen.')}</p></div>` : nothing}
+      ${!selectedRadar ? html`<div class="radar-notice"><ha-icon icon="mdi:radar" aria-hidden="true"></ha-icon>
+        <p>${t('Link an available Home Assistant radar in Floor plan to use these controls.', 'Koppel in Plattegrond een beschikbare Home Assistant-radar om hier te meten en zones te sturen.')}</p></div>` : nothing}
+      <section class="radar-section">
+        <div class="radar-section-title"><ha-icon icon="mdi:vector-square" aria-hidden="true"></ha-icon>
+          <h3>${t('Coverage and calibration', 'Bereik en kalibratie')}</h3>
+          <span class="radar-count">${count} ${t('points', 'meetpunten')}</span>
+        </div>
+        <p>${this._dirty ? t('Save your new measurements or discard them to switch rooms.', 'Sla je meting op of verwerp die om van kamer te wisselen.')
+          : selectedRadar && !canCalibrate
+            ? t('This radar must provide usable position data to measure coverage.', 'Deze radar moet bruikbare positiegegevens leveren om het bereik te meten.')
+            : t('Measure where the selected radar can reliably detect you.', 'Meet waar de gekozen radar je betrouwbaar kan detecteren.')}</p>
+        <div class="radar-actions">
+          ${this._dirty ? html`
+            <button type="button" class="radar-action radar-primary" @click=${this._saveRoom} ?disabled=${this.hardwareBusy || readOnly || feedback?.conflict}>
+              ${this._saving ? t('Saving...', 'Opslaan...') : t('Save changes', 'Wijzigingen opslaan')}
+            </button>
+            <button type="button" class="radar-action" ?disabled=${this.hardwareBusy} @click=${() => {
+              if (!this._selectedRoomId) return;
+              this._hardwareFeedback = null;
+              this._selectRoom(this._selectedRoomId);
+            }}>${t('Discard changes', 'Wijzigingen verwerpen')}</button>`
+          : html`<button type="button" class="radar-action radar-primary" @click=${this._openCoverageCalibration}
+            ?disabled=${!canCalibrate || this.hardwareBusy || readOnly}>
+            <ha-icon icon="mdi:crosshairs" aria-hidden="true"></ha-icon>${t('Measure coverage', 'Bereik meten')}
+          </button>`}
+        </div>
+      </section>
+      <section class="radar-section">
+        <div class="radar-section-title"><ha-icon icon="mdi:vector-polygon" aria-hidden="true"></ha-icon>
+          <h3>${t('Send zones', 'Zones versturen')}</h3>
+          <span class="radar-count">${zoneCount} ${zoneCount === 1 ? t('zone', 'zone') : t('zones', 'zones')}</span>
+        </div>
+        <p>${selectedRadar && !canPush
+          ? t('Check the mounting mode and installation data of the linked radars first.', 'Controleer eerst de montagemodus en installatiegegevens van de gekoppelde radars.')
+          : canPush && !zoneCount
+          ? t('This room has no zones. Sending clears the zones on its radars.', 'Deze kamer heeft geen zones. Verzenden wist de zones op de radars in deze kamer.')
+          : t('Send this room\'s saved zones to its linked radars.', 'Stuur de opgeslagen zones naar de gekoppelde radars in deze kamer.')}</p>
+        <div class="radar-actions"><button type="button" class="radar-action" @click=${this._pushToESPHome}
+          ?disabled=${!canPush || locked || readOnly}>
+          <ha-icon icon="mdi:send-outline" aria-hidden="true"></ha-icon>
+          ${this._pushingToESPHome ? t('Sending...', 'Versturen...') : t('Send to radars', 'Naar radars sturen')}
+        </button></div>
+      </section>
+      ${feedback ? html`<div class="radar-notice" data-status=${feedback.status} role=${feedback.status === 'warning' ? 'alert' : 'status'}>
+        <ha-icon icon=${feedback.status === 'success' ? 'mdi:check-circle-outline' : 'mdi:alert-circle-outline'} aria-hidden="true"></ha-icon>
+        <div><p>${feedback.message}</p>${feedback.conflict ? html`<button type="button" class="radar-action" @click=${async () => {
+          if (!this._selectedRoomId) return;
+          await this._reloadRoomAfterConflict(this._selectedRoomId);
+          this._hardwareFeedback = null;
+        }}>${t('Reload room', 'Kamer herladen')}</button>` : nothing}</div>
+      </div>` : nothing}
+    </section>`;
+  }
+
   render() {
     const selectedRoom = this.rooms.find(r => r.id === this._selectedRoomId);
     const importSummary = this._pendingImportedRoom ? summarizeRoom(this._pendingImportedRoom) : null;
@@ -5695,7 +7336,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const installationAvailability = selectedRadar
       ? radarInstallationAvailability(
         selectedRadar.profile.radarModel,
-        selectedRadar.profile.requiredInstallationMode,
+        this._requiredHardwareMode(selectedRadar),
         selectedRadar.profile.installationHeightEntityId,
         selectedRadar.profile.installationAngleEntityId,
       )
@@ -5738,18 +7379,220 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     );
     const hasLinkedHardwareModeMismatch = this._sensors.some(sensor =>
       this._hardwareModeMismatch(this._findRadarDevice(sensor.deviceId)));
-    const hasUnreadyLinkedLd2460 = this._sensors.some(sensor => {
+    const hasUnreadyLinkedPositioningRadar = this._sensors.some(sensor => {
       const radar = this._findRadarDevice(sensor.deviceId);
-      return radar?.profile.radarModel === 'ld2460' && !this._ld2460InstallationReady(radar);
+      return Boolean(radar
+        && ['ld2460', 'ld6002b'].includes(radar.profile.radarModel)
+        && !this._ld2460InstallationReady(radar));
     });
+    if (this.hardwareOnly) {
+      const canPush = this._sensors.some(sensor => Boolean(this._findRadarDevice(sensor.deviceId)))
+        && !hasLinkedHardwareModeMismatch && !hasUnreadyLinkedPositioningRadar;
+      return html`
+        ${this._renderHardwareSettings(selectedRadar, canCalibrate, canPush)}
+        ${selectedRoom && !this._hardwareLoading && !this._roomsError
+          ? this._renderRoomAggregation()
+          : nothing}
+      `;
+    }
     const activeTargets = Object.values(this._liveTargets).reduce((sum, targets) => sum + targets.filter(t => t.active).length, 0);
+    const roomFusionReady = this._aggregation.tracking.experimental_fusion
+      && fusionCanRun(this._fusionStatus().ready, this._alignmentRevocationPending());
+    const roomTrackCount = this._roomTracks.filter(track => !track.held).length;
     const sensorsWithSupplementaryPresence = new Set(
       this._sensors
         .filter(sensor => this._hasSupplementaryPresence(this._findRadarDevice(sensor.deviceId)))
         .map(sensor => sensor.id),
     );
-    const hasUnpositionedPresence = sensorsWithSupplementaryPresence.size > 0;
-    const roomOccupied = activeTargets > 0 || hasUnpositionedPresence;
+    const invalidTrackingStates = new Set(['', 'unknown', 'unavailable', 'nan', 'none', 'null']);
+    const stateIsAvailable = (entityId: string | null | undefined): boolean => {
+      if (!entityId) return false;
+      const state = this.hass.states[entityId];
+      return Boolean(state && !invalidTrackingStates.has(String(state.state).trim().toLowerCase()));
+    };
+    const nowMs = Date.now();
+    const serverNowMs = this._serverNowMs(nowMs);
+    const trackingSourceEvidence = this._sensors
+      .filter(sensor => Boolean(sensor.deviceId))
+      .map(sensor => {
+        const radar = this._findRadarDevice(sensor.deviceId);
+        const sensorTargets = this._liveTargets[sensor.id] || [];
+        const liveTargets = sensorTargets.filter(target => target.active);
+        const liveTargetIndexes = new Set(liveTargets.map(target => target.index));
+        const excludedTargetIndexes = new Set(
+          sensorTargets.filter(target => target.excluded).map(target => target.index),
+        );
+        const primaryState = radar?.profile.trackingPresenceEntityId
+          ? this.hass.states[radar.profile.trackingPresenceEntityId]
+          : undefined;
+        const primaryPresence = primaryState?.state === 'on';
+        const primaryContractLive = !radar?.profile.trackingPresenceEntityId
+          || stateIsAvailable(radar.profile.trackingPresenceEntityId);
+        const supplementaryPresence = Boolean(radar?.profile.supplementaryPresenceSensors.some(
+          entityId => this.hass.states[entityId]?.state === 'on',
+        ));
+        const supplementaryContractLive = Boolean(radar
+          && radar.profile.supplementaryPresenceSensors.every(stateIsAvailable));
+        const targetCountState = radar?.profile.trackingTargetCountEntityId
+          ? this.hass.states[radar.profile.trackingTargetCountEntityId]
+          : undefined;
+        const targetCountTimestamp = radar?.profile.trackingTargetCountEntityId
+          ? this._reportTimestamp(
+            radar.profile.trackingTargetCountEntityId,
+            targetCountState,
+            nowMs,
+            serverNowMs,
+          )
+          : null;
+        const targetCountFreshnessMs = Math.max(
+          1000,
+          this._aggregation.tracking.observation_freshness_ms,
+        );
+        const targetCountAvailable = Boolean(targetCountState
+          && !invalidTrackingStates.has(String(targetCountState.state).trim().toLowerCase())
+          && targetCountTimestamp !== null
+          && targetCountTimestamp <= nowMs
+          && nowMs - targetCountTimestamp <= targetCountFreshnessMs);
+        const parsedTargetCount = targetCountAvailable ? Number(targetCountState!.state) : Number.NaN;
+        const rawReportedTargetCount = Number.isInteger(parsedTargetCount) && parsedTargetCount >= 0
+          ? parsedTargetCount
+          : null;
+        const reconciledTargetCount = reconcileReportedTargetCount(
+          rawReportedTargetCount,
+          liveTargetIndexes.size,
+          excludedTargetIndexes.size,
+        );
+        const reportedTargetCount = reconciledTargetCount.effectiveTargetCount;
+        const explicitUnpositionedTargetPresence = Boolean(radar?.targets.some(target =>
+          target.presence_entity_id
+          && this.hass.states[target.presence_entity_id]?.state === 'on'
+          && !excludedTargetIndexes.has(target.index)
+          && !liveTargetIndexes.has(target.index)));
+        const explicitPositiveTargetCount = radar?.targets.filter(target =>
+          target.presence_entity_id
+          && this.hass.states[target.presence_entity_id]?.state === 'on').length || 0;
+        const explicitTargetContractComplete = Boolean(radar?.targets.length
+          && radar.targets.every(target => target.presence_entity_id
+            && stateIsAvailable(target.presence_entity_id)));
+        const aggregatePresenceExplained = exclusionsExplainAggregatePresence({
+          hasTargetCountContract: Boolean(radar?.profile.trackingTargetCountEntityId),
+          reportedTargetCount: rawReportedTargetCount,
+          explicitTargetContractComplete,
+          explicitPositiveTargetCount,
+          excludedTargetCount: excludedTargetIndexes.size,
+          visibleTargetCount: liveTargetIndexes.size,
+          hasUnpositionedTarget: explicitUnpositionedTargetPresence,
+        });
+        const effectivePrimaryPresence = primaryPresence && !aggregatePresenceExplained;
+        const staleNonzeroUnpositioned = Boolean(
+          (effectivePrimaryPresence || !radar?.profile.trackingPresenceEntityId)
+          && radar?.targets.some(target => {
+          if (target.presence_entity_id
+            || liveTargetIndexes.has(target.index)
+            || excludedTargetIndexes.has(target.index)) return false;
+          const x = this._targetCoordinateMm(
+            this.hass.states[target.x_entity_id],
+            radar.profile.coordinateScaleToMm,
+          );
+          const y = this._targetCoordinateMm(
+            this.hass.states[target.y_entity_id],
+            radar.profile.coordinateScaleToMm,
+          );
+          return x !== null && y !== null && (x !== 0 || y !== 0);
+          }),
+        );
+        const unpositionedTargetPresence = explicitUnpositionedTargetPresence
+          || staleNonzeroUnpositioned;
+        const targetPresenceLive = Boolean(radar?.targets.some(target =>
+          stateIsAvailable(target.presence_entity_id)));
+        const coordinateLive = Boolean(radar?.targets.some(target => {
+          const xState = this.hass.states[target.x_entity_id];
+          const yState = this.hass.states[target.y_entity_id];
+          const xTimestamp = this._reportTimestamp(target.x_entity_id, xState, nowMs, serverNowMs);
+          const yTimestamp = this._reportTimestamp(target.y_entity_id, yState, nowMs, serverNowMs);
+          if (xTimestamp === null || yTimestamp === null) return false;
+          return isFreshObservation(xTimestamp, nowMs, this._aggregation.tracking.observation_freshness_ms)
+            && isFreshObservation(yTimestamp, nowMs, this._aggregation.tracking.observation_freshness_ms);
+        }));
+        const slotEvidenceComplete = Boolean(radar && radar.targets.every(target => {
+          if (target.presence_entity_id) {
+            const targetState = this.hass.states[target.presence_entity_id];
+            if (!stateIsAvailable(target.presence_entity_id)) return false;
+            const xState = this.hass.states[target.x_entity_id];
+            const yState = this.hass.states[target.y_entity_id];
+            const x = this._targetCoordinateMm(xState, radar.profile.coordinateScaleToMm);
+            const y = this._targetCoordinateMm(yState, radar.profile.coordinateScaleToMm);
+            const xTimestamp = this._reportTimestamp(target.x_entity_id, xState, nowMs, serverNowMs);
+            const yTimestamp = this._reportTimestamp(target.y_entity_id, yState, nowMs, serverNowMs);
+            const freshCoordinates = isFreshObservation(
+              xTimestamp,
+              nowMs,
+              this._aggregation.tracking.observation_freshness_ms,
+            ) && isFreshObservation(
+              yTimestamp,
+              nowMs,
+              this._aggregation.tracking.observation_freshness_ms,
+            );
+            if (freshCoordinates && x !== null && y !== null && (x !== 0 || y !== 0)) {
+              return targetState.state === 'on';
+            }
+            return targetState.state !== 'on'
+              || liveTargetIndexes.has(target.index)
+              || excludedTargetIndexes.has(target.index)
+              || unpositionedTargetPresence;
+          }
+          const xState = this.hass.states[target.x_entity_id];
+          const yState = this.hass.states[target.y_entity_id];
+          const x = this._targetCoordinateMm(xState, radar.profile.coordinateScaleToMm);
+          const y = this._targetCoordinateMm(yState, radar.profile.coordinateScaleToMm);
+          if (x === null || y === null) return false;
+          const xTimestamp = this._reportTimestamp(target.x_entity_id, xState, nowMs, serverNowMs);
+          const yTimestamp = this._reportTimestamp(target.y_entity_id, yState, nowMs, serverNowMs);
+          const freshCoordinates = isFreshObservation(
+            xTimestamp,
+            nowMs,
+            this._aggregation.tracking.observation_freshness_ms,
+          ) && isFreshObservation(
+            yTimestamp,
+            nowMs,
+            this._aggregation.tracking.observation_freshness_ms,
+          );
+          if (!freshCoordinates) return false;
+          if (x === 0 && y === 0) return true;
+          return liveTargetIndexes.has(target.index) || primaryPresence;
+        }));
+        const positioning = Boolean(radar?.profile.positioningAvailable && radar.targets.length);
+        const presenceInputsComplete = primaryContractLive && supplementaryContractLive;
+        const targetCountComplete = !radar?.profile.trackingTargetCountEntityId
+          || (targetCountAvailable && reconciledTargetCount.accountingComplete);
+        return {
+          discovered: Boolean(radar),
+          live: Boolean(radar && (
+            stateIsAvailable(radar.profile.trackingPresenceEntityId)
+            || radar.profile.supplementaryPresenceSensors.some(stateIsAvailable)
+            || targetPresenceLive
+            || targetCountAvailable
+            || coordinateLive
+          ) && presenceInputsComplete && (!positioning || slotEvidenceComplete)),
+          presenceInputsComplete,
+          targetCountComplete,
+          positioning,
+          activeTargetCount: liveTargets.length,
+          primaryPresence: effectivePrimaryPresence,
+          supplementaryPresence,
+          unpositionedTargetPresence,
+          reportedTargetCount,
+        };
+      });
+    const roomTrackingStatus = assessRoomTrackingStatus(
+      trackingSourceEvidence,
+      roomFusionReady,
+      this._fusionAssociationAmbiguous,
+      roomTrackCount,
+    );
+    const jointCountKnown = roomTrackingStatus.countKnown;
+    const hasUnpositionedPresence = roomTrackingStatus.hasUnpositionedPresence;
+    const roomOccupied = roomTrackingStatus.occupied;
     const calibrationSensor = this._sensors.find(sensor => sensor.id === this._calibration.sensorId);
 
     return html`
@@ -5757,6 +7600,12 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         <div>
           <div class="section-title"><ha-icon icon="mdi:floor-plan"></ha-icon>${panelText(this.hass, 'Rooms')}</div>
           <div class="room-list">
+            ${this._invalidRoomCount > 0 ? html`
+              <p class="info-text" role="status">
+                ${panelText(this.hass, 'Some saved room data could not be loaded safely. The original data was kept for recovery.')}
+                (${this._invalidRoomCount})
+              </p>
+            ` : nothing}
             ${this._roomsError ? html`
               <p class="info-text">${this._roomsError} ${panelText(this.hass, 'Your saved rooms are still there.')}</p>
               <button class="add-room-btn" @click="${() => this._loadRooms()}">
@@ -5885,8 +7734,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 </button>
               </div>
               ${this._designMode === 'sensors' ? html`
-                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460}"
-                        title="${panelText(this.hass, hasLinkedHardwareModeMismatch || hasUnreadyLinkedLd2460 ? 'Wait for the LD2460 installation settings before pushing zones' : 'Push zones and entry lines to the linked sensors')}">
+                <button class="push-btn" @click="${this._pushToESPHome}" ?disabled="${this._pushingToESPHome || !this._sensors.some(sn => sn.deviceId) || hasLinkedHardwareModeMismatch || hasUnreadyLinkedPositioningRadar}"
+                        title="${panelText(this.hass, hasLinkedHardwareModeMismatch || hasUnreadyLinkedPositioningRadar ? 'Wait for the LD2460 installation settings before pushing zones' : 'Push zones and entry lines to the linked sensors')}">
                   <ha-icon icon="mdi:upload"></ha-icon>
                   ${panelText(this.hass, this._pushingToESPHome ? 'Pushing...' : 'Push')}
                 </button>
@@ -5901,7 +7750,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         ${!selectedRoom ? html`
           <div class="empty-state">
             <ha-icon icon="mdi:floor-plan"></ha-icon>
-            <h3>${panelText(this.hass, 'Room Designer')}</h3>
+            <h3>${panelText(this.hass, 'Floorplan Designer')}</h3>
             <p>${panelText(this.hass, 'Select or create a room to draw the layout, place sensors and configure zones')}</p>
           </div>
         ` : this._viewMode === '2d' ? html`
@@ -5952,15 +7801,34 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           <canvas
             id="canvas3d"
             class="canvas3d"
-            @mousedown="${this._handle3DMouseDown}"
-            @mousemove="${this._handle3DMouseMove}"
-            @mouseup="${this._handle3DMouseUp}"
-            @mouseleave="${this._handle3DMouseUp}"
+            tabindex="0"
+            role="application"
+            aria-label="${panelText(this.hass, '3D room view. Use arrow keys to rotate and plus or minus to zoom.')}"
+            aria-describedby="room-3d-live-summary"
+            @pointerdown="${this._handle3DPointerDown}"
+            @pointermove="${this._handle3DPointerMove}"
+            @pointerup="${this._handle3DPointerUp}"
+            @pointercancel="${this._handle3DPointerUp}"
             @wheel="${this._handle3DWheel}"
+            @keydown="${this._handle3DKeydown}"
           ></canvas>
+          <p id="room-3d-live-summary" class="sr-only" aria-live="polite">
+            ${!jointCountKnown
+              ? panelText(this.hass, '{count} source tracks visible; room count is still being verified.', { count: this._roomTracks.filter(track => !track.held).length })
+              : panelText(this.hass, this._roomTracks.filter(track => !track.held).length === 1 ? '1 room track visible.' : '{count} room tracks visible.', { count: this._roomTracks.filter(track => !track.held).length })}
+          </p>
           <div class="view3d-info">
             <ha-icon icon="mdi:rotate-3d-variant"></ha-icon>
-            <span>${panelText(this.hass, 'Drag to rotate • Scroll to zoom')}</span>
+            <span>${panelText(this.hass, 'Drag or swipe to rotate • Scroll or use plus and minus to zoom')}</span>
+          </div>
+          <div class="view3d-controls" role="group" aria-label="${panelText(this.hass, '3D view controls')}">
+            <button class="control-btn" title="${panelText(this.hass, 'Rotate left')}" aria-label="${panelText(this.hass, 'Rotate left')}" @click=${() => this._rotate3D(12)}><ha-icon icon="mdi:rotate-left"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Rotate right')}" aria-label="${panelText(this.hass, 'Rotate right')}" @click=${() => this._rotate3D(-12)}><ha-icon icon="mdi:rotate-right"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Tilt up')}" aria-label="${panelText(this.hass, 'Tilt up')}" @click=${() => this._rotate3D(0, 7.5)}><ha-icon icon="mdi:arrow-up"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Tilt down')}" aria-label="${panelText(this.hass, 'Tilt down')}" @click=${() => this._rotate3D(0, -7.5)}><ha-icon icon="mdi:arrow-down"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Zoom in')}" aria-label="${panelText(this.hass, 'Zoom in')}" @click=${() => this._zoom3D(0.9)}><ha-icon icon="mdi:plus"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Zoom out')}" aria-label="${panelText(this.hass, 'Zoom out')}" @click=${() => this._zoom3D(1.1)}><ha-icon icon="mdi:minus"></ha-icon></button>
+            <button class="control-btn" title="${panelText(this.hass, 'Reset 3D view')}" aria-label="${panelText(this.hass, 'Reset 3D view')}" @click=${this._reset3DCamera}><ha-icon icon="mdi:home-outline"></ha-icon></button>
           </div>
         `}
       </div>
@@ -5969,50 +7837,58 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         ${this._designMode === 'layout' ? this._renderLayoutSidebar() : html`
         ${this._toolMode === 'sensor' ? html`
           <div>
-            <div class="section-title">SENSORS (${this._sensors.length})</div>
+            <div class="section-title">${panelText(this.hass, 'Sensors').toUpperCase()} (${this._sensors.length})</div>
             <div class="sensor-list">
-              ${this._sensors.map((sn, i) => html`
-                <div class="sensor-item ${this._selectedSensorIndex === i ? 'selected' : ''}" @click="${() => this._selectedSensorIndex = i}">
-                  <span class="sensor-dot" style="background: ${this._sensorColor(i)};">${i + 1}</span>
-                  <div class="sensor-item-info">
-                    <div class="sensor-item-name">${this._sensorLabel(sn, i)}</div>
-                    <div class="sensor-item-sub">
-                      ${sn.deviceId
-                        ? `${sn.mountingMode === 'ceiling' ? 'Ceiling' : 'Wall'} mounted · Linked`
-                        : 'No device linked'}
-                    </div>
-                  </div>
-                  <button class="delete-btn" title="Remove sensor" @click="${(e: Event) => { e.stopPropagation(); this._removeSensor(i); }}">
+              ${this._sensors.map((sn, i) => {
+                const label = this._sensorLabel(sn, i);
+                return html`
+                <div class="sensor-item ${this._selectedSensorIndex === i ? 'selected' : ''}">
+                  <button type="button" class="sensor-select"
+                    aria-label="${panelText(this.hass, 'Select {name}', { name: label })}"
+                    @click="${() => this._selectedSensorIndex = i}">
+                    <span class="sensor-dot" style="background: ${this._sensorColor(i)};">${i + 1}</span>
+                    <span class="sensor-item-info">
+                      <span class="sensor-item-name">${label}</span>
+                      <span class="sensor-item-sub">
+                        ${sn.deviceId
+                          ? panelText(this.hass, sn.mountingMode === 'ceiling' ? 'Ceiling mounted · Linked' : 'Wall mounted · Linked')
+                          : panelText(this.hass, 'No device linked')}
+                      </span>
+                    </span>
+                  </button>
+                  <button class="delete-btn" title="${panelText(this.hass, 'Remove sensor')}" aria-label="${panelText(this.hass, 'Remove sensor')}" @click="${() => this._removeSensor(i)}">
                     <ha-icon icon="mdi:delete"></ha-icon>
                   </button>
                 </div>
-              `)}
+              `;})}
               <button class="add-sensor-btn" @click="${this._addSensor}">
-                <ha-icon icon="mdi:plus"></ha-icon>Add sensor
+                <ha-icon icon="mdi:plus"></ha-icon>${panelText(this.hass, 'Add sensor')}
               </button>
             </div>
           </div>
 
+          ${this._renderRoomAggregation()}
+
           ${this._selectedSensor ? html`
             <div>
-              <div class="section-title">SENSOR ${this._selectedSensorIndex! + 1} SETTINGS</div>
+              <div class="section-title">${panelText(this.hass, 'Sensor {number} settings', { number: this._selectedSensorIndex! + 1 }).toUpperCase()}</div>
               <div class="setting-item">
-                <label>Positioning radar</label>
-                <select
+                <label for="selected-room-radar">${panelText(this.hass, 'Room sensor')}</label>
+                <select id="selected-room-radar"
                   .value="${selectedRadar?.id || ''}"
                   ?disabled="${this._radarProfilesLoading}"
                   @change="${(e: Event) => this._selectRadarDevice(this._selectedSensorIndex!, (e.target as HTMLSelectElement).value || null)}"
                 >
-                  <option value="">${this._radarProfilesLoading ? 'Detecting radar hardware...' : '-- Select radar --'}</option>
+                  <option value="">${panelText(this.hass, this._radarProfilesLoading ? 'Detecting radar hardware...' : '-- Select radar --')}</option>
                   ${radarDevices.map(d => html`
-                    <option value="${d.id}" ?disabled="${!d.profile.positioningAvailable}">
-                      ${d.name} · ${d.profile.radarModel.toUpperCase()} · ${d.profile.mountingMode === 'ceiling' ? 'Ceiling' : 'Wall'}${d.profile.positioningAvailable ? '' : ' · Presence only'}
+                    <option value="${d.id}" ?disabled=${this._sensors.some((item, itemIndex) => itemIndex !== this._selectedSensorIndex && item.deviceId === d.id) || Boolean(this._radarLinkedRoomName(d.id))}>
+                      ${d.name} · ${d.profile.radarModel.toUpperCase()} · ${panelText(this.hass, d.profile.mountingMode === 'ceiling' ? 'Ceiling' : 'Wall')}${d.profile.positioningAvailable ? '' : ` ${panelText(this.hass, '· Presence only')}`}
                     </option>
                   `)}
                 </select>
                 ${this._radarProfilesError ? html`
                   <p class="firmware-status-note warning">
-                    ${this._radarProfilesError} Legacy detection is active until Home Assistant reloads the integration.
+                    ${this._radarProfilesError} ${panelText(this.hass, 'Legacy detection is active until Home Assistant reloads the integration.')}
                   </p>
                 ` : nothing}
                 ${this._selectedSensor.deviceId ? html`
@@ -6021,61 +7897,75 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       <div class="profile-heading">
                         <span class="radar-model">${selectedRadar.profile.radarModel.toUpperCase()}</span>
                         <span class="profile-source ${selectedRadar.profile.metadataSource}">
-                          ${selectedRadar.profile.metadataSource === 'firmware' ? 'Firmware profile' : 'Legacy profile'}
+                          ${panelText(this.hass, selectedRadar.profile.metadataSource === 'firmware' ? 'Firmware profile' : 'Legacy profile')}
                         </span>
                       </div>
                     ` : html`
                       <p class="firmware-status-note warning">
-                        This saved radar is not currently available in Home Assistant. The room stays unchanged; reconnect it or choose another positioning radar.
+                        ${panelText(this.hass, 'This saved radar is not currently available in Home Assistant. The room stays unchanged; reconnect it or choose another positioning radar.')}
                       </p>
                     `}
                     <div class="firmware-status-row">
-                      <span>Live tracking</span>
+                      <span>${panelText(this.hass, 'Live tracking')}</span>
                       <span class="firmware-status-value">
                         ${!selectedRadar
-                          ? 'Radar unavailable'
+                          ? panelText(this.hass, 'Radar unavailable')
                           : selectedRadarCapabilities.availableTargetCount > 0
-                          ? `${selectedRadarCapabilities.availableTargetCount} coordinate pair${selectedRadarCapabilities.availableTargetCount === 1 ? '' : 's'} · max ${selectedRadarCapabilities.targetCount}`
-                          : 'Not detected'}
+                          ? panelText(
+                            this.hass,
+                            selectedRadarCapabilities.availableTargetCount === 1
+                              ? '{count} coordinate pair · max {maximum}'
+                              : '{count} coordinate pairs · max {maximum}',
+                            { count: selectedRadarCapabilities.availableTargetCount, maximum: selectedRadarCapabilities.targetCount },
+                          )
+                          : panelText(this.hass, 'Not detected')}
                       </span>
                     </div>
                     ${selectedRadar ? html`
                       <div class="firmware-status-row">
-                        <span>Projection</span>
+                        <span>${panelText(this.hass, 'Projection')}</span>
                         <span class="firmware-status-value">
-                          ${selectedRadar.profile.coordinateProjection === 'floor_xy' ? 'Floor X/Y' : 'Forward X/Y'} · ×${selectedRadar.profile.coordinateScaleToMm}
+                          ${panelText(this.hass, selectedRadar.profile.coordinateProjection === 'floor_xy' ? 'Floor X/Y' : 'Forward X/Y')} · ×${selectedRadar.profile.coordinateScaleToMm}
                         </span>
                       </div>
                     ` : nothing}
                     <div class="firmware-status-row">
-                      <span>Zone sync</span>
+                      <span>${panelText(this.hass, 'Zone sync')}</span>
                       <span class="firmware-status-value">
                         ${!selectedRadar
-                          ? 'Not available'
+                          ? panelText(this.hass, 'Not available')
                           : selectedRadarCapabilities.zoneProfiles || selectedRadarCapabilities.interferenceZones || selectedRadarCapabilities.smoothing
-                          ? 'Advanced'
+                          ? panelText(this.hass, 'Advanced')
                           : selectedRadarCapabilities.polygonZones
-                            ? 'Polygon zones'
-                            : 'Visualization only'}
+                            ? panelText(this.hass, 'Polygon zones')
+                            : panelText(this.hass, 'Visualization only')}
                       </span>
                     </div>
                     ${selectedRadar?.profile.supplementaryPresenceSensors.length ? html`
                       <div class="supplementary-sources">
-                        <strong>Additional occupancy sensors</strong>
+                        <strong>${panelText(this.hass, 'Additional occupancy sensors')}</strong>
                         <span>${selectedRadar.profile.supplementaryPresenceSensors.map(entityId => this._entityLabel(entityId)).join(' · ')}</span>
-                        <small>These improve presence detection but never create or replace X/Y targets.</small>
+                        <small>${panelText(this.hass, 'These improve presence detection but never create or replace X/Y targets.')}</small>
                       </div>
                     ` : nothing}
                     ${hardwareModeMismatch && selectedRadar ? html`
                       <div class="mode-warning" role="alert">
                         <ha-icon icon="mdi:alert-outline"></ha-icon>
                         <div>
-                          <strong>Radar hardware mode does not match</strong>
+                          <strong>${panelText(this.hass, 'Radar hardware mode does not match')}</strong>
                           <span>
-                            ${currentHardwareMode || 'unknown'} is active; ${selectedRadar.profile.requiredInstallationMode} is required for ${selectedRadar.profile.mountingMode} mounting.
+                            ${panelText(this.hass, '{current} is active; {required} is required for {mounting} mounting.', {
+                              current: panelText(this.hass, currentHardwareMode || 'unknown'),
+                              required: panelText(this.hass, this._requiredHardwareMode(selectedRadar) || 'unknown'),
+                              mounting: panelText(this.hass, selectedRadar.profile.mountingMode),
+                            })}
                           </span>
                           <button @click="${() => this._applyRequiredHardwareMode(selectedRadar)}" ?disabled="${this._changingHardwareMode}">
-                            ${this._changingHardwareMode ? 'Applying...' : `Switch to ${selectedRadar.profile.requiredInstallationMode}`}
+                            ${this._changingHardwareMode
+                              ? panelText(this.hass, 'Applying...')
+                              : panelText(this.hass, 'Switch to {mode}', {
+                                mode: panelText(this.hass, this._requiredHardwareMode(selectedRadar) || 'unknown'),
+                              })}
                           </button>
                         </div>
                       </div>
@@ -6094,53 +7984,58 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       </div>
                     ` : selectedRadar?.profile.hardwareModeCapability === 'top_or_side' ? html`
                       <p class="firmware-status-note good">
-                        Hardware mode ${currentHardwareMode || 'not reported'}${currentHardwareMode === selectedRadar.profile.requiredInstallationMode ? ' matches this mounting.' : '.'}
+                        ${panelText(this.hass, '{mode} hardware mode matches this mounting.', {
+                          mode: panelText(this.hass, currentHardwareMode || 'not reported'),
+                        })}
                       </p>
                     ` : selectedRadar?.profile.hardwareModeCapability === 'fixed' ? html`
-                      <p class="firmware-status-note">This radar uses fixed coordinates and needs no top/side hardware setting.</p>
+                      <p class="firmware-status-note">${panelText(this.hass, 'This radar uses fixed coordinates and needs no top/side hardware setting.')}</p>
                     ` : nothing}
                     ${!selectedRadar ? nothing : !selectedRadarCapabilities.polygonZones ? html`
                       <p class="firmware-status-note warning">
-                        Live room tracking is available, but this firmware does not expose polygon zones to Home Assistant.
+                        ${panelText(this.hass, 'Live room tracking is available, but this firmware does not expose polygon zones to Home Assistant.')}
                       </p>
                     ` : !selectedRadarCapabilities.zoneProfiles || !selectedRadarCapabilities.interferenceZones || !selectedRadarCapabilities.smoothing ? html`
                       <p class="firmware-status-note">
-                        Base detection, exclusion and entry zones are supported. Profiles, interference zones and smoothing require updated firmware.
+                        ${panelText(this.hass, 'Base detection, exclusion and entry zones are supported. Profiles, interference zones and smoothing require updated firmware.')}
                       </p>
                     ` : html`
-                      <p class="firmware-status-note">All Room Designer zone and tracking controls are available.</p>
+                      <p class="firmware-status-note">${panelText(this.hass, 'All zone and tracking controls are available.')}</p>
                     `}
                     ${selectedRadar?.profile.coordinateProjection === 'floor_xy' ? html`
                       <p class="firmware-status-note">
-                        Coordinates already represent positions on the floor. Orientation aligns the radar axes with this room without applying wall-facing assumptions.
+                        ${panelText(this.hass, 'Coordinates already represent positions on the floor. Orientation aligns the radar axes with this room without applying wall-facing assumptions.')}
                       </p>
                     ` : nothing}
                     ${selectedRadar?.profile.metadataSource === 'legacy_fallback' ? html`
                       <p class="firmware-status-note warning">
-                        This profile was derived from older firmware. Update the device firmware to publish mounting, radar model and coordinate metadata explicitly.
+                        ${panelText(this.hass, 'This profile was derived from older firmware. Update the device firmware to publish mounting, radar model and coordinate metadata explicitly.')}
                       </p>
                     ` : nothing}
                     ${selectedRadar ? html`
                       <details class="radar-diagnostics">
-                        <summary>Detection details</summary>
+                        <summary>${panelText(this.hass, 'Detection details')}</summary>
                         <dl>
-                          <div><dt>Product</dt><dd>${selectedRadar.profile.detectedProduct || selectedRadar.productFamily}</dd></div>
-                          <div><dt>Source</dt><dd>${selectedRadar.profile.metadataSource}</dd></div>
-                          <div><dt>Radar</dt><dd>${selectedRadar.profile.radarModel}</dd></div>
-                          <div><dt>Mounting</dt><dd>${selectedRadar.profile.mountingMode} · ${selectedRadar.profile.coordinateProjection}</dd></div>
-                          <div><dt>Coordinate frame</dt><dd>${selectedRadar.profile.coordinateFrame || 'not reported'}</dd></div>
-                          <div><dt>Coordinate scale</dt><dd>${selectedRadar.profile.coordinateScaleToMm} to mm</dd></div>
-                          <div><dt>Hardware mode</dt><dd>${currentHardwareMode || 'not reported'} / required ${selectedRadar.profile.requiredInstallationMode || 'none'}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Product')}</dt><dd>${selectedRadar.profile.detectedProduct || selectedRadar.productFamily}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Source')}</dt><dd>${selectedRadar.profile.metadataSource}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Radar')}</dt><dd>${selectedRadar.profile.radarModel}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Mounting')}</dt><dd>${panelText(this.hass, selectedRadar.profile.mountingMode)} · ${selectedRadar.profile.coordinateProjection}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Coordinate frame')}</dt><dd>${selectedRadar.profile.coordinateFrame || panelText(this.hass, 'not reported')}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Coordinate scale')}</dt><dd>${panelText(this.hass, '{scale} to mm', { scale: selectedRadar.profile.coordinateScaleToMm })}</dd></div>
+                          <div><dt>${panelText(this.hass, 'Hardware mode')}</dt><dd>${panelText(this.hass, '{current} / required {required}', {
+                            current: panelText(this.hass, currentHardwareMode || 'not reported'),
+                            required: panelText(this.hass, this._requiredHardwareMode(selectedRadar) || 'none'),
+                          })}</dd></div>
                           ${selectedRadar.profile.radarModel === 'ld2460' ? html`
-                            <div><dt>Radar height</dt><dd>${installationHeightM === null ? 'not reported' : `${installationHeightM.toFixed(2)} m`}</dd></div>
-                            <div><dt>Radar angle</dt><dd>${installationAngleDeg === null ? 'not reported' : `${installationAngleDeg.toFixed(1)}°`}</dd></div>
+                            <div><dt>${panelText(this.hass, 'Radar height')}</dt><dd>${installationHeightM === null ? panelText(this.hass, 'not reported') : `${installationHeightM.toFixed(2)} m`}</dd></div>
+                            <div><dt>${panelText(this.hass, 'Radar angle')}</dt><dd>${installationAngleDeg === null ? panelText(this.hass, 'not reported') : `${installationAngleDeg.toFixed(1)}°`}</dd></div>
                           ` : nothing}
                         </dl>
                         ${selectedRadar.profile.missingMetadataEntities.length ? html`
-                          <p>Missing: ${selectedRadar.profile.missingMetadataEntities.join(', ')}</p>
+                          <p>${panelText(this.hass, 'Missing')}: ${selectedRadar.profile.missingMetadataEntities.join(', ')}</p>
                         ` : nothing}
                         ${selectedRadar.profile.invalidMetadataEntities.length ? html`
-                          <p>Invalid: ${selectedRadar.profile.invalidMetadataEntities.join(', ')}</p>
+                          <p>${panelText(this.hass, 'Invalid')}: ${selectedRadar.profile.invalidMetadataEntities.join(', ')}</p>
                         ` : nothing}
                       </details>
                     ` : nothing}
@@ -6148,11 +8043,11 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 ` : nothing}
               </div>
               <div class="setting-item">
-                <label>Mounting type</label>
+                <label>${panelText(this.hass, 'Mounting type')}</label>
                 ${selectedRadar?.profile.metadataSource === 'firmware' ? html`
                   <div class="profile-lock">
                     <ha-icon icon="${selectedRadar.profile.mountingMode === 'ceiling' ? 'mdi:ceiling-light' : 'mdi:wall'}"></ha-icon>
-                    <span>${selectedRadar.profile.mountingMode === 'ceiling' ? 'Ceiling mounted' : 'Wall mounted'} · reported by firmware</span>
+                    <span>${panelText(this.hass, selectedRadar.profile.mountingMode === 'ceiling' ? 'Ceiling mounted' : 'Wall mounted')} · ${panelText(this.hass, 'reported by firmware')}</span>
                   </div>
                   ${this._selectedSensor.mountingMode !== selectedRadar.profile.mountingMode ? html`
                     <p class="firmware-status-note warning">This saved room still uses ${this._selectedSensor.mountingMode} projection.</p>
@@ -6182,7 +8077,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     <div class="radar-installation-control">
                       <label for="ld2460-height">
                         ${this._text('radar.installation.height')}
-                        <span>${installationHeightM === null ? '—' : `${installationHeightM.toFixed(2)} m`}</span>
+                        <span>${installationHeightM === null ? '-' : `${installationHeightM.toFixed(2)} m`}</span>
                       </label>
                       <div class="radar-installation-input">
                         <input id="ld2460-height" type="number" inputmode="decimal"
@@ -6217,7 +8112,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     <div class="radar-installation-control">
                       <label for="ld2460-angle">
                         ${this._text('radar.installation.angle')}
-                        <span>${installationAngleDeg === null ? '—' : `${installationAngleDeg.toFixed(1)}°`}</span>
+                        <span>${installationAngleDeg === null ? '-' : `${installationAngleDeg.toFixed(1)}°`}</span>
                       </label>
                       <div class="radar-installation-input">
                         <input id="ld2460-angle" type="number" inputmode="decimal"
@@ -6457,44 +8352,44 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         <div class="settings-panel">
           <div class="settings-panel-header">
             <ha-icon icon="mdi:radar"></ha-icon>
-            <span>Target tracking</span>
+            <span>${panelText(this.hass, 'Target tracking')}</span>
           </div>
           <div class="settings-row">
-            <label>Smooth target movement</label>
-            <input type="checkbox" .checked="${this._tracking.smoothingEnabled}"
+            <label for="tracking-smoothing-enabled">${panelText(this.hass, 'Smooth target movement')}</label>
+            <input id="tracking-smoothing-enabled" type="checkbox" .checked="${this._tracking.smoothingEnabled}"
                    @change="${(e: Event) => this._updateTracking({ smoothingEnabled: (e.target as HTMLInputElement).checked })}"/>
           </div>
           <div class="setting-item">
-            <label>Smoothing: ${Math.round(this._tracking.smoothingAlpha * 100)}%</label>
-            <input type="range" min="0.05" max="1" step="0.05" .value="${String(this._tracking.smoothingAlpha)}"
+            <label for="tracking-smoothing-alpha">${panelText(this.hass, 'Smoothing: {percent}%', { percent: Math.round(this._tracking.smoothingAlpha * 100) })}</label>
+            <input id="tracking-smoothing-alpha" type="range" min="0.05" max="1" step="0.05" .value="${String(this._tracking.smoothingAlpha)}"
                    @input="${(e: Event) => this._updateTracking({ smoothingAlpha: parseFloat((e.target as HTMLInputElement).value) })}"/>
           </div>
           <div class="settings-row">
-            <label>Maximum jump</label>
-            <input type="number" min="100" max="5000" step="100" .value="${String(this._tracking.maxJumpMm)}"
+            <label for="tracking-maximum-jump">${panelText(this.hass, 'Maximum jump')}</label>
+            <input id="tracking-maximum-jump" type="number" min="100" max="5000" step="100" .value="${String(this._tracking.maxJumpMm)}"
                    @change="${(e: Event) => this._updateTracking({
                      maxJumpMm: Math.round(this._commitNumberInput(e, this._tracking.maxJumpMm, 100, 5000)),
                    })}"/>
           </div>
           <div class="settings-row">
-            <label>Track hold (ms)</label>
-            <input type="number" min="0" max="10000" step="100" .value="${String(this._tracking.trackHoldMs)}"
+            <label for="tracking-hold-ms">${panelText(this.hass, 'Track hold (ms)')}</label>
+            <input id="tracking-hold-ms" type="number" min="0" max="10000" step="100" .value="${String(this._tracking.trackHoldMs)}"
                    @change="${(e: Event) => this._updateTracking({
                      trackHoldMs: Math.round(this._commitNumberInput(e, this._tracking.trackHoldMs, 0, 10000)),
                    })}"/>
           </div>
           <div class="settings-row">
-            <label>Keep identity across zones</label>
-            <input type="checkbox" .checked="${this._tracking.crossZoneTracking}"
+            <label for="tracking-cross-zone">${panelText(this.hass, 'Keep identity across zones')}</label>
+            <input id="tracking-cross-zone" type="checkbox" .checked="${this._tracking.crossZoneTracking}"
                    @change="${(e: Event) => this._updateTracking({ crossZoneTracking: (e.target as HTMLInputElement).checked })}"/>
           </div>
         </div>
 
         <!-- Detection Zones Section -->
         <div>
-          <div class="section-title" style="color: #22c55e;">📍 DETECTION ZONES (${this._getZoneCountByType('detection')}/${ZONE_LIMITS.detection})</div>
+          <div class="section-title" style="color: #22c55e;">📍 ${panelText(this.hass, 'Detection zones ({count}/{maximum})', { count: this._getZoneCountByType('detection'), maximum: ZONE_LIMITS.detection })}</div>
           ${this._zones.filter(z => z.type === 'detection').length === 0 ? html`
-            <p class="info-text">No detection zones yet. Draw a zone and choose "Detection".</p>
+            <p class="info-text">${panelText(this.hass, 'No detection zones yet. Draw a zone and choose "Detection".')}</p>
           ` : html`
             <div class="zone-list">
               ${this._zones.map((zone, i) => zone.type !== 'detection' ? '' : html`
@@ -6506,10 +8401,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
+                      <button class="edit-btn" aria-label=${panelText(this.hass, 'Edit {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
-                      <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
+                      <button class="delete-btn" aria-label=${panelText(this.hass, 'Delete {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
                         <ha-icon icon="mdi:delete"></ha-icon>
                       </button>
                     </div>
@@ -6523,9 +8418,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
         <!-- Exclusion Zones Section -->
         <div style="margin-top: 16px;">
-          <div class="section-title" style="color: #f87171;">🚷 EXCLUSION ZONES (${this._getZoneCountByType('exclusion')}/${ZONE_LIMITS.exclusion})</div>
+          <div class="section-title" style="color: #f87171;">🚷 ${panelText(this.hass, 'Exclusion zones ({count}/{maximum})', { count: this._getZoneCountByType('exclusion'), maximum: ZONE_LIMITS.exclusion })}</div>
           ${this._zones.filter(z => z.type === 'exclusion').length === 0 ? html`
-            <p class="info-text">No exclusion zones yet. Draw a zone and choose "Exclusion".</p>
+            <p class="info-text">${panelText(this.hass, 'No exclusion zones yet. Draw a zone and choose "Exclusion".')}</p>
           ` : html`
             <div class="zone-list">
               ${this._zones.map((zone, i) => zone.type !== 'exclusion' ? '' : html`
@@ -6537,10 +8432,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
+                      <button class="edit-btn" aria-label=${panelText(this.hass, 'Edit {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
-                      <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
+                      <button class="delete-btn" aria-label=${panelText(this.hass, 'Delete {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
                         <ha-icon icon="mdi:delete"></ha-icon>
                       </button>
                     </div>
@@ -6554,9 +8449,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
         <!-- Interference Zones Section -->
         <div style="margin-top: 16px;">
-          <div class="section-title" style="color: #f59e0b;">⚡ INTERFERENCE ZONES (${this._getZoneCountByType('interference')}/${ZONE_LIMITS.interference})</div>
+          <div class="section-title" style="color: #f59e0b;">⚡ ${panelText(this.hass, 'Interference zones ({count}/{maximum})', { count: this._getZoneCountByType('interference'), maximum: ZONE_LIMITS.interference })}</div>
           ${this._zones.filter(z => z.type === 'interference').length === 0 ? html`
-            <p class="info-text">No interference zones yet. Use these for fans, curtains and other moving objects that may create false targets.</p>
+            <p class="info-text">${panelText(this.hass, 'No interference zones yet. Use these for fans, curtains and other moving objects that may create false targets.')}</p>
           ` : html`
             <div class="zone-list">
               ${this._zones.map((zone, i) => zone.type !== 'interference' ? '' : html`
@@ -6568,10 +8463,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
+                      <button class="edit-btn" aria-label=${panelText(this.hass, 'Edit {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
-                      <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
+                      <button class="delete-btn" aria-label=${panelText(this.hass, 'Delete {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
                         <ha-icon icon="mdi:delete"></ha-icon>
                       </button>
                     </div>
@@ -6585,9 +8480,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
 
         <!-- Entry Zones Section -->
         <div style="margin-top: 16px;">
-          <div class="section-title" style="color: #10b981;">🚪 ENTRY LINES (${this._getZoneCountByType('entry')}/${ZONE_LIMITS.entry})</div>
+          <div class="section-title" style="color: #10b981;">🚪 ${panelText(this.hass, 'Entry lines ({count}/{maximum})', { count: this._getZoneCountByType('entry'), maximum: ZONE_LIMITS.entry })}</div>
           ${this._zones.filter(z => z.type === 'entry').length === 0 ? html`
-            <p class="info-text">No entry lines yet. Draw 2 points and choose "Entry Line" for in/out detection at doorways.</p>
+            <p class="info-text">${panelText(this.hass, 'No entry lines yet. Draw 2 points and choose "Entry Line" for in/out detection at doorways.')}</p>
           ` : html`
             <div class="zone-list">
               ${this._zones.map((zone, i) => zone.type !== 'entry' ? '' : html`
@@ -6599,10 +8494,10 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                       <div class="zone-name">${zone.name}</div>
                     </div>
                     <div class="zone-actions">
-                      <button class="edit-btn" @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
+                      <button class="edit-btn" aria-label=${panelText(this.hass, 'Edit {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._editingZoneIndex = this._editingZoneIndex === i ? null : i; this._selectZone(i); }}">
                         <ha-icon icon="mdi:pencil"></ha-icon>
                       </button>
-                      <button class="delete-btn" @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
+                      <button class="delete-btn" aria-label=${panelText(this.hass, 'Delete {name}', { name: zone.name })} @click="${(e: Event) => { e.stopPropagation(); this._deleteZone(i); }}">
                         <ha-icon icon="mdi:delete"></ha-icon>
                       </button>
                     </div>
@@ -6621,14 +8516,22 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
               <span style="font-weight: 600; color: var(--rd-text);">Live Tracking</span>
             </div>
             <div class="count" style="color: ${roomOccupied ? '#22c55e' : 'var(--rd-dim)'};">
-              ${activeTargets} ${hasUnpositionedPresence
-                ? (activeTargets === 1 ? 'positioned person' : 'positioned people')
-                : (activeTargets === 1 ? 'person' : 'people')}
+              ${jointCountKnown
+                ? panelText(this.hass, roomTrackCount === 1 ? '1 room track' : '{count} room tracks', { count: roomTrackCount })
+                : panelText(this.hass, 'Count unknown · {count} source tracks', { count: activeTargets })}
             </div>
+            ${!jointCountKnown ? html`
+              <div class="occupancy-note">
+                <ha-icon icon="mdi:vector-link"></ha-icon>
+                <span>${panelText(this.hass, roomFusionReady && this._sensors.filter(sensor => sensor.deviceId).length > 1
+                  ? 'Multiple radar views are fused for position, while the exact person count remains conservative.'
+                  : 'Complete the neighbouring overlap alignment to merge tracks without hiding possible people.')}</span>
+              </div>
+            ` : nothing}
             ${hasUnpositionedPresence ? html`
               <div class="occupancy-note">
                 <ha-icon icon="mdi:account-eye-outline"></ha-icon>
-                <span>Additional presence is active without an X/Y position. No target is invented.</span>
+                <span>${panelText(this.hass, 'Additional presence is active without an X/Y position. No target is invented.')}</span>
               </div>
             ` : nothing}
             ${this._sensors.map((sn, si) => {
@@ -6640,7 +8543,9 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                 <div class="live-sensor-row">
                   <span class="sensor-dot small" style="background: ${this._sensorColor(si)};">${si + 1}</span>
                   <span class="live-sensor-name">${this._sensorLabel(sn, si)}</span>
-                  <span class="live-sensor-count">${activeCount} positioned${supplementaryActive ? ' · presence' : ''}</span>
+                  <span class="live-sensor-count">${supplementaryActive
+                    ? panelText(this.hass, '{count} positioned · presence', { count: activeCount })
+                    : panelText(this.hass, '{count} positioned', { count: activeCount })}</span>
                 </div>
               `;
             })}
@@ -6767,7 +8672,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     ? this._pendingImportedRoomOptions.length === 1
                       ? 'One room detected with measurements in metres.'
                       : '{count} rooms detected with measurements in metres.'
-                    : 'Complete Room Designer layout and settings.',
+                    : 'Complete room layout and settings.',
                   { count: this._pendingImportedRoomOptions.length },
                 )}</span>
               </div>
@@ -6808,7 +8713,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             ` : html`
               <div class="import-note">
                 <ha-icon icon="mdi:information-outline"></ha-icon>
-                <span>${panelText(this.hass, 'Device links are kept when the same devices exist in this Home Assistant. Missing devices can be linked again afterwards.')}</span>
+                <span>${panelText(this.hass, 'Imported sensors are left unlinked so one physical radar can never control two rooms. Link each sensor to the correct Home Assistant device after import.')}</span>
               </div>
             `}
             ${this._importRoomWarnings.map(warning => html`
@@ -6820,7 +8725,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
                     ? 'One or more scan edges did not meet exactly. The closest wall endpoints were joined; review the room shape.'
                     : warning === 'skipped_opening'
                       ? 'A scanned door or window was too far from a wall and was skipped.'
-                      : 'Some scanned objects do not match the Room Designer furniture library and were skipped.',
+                      : 'Some scanned objects do not match the furniture library and were skipped.',
                 )}</span>
               </div>
             `)}
@@ -7018,7 +8923,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
             <p class="help-text">${panelText(this.hass, 'The dashed preview follows the radar rays beyond the mirror. Increase the depth only when ghost targets appear farther behind it.')}</p>
             <div class="dialog-warning" style="border-color: var(--rd-line);">
               <ha-icon icon="mdi:information-outline" style="color: #0ea5e9;"></ha-icon>
-              <div>${panelText(this.hass, 'Each protected mirror uses one of the radar\'s two exclusion slots. Raw diagnostic target entities remain unchanged; Room Designer, the UltimateSensor room view and firmware people counting ignore the protected area.')}</div>
+              <div>${panelText(this.hass, 'Each protected mirror uses one of the radar\'s two exclusion slots. Raw diagnostic target entities remain unchanged; the Floorplan Designer, the UltimateSensor room view and firmware people counting ignore the protected area.')}</div>
             </div>
             <div class="dialog-buttons">
               <button class="dialog-btn cancel" @click="${this._hideMirrorDialog}">${panelText(this.hass, 'Cancel')}</button>
@@ -7030,9 +8935,15 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
       ` : ''}
 
-      ${this._showCoverageCalibration && this._selectedSensor ? html`
+      ${this._coverageWizard()}
+    `;
+  }
+
+  private _coverageWizard() {
+    return this._showCoverageCalibration && this._selectedSensor ? html`
         <shs-sensor-coverage-calibration
           .hass="${this.hass}"
+          .embedded=${this.hardwareOnly}
           .targets="${this._liveTargets[this._selectedSensor.id] || []}"
           .initialCorners="${!this._coverageCalibrationStartsFresh && this._calibration.sensorId === this._selectedSensor.id
             ? this._calibration.corners.map(point => this._worldToSensorLocal(this._selectedSensor!, point))
@@ -7044,13 +8955,13 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
           .sensorName="${this._sensorLabel(this._selectedSensor, this._selectedSensorIndex!)}"
           .requiresOrientationCheck="${this._findRadarDevice(this._selectedSensor.deviceId)?.profile.radarModel === 'ld2460'}"
           .isRemeasurement="${this._coverageCalibrationStartsFresh}"
-          @calibration-cancel="${() => {
-            this._coverageCalibrationStartsFresh = false;
-            this._showCoverageCalibration = false;
-          }}"
+          @calibration-cancel="${this._closeCoverageWizard}"
           @calibration-save="${this._saveCoverageCalibration}"
         ></shs-sensor-coverage-calibration>
-      ` : nothing}
-    `;
+      ` : nothing;
   }
+}
+
+if (!customElements.get('shs-zones-page')) {
+  customElements.define('shs-zones-page', ZonesPage);
 }

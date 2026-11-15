@@ -39,14 +39,51 @@ test('accepts a raw room object from older exports', () => {
   assert.deepEqual(parseRoomExportText(JSON.stringify(ROOM)), ROOM);
 });
 
+test('migrates a legacy single sensor during import instead of dropping it', () => {
+  const legacy = { ...ROOM, sensors: undefined, sensor: {
+    deviceId: 'legacy-device', x: 1250, y: -500, rotation: 90, heightMm: 2600,
+    z_mapping: { mode: 'sensor_down', verified: true, verification_fingerprint: 'old' },
+  } };
+  const imported = makeImportedRoom(legacy, 'legacy-copy', 'Legacy copy');
+  assert.equal(imported.sensors.length, 1);
+  assert.equal(imported.sensors[0].deviceId, null);
+  assert.deepEqual(imported.sensors[0].z_mapping, { mode: 'raw', verified: false });
+  assert.equal('sensor' in imported, false);
+});
+
 test('imports as a new room and strips backend timestamps', () => {
-  const imported = makeImportedRoom({ ...ROOM, created_at: 'old', updated_at: 'old', house: { x: 500, y: 600, floor: 2, rotationDeg: 90 } }, 'room_new', 'Woonkamer kopie');
+  const imported = makeImportedRoom({
+    ...ROOM,
+    created_at: 'old',
+    updated_at: 'old',
+    house: { x: 500, y: 600, floor: 2, rotationDeg: 90 },
+    sensors: [{
+      ...ROOM.sensors[0],
+      z_mapping: {
+        mode: 'sensor_down',
+        verified: true,
+        verification_fingerprint: 'old-placement',
+      },
+    }],
+    aggregation: {
+      tracking: {
+        experimental_fusion: true,
+        source_alignments: {
+          sensor_1: { placement_fingerprint: 'old-placement', sample_count: 3, rmse_mm: 50 },
+        },
+      },
+    },
+  }, 'room_new', 'Woonkamer kopie');
   assert.equal(imported.id, 'room_new');
   assert.equal(imported.name, 'Woonkamer kopie');
   assert.equal('created_at' in imported, false);
   assert.equal('updated_at' in imported, false);
   assert.equal('house' in imported, false);
-  assert.equal(imported.sensors[0].deviceId, 'arbitrary-device-id');
+  assert.equal(imported.sensors[0].deviceId, null);
+  assert.equal('device_id' in imported.sensors[0], false);
+  assert.deepEqual(imported.sensors[0].z_mapping, { mode: 'raw', verified: false });
+  assert.equal(imported.aggregation.tracking.experimental_fusion, false);
+  assert.deepEqual(imported.aggregation.tracking.source_alignments, {});
 });
 
 test('rejects invalid, future and excessively large room documents', () => {

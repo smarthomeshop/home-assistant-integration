@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { DeviceEntity, HomeAssistant } from '../types';
 import { findWaterEnergySource } from '../utils/device-entity-resolution';
 
@@ -45,7 +45,6 @@ const EMPTY_PREFS: EnergyPreferences = {
   device_consumption_water: [],
 };
 
-@customElement('shs-ha-energy-sync')
 export class HaEnergySync extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceId = '';
@@ -390,7 +389,7 @@ export class HaEnergySync extends LitElement {
         label: 'Electricity returned',
         entity: exportedCandidate,
         issue: exportedCheck.compatible && !exportedCheck.ready
-          ? 'No return reading — omitted from HA Energy'
+          ? 'No return reading, omitted from HA Energy'
           : exportedCheck.issue,
         optional: true,
       },
@@ -805,6 +804,10 @@ export class HaEnergySync extends LitElement {
       </div>
     `;
   }
+}
+
+if (!customElements.get('shs-ha-energy-sync')) {
+  customElements.define('shs-ha-energy-sync', HaEnergySync);
 }
 
 declare global {

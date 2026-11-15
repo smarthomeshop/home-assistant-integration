@@ -10,6 +10,7 @@ export interface Home3DRoom {
   points: Point[];
   house: HousePlacement;
   people: number;
+  peopleCountKnown?: boolean;
   occupied: boolean;
   approximate: boolean;
   available: boolean;
@@ -28,8 +29,20 @@ export interface Home3DScene {
   showEmptyRooms?: boolean;
   presenceLabel?: string;
   offlineLabel?: string;
+  incompletePresenceLabel?: string;
   degradedLabel?: string;
 }
+
+export type Home3DRoomVisualState = 'normal' | 'occupied' | 'degraded' | 'offline' | 'incomplete_presence';
+
+/** Keep confirmed presence visible even when part of its evidence is unavailable. */
+export const home3DRoomVisualState = (room: Home3DRoom): Home3DRoomVisualState => {
+  if (room.occupied && !room.available) return 'incomplete_presence';
+  if (room.linked && !room.available) return 'offline';
+  if (room.degraded === true) return 'degraded';
+  if (room.occupied) return 'occupied';
+  return 'normal';
+};
 
 interface Point3D extends Point { z: number }
 interface ProjectedPoint extends Point { depth: number }
@@ -228,8 +241,10 @@ export class WholeHome3DRenderer {
     const world = room.points.map(point => transformHomePoint(point, room.house));
     const floor = world.map(point => this.project({ ...point, z }));
     const occupied = room.occupied;
-    const unavailable = room.linked && !room.available;
-    const degraded = room.degraded === true;
+    const visualState = home3DRoomVisualState(room);
+    const incompletePresence = visualState === 'incomplete_presence';
+    const unavailable = visualState === 'offline';
+    const degraded = visualState === 'degraded' || incompletePresence;
     const selected = scene.selectedRoomId === room.id;
 
     context.beginPath();
@@ -279,12 +294,15 @@ export class WholeHome3DRenderer {
     const z = this.floorZ(room.house.floor, scene.floorSeparation);
     const anchor = transformHomePoint(polygonInteriorPoint(room.points), room.house);
     const label = this.project({ ...anchor, z: z + 80 });
-    const text = room.linked && !room.available
-      ? `${room.name} · ${scene.offlineLabel || 'Offline'}`
-      : room.degraded
+    const visualState = home3DRoomVisualState(room);
+    const text = visualState === 'incomplete_presence'
+      ? `${room.name} · ${scene.incompletePresenceLabel || 'Presence · incomplete sensor data'}`
+      : visualState === 'offline'
+        ? `${room.name} · ${scene.offlineLabel || 'Offline'}`
+      : visualState === 'degraded'
         ? `${room.name} · ${scene.degradedLabel || 'Partial sensor outage'}`
       : room.occupied
-        ? `${room.name} · ${room.people > 0 ? room.people : (scene.presenceLabel || 'Presence')}`
+        ? `${room.name} · ${room.peopleCountKnown !== false && room.people > 0 ? room.people : (scene.presenceLabel || 'Presence')}`
         : room.name;
     context.font = '600 12px system-ui, sans-serif';
     const width = context.measureText(text).width + 18;
@@ -292,9 +310,10 @@ export class WholeHome3DRenderer {
     context.beginPath();
     context.roundRect(label.x - width / 2, label.y - 13, width, 26, 8);
     context.fill();
-    context.fillStyle = room.linked && !room.available
+    context.fillStyle = visualState === 'offline'
       ? (scene.darkMode ? '#cbd5e1' : '#475569')
-      : room.degraded ? (scene.darkMode ? '#fbbf24' : '#92400e')
+      : visualState === 'incomplete_presence' || visualState === 'degraded'
+        ? (scene.darkMode ? '#fbbf24' : '#92400e')
       : room.occupied ? (scene.darkMode ? '#34d399' : '#047857')
       : (scene.darkMode ? '#e2e8f0' : '#334155');
     context.textAlign = 'center';

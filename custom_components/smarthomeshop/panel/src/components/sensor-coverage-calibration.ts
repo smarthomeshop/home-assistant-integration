@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing, svg } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 import { evaluateRadarOrientationWalk } from '../utils/radar-installation';
 import { settingsText } from '../utils/settings-translations';
@@ -17,8 +17,54 @@ const CAPTURE_DURATION_MS = 5000;
 const ORIENTATION_CAPTURE_DURATION_MS = 4000;
 const ORIENTATION_CAPTURE_TIMEOUT_MS = 12000;
 const CORNER_KEYS = ['near_left', 'near_right', 'far_right', 'far_left'] as const;
+const CALIBRATION_COPY = {
+  en: {
+    title: 'Calibrate sensor coverage', intro: 'Walk to each measurement point and stand still for five seconds.', back: 'Back to radar settings', close: 'Close',
+    measure_title: 'You are measuring the sensor, not the room', measure_text: 'Choose four positions where {radar} still detects you reliably. The points may be in front of the walls.',
+    preview: 'Live sensor coverage preview', live: 'Live target', saved: 'Saved point', progress: 'Calibration points', point: 'Point {current} of 4',
+    none: 'No target detected. Stand where the sensor can see you.', multiple: 'Multiple targets detected. Only one person can be in view while measuring.', one: 'One target detected by {sensor}.',
+    paused: 'Measurement paused', still: 'Stand still', one_required: 'Exactly one visible target is needed. The timer will continue automatically.', measuring: 'Measuring {point}...', cancel_measurement: 'Cancel measurement',
+    ready: 'All four points are ready. Select a point above to measure it again, or save this detection area.', invalid: 'The measured points overlap or do not form a usable area. Select a point above and measure it again.',
+    cancel: 'Cancel', save: 'Save detection area', mark: 'Mark {point}',
+  },
+  nl: {
+    title: 'Sensorbereik kalibreren', intro: 'Loop naar elk meetpunt en sta vijf seconden stil tijdens het meten.', back: 'Terug naar radarinstellingen', close: 'Sluiten',
+    measure_title: 'Je meet de sensor, niet de kamer', measure_text: 'Kies vier plekken waar {radar} je nog betrouwbaar ziet. De punten mogen vóór de muren liggen.',
+    preview: 'Live voorbeeld van het sensorbereik', live: 'Live doel', saved: 'Opgeslagen punt', progress: 'Kalibratiepunten', point: 'Meetpunt {current} van 4',
+    none: 'Geen doel gedetecteerd. Ga staan waar de sensor je kan zien.', multiple: 'Meerdere doelen gedetecteerd. Tijdens het meten mag maar één persoon zichtbaar zijn.', one: 'Eén doel gedetecteerd door {sensor}.',
+    paused: 'Meting gepauzeerd', still: 'Blijf stilstaan', one_required: 'Er is precies één zichtbaar doel nodig. De timer gaat automatisch verder.', measuring: '{point} wordt gemeten...', cancel_measurement: 'Meting annuleren',
+    ready: 'Alle vier punten zijn klaar. Kies hierboven een punt om opnieuw te meten of sla dit detectiegebied op.', invalid: 'De gemeten punten overlappen of vormen geen bruikbaar gebied. Kies hierboven een punt en meet opnieuw.',
+    cancel: 'Annuleren', save: 'Detectiegebied opslaan', mark: '{point} meten',
+  },
+  de: {
+    title: 'Sensorbereich kalibrieren', intro: 'Gehe zu jedem Messpunkt und bleibe fünf Sekunden still stehen.', back: 'Zurück zu den Radareinstellungen', close: 'Schließen',
+    measure_title: 'Du misst den Sensor, nicht den Raum', measure_text: 'Wähle vier Positionen, an denen {radar} dich noch zuverlässig erkennt. Die Punkte dürfen vor den Wänden liegen.',
+    preview: 'Live-Vorschau des Sensorbereichs', live: 'Live-Ziel', saved: 'Gespeicherter Punkt', progress: 'Kalibrierungspunkte', point: 'Messpunkt {current} von 4',
+    none: 'Kein Ziel erkannt. Stelle dich in den Sichtbereich des Sensors.', multiple: 'Mehrere Ziele erkannt. Während der Messung darf nur eine Person sichtbar sein.', one: 'Ein Ziel von {sensor} erkannt.',
+    paused: 'Messung pausiert', still: 'Still stehen', one_required: 'Genau ein sichtbares Ziel ist erforderlich. Der Timer läuft automatisch weiter.', measuring: '{point} wird gemessen...', cancel_measurement: 'Messung abbrechen',
+    ready: 'Alle vier Punkte sind bereit. Wähle oben einen Punkt für eine neue Messung oder speichere den Bereich.', invalid: 'Die Messpunkte überlappen oder bilden keinen nutzbaren Bereich. Wähle einen Punkt und miss erneut.',
+    cancel: 'Abbrechen', save: 'Erkennungsbereich speichern', mark: '{point} messen',
+  },
+  fr: {
+    title: 'Étalonner la portée du capteur', intro: 'Allez à chaque point de mesure et restez immobile pendant cinq secondes.', back: 'Retour aux réglages du radar', close: 'Fermer',
+    measure_title: 'Vous mesurez le capteur, pas la pièce', measure_text: 'Choisissez quatre positions où {radar} vous détecte encore de façon fiable. Les points peuvent être devant les murs.',
+    preview: 'Aperçu en direct de la portée', live: 'Cible en direct', saved: 'Point enregistré', progress: 'Points d\'étalonnage', point: 'Point {current} sur 4',
+    none: 'Aucune cible détectée. Placez-vous dans le champ du capteur.', multiple: 'Plusieurs cibles détectées. Une seule personne doit être visible pendant la mesure.', one: 'Une cible détectée par {sensor}.',
+    paused: 'Mesure en pause', still: 'Restez immobile', one_required: 'Une seule cible visible est nécessaire. Le minuteur reprendra automatiquement.', measuring: 'Mesure de {point}...', cancel_measurement: 'Annuler la mesure',
+    ready: 'Les quatre points sont prêts. Sélectionnez un point pour le remesurer ou enregistrez la zone.', invalid: 'Les points se chevauchent ou ne forment pas une zone utilisable. Sélectionnez un point et recommencez.',
+    cancel: 'Annuler', save: 'Enregistrer la zone de détection', mark: 'Mesurer {point}',
+  },
+  es: {
+    title: 'Calibrar la cobertura del sensor', intro: 'Ve a cada punto de medición y permanece quieto durante cinco segundos.', back: 'Volver a los ajustes del radar', close: 'Cerrar',
+    measure_title: 'Estás midiendo el sensor, no la habitación', measure_text: 'Elige cuatro posiciones donde {radar} aún te detecte de forma fiable. Los puntos pueden quedar delante de las paredes.',
+    preview: 'Vista previa de la cobertura en directo', live: 'Objetivo en directo', saved: 'Punto guardado', progress: 'Puntos de calibración', point: 'Punto {current} de 4',
+    none: 'No se detecta ningún objetivo. Colócate donde el sensor pueda verte.', multiple: 'Se detectan varios objetivos. Solo puede haber una persona visible durante la medición.', one: '{sensor} detecta un objetivo.',
+    paused: 'Medición en pausa', still: 'No te muevas', one_required: 'Se necesita exactamente un objetivo visible. El temporizador continuará automáticamente.', measuring: 'Midiendo {point}...', cancel_measurement: 'Cancelar medición',
+    ready: 'Los cuatro puntos están listos. Selecciona uno para repetirlo o guarda el área.', invalid: 'Los puntos se solapan o no forman un área útil. Selecciona un punto y vuelve a medirlo.',
+    cancel: 'Cancelar', save: 'Guardar área de detección', mark: 'Medir {point}',
+  },
+} as const;
 
-@customElement('shs-sensor-coverage-calibration')
 export class SensorCoverageCalibration extends LitElement {
   @property({ type: Array }) targets: CalibrationTarget[] = [];
   @property({ type: Array }) initialCorners: CalibrationPoint[] = [];
@@ -30,6 +76,7 @@ export class SensorCoverageCalibration extends LitElement {
   @property({ attribute: false }) hass?: HomeAssistant;
   @property({ type: Boolean }) requiresOrientationCheck = false;
   @property({ type: Boolean }) isRemeasurement = false;
+  @property({ type: Boolean, reflect: true }) embedded = false;
 
   @state() private _activeCorner = 0;
   @state() private _corners: Array<CalibrationPoint | null> = [null, null, null, null];
@@ -61,6 +108,10 @@ export class SensorCoverageCalibration extends LitElement {
     if (changedProperties.has('initialCorners') && !this._hasInteracted) {
       this._loadInitialCorners();
     }
+  }
+
+  protected firstUpdated(): void {
+    if (this.embedded) this.renderRoot.querySelector<HTMLElement>('#coverage-title')?.focus();
   }
 
   disconnectedCallback(): void {
@@ -193,6 +244,15 @@ export class SensorCoverageCalibration extends LitElement {
     return settingsText(this.hass, key);
   }
 
+  private _copy(key: keyof typeof CALIBRATION_COPY.en, values: Record<string, string | number> = {}): string {
+    const language = this.hass?.language?.split('-')[0] as keyof typeof CALIBRATION_COPY;
+    let text: string = (CALIBRATION_COPY[language] || CALIBRATION_COPY.en)[key];
+    Object.entries(values).forEach(([name, value]) => {
+      text = text.split(`{${name}}`).join(String(value));
+    });
+    return text;
+  }
+
   private _cornerLabel(index: number): string {
     return this._text(`radar.coverage.${CORNER_KEYS[index]}`);
   }
@@ -292,7 +352,7 @@ export class SensorCoverageCalibration extends LitElement {
       : '';
 
     return html`
-      <div class="coverage-plot" aria-label="Live sensor coverage preview">
+      <div class="coverage-plot" aria-label=${this._copy('preview')}>
         <svg viewBox="0 0 600 320" role="img">
           ${this.mountingMode === 'ceiling' ? svg`
             <circle cx="300" cy="160" r="136" class="fov" />
@@ -328,8 +388,8 @@ export class SensorCoverageCalibration extends LitElement {
           </g>
         </svg>
         <div class="plot-legend">
-          <span><i class="legend-dot live"></i>Live target</span>
-          <span><i class="legend-dot marked"></i>Saved point</span>
+          <span><i class="legend-dot live"></i>${this._copy('live')}</span>
+          <span><i class="legend-dot marked"></i>${this._copy('saved')}</span>
         </div>
       </div>
     `;
@@ -341,49 +401,46 @@ export class SensorCoverageCalibration extends LitElement {
     const validShape = this._hasValidShape();
     const canMark = activeTargets.length === 1 && !this._capturing;
     const status = activeTargets.length === 0
-      ? 'No target detected. Stand where the sensor can see you.'
+      ? this._copy('none')
       : activeTargets.length > 1
-        ? 'Multiple targets detected. Only one person can be in view while measuring.'
-        : `One target detected by ${this.sensorName}.`;
+        ? this._copy('multiple')
+        : this._copy('one', { sensor: this.sensorName });
 
     return html`
       <div class="overlay" @mousedown="${(event: MouseEvent) => {
         if (event.target === event.currentTarget && !this._capturing) this._cancel();
       }}">
-        <section class="wizard" role="dialog" aria-modal="true" aria-labelledby="coverage-title">
+        <section class="wizard" role=${this.embedded ? 'region' : 'dialog'} aria-modal=${this.embedded ? nothing : 'true'} aria-labelledby="coverage-title">
           <header>
             <div>
-              <p class="eyebrow">ROOM DESIGNER</p>
-              <h2 id="coverage-title">Calibrate sensor coverage</h2>
-              <p class="intro">
-                Walk to each edge of the area the sensor can reliably detect. Stand still and select Mark.
-                Your position is averaged over 5 seconds.
-              </p>
+              <p class="eyebrow">FLOORPLAN DESIGNER</p>
+              <h2 id="coverage-title" tabindex=${this.embedded ? '-1' : nothing}>${this._copy('title')}</h2>
+              <p class="intro">${this._copy('intro')}</p>
             </div>
-            <button class="close-button" @click="${this._cancel}" ?disabled="${this._capturing}" aria-label="Close">
-              <ha-icon icon="mdi:close"></ha-icon>
+            <button class="close-button" @click="${this._cancel}" ?disabled="${this._capturing}"
+              aria-label=${this.embedded ? this._copy('back') : this._copy('close')}>
+              <ha-icon icon=${this.embedded ? 'mdi:arrow-left' : 'mdi:close'}></ha-icon>
             </button>
           </header>
 
           <div class="range-notice">
             <ha-icon icon="mdi:radar"></ha-icon>
             <div>
-              <strong>You are measuring the sensor, not the room</strong>
-              <span>
-                Every radar has a limited reliable range. Mark the furthest position your
-                ${this.radarModel.toUpperCase()} can still see in each direction. The four points define
-                its usable detection area and do not need to touch the room walls.
-              </span>
+              <strong>${this._copy('measure_title')}</strong>
+              <span>${this._copy('measure_text', { radar: this.radarModel.toUpperCase() })}</span>
             </div>
           </div>
 
-          <div class="axis-guide">
+          ${this.embedded ? html`<details class="axis-details">
+            <summary>${this._text('radar.coverage.axes_title')}</summary>
+            <p>${this._text('radar.coverage.axes_description')}</p>
+          </details>` : html`<div class="axis-guide">
             <ha-icon icon="mdi:axis-arrow"></ha-icon>
             <div>
               <strong>${this._text('radar.coverage.axes_title')}</strong>
               <span>${this._text('radar.coverage.axes_description')}</span>
             </div>
-          </div>
+          </div>`}
 
           ${this.isRemeasurement ? html`
             <div class="remeasure-notice" role="status">
@@ -426,7 +483,7 @@ export class SensorCoverageCalibration extends LitElement {
             </section>
           ` : nothing}
 
-          <div class="corner-progress" aria-label="Calibration points">
+          <div class="corner-progress" aria-label=${this._copy('progress')}>
             ${CORNER_KEYS.map((_key, index) => html`
               <button
                 class="corner-chip ${this._corners[index] ? 'done' : ''} ${this._activeCorner === index ? 'active' : ''}"
@@ -437,14 +494,14 @@ export class SensorCoverageCalibration extends LitElement {
                 <span class="corner-number">${this._corners[index] ? '✓' : index + 1}</span>
                 ${this._cornerLabel(index)}
               </button>
-              ${index < 3 ? html`<ha-icon class="step-arrow" icon="mdi:chevron-right"></ha-icon>` : nothing}
+              ${index < 3 && !this.embedded ? html`<ha-icon class="step-arrow" icon="mdi:chevron-right"></ha-icon>` : nothing}
             `)}
           </div>
 
           <p class="current-step">
-            Point ${this._activeCorner + 1} of 4:
+            ${this._copy('point', { current: this._activeCorner + 1 })}
             <strong>${this._cornerLabel(this._activeCorner)}</strong>
-            <span>${this._text('radar.coverage.axes_description')}</span>
+            ${this.embedded ? nothing : html`<span>${this._text('radar.coverage.axes_description')}</span>`}
           </p>
 
           ${this._renderCoveragePlot()}
@@ -457,40 +514,40 @@ export class SensorCoverageCalibration extends LitElement {
           ${this._capturing ? html`
             <div class="capture-panel" aria-live="polite">
               <div class="capture-copy">
-                <strong>${this._capturePaused ? 'Measurement paused' : 'Stand still'}</strong>
+                <strong>${this._capturePaused ? this._copy('paused') : this._copy('still')}</strong>
                 <span>
                   ${this._capturePaused
-                    ? 'Exactly one visible target is needed. The timer will continue automatically.'
-                    : `Measuring ${this._cornerLabel(this._activeCorner)}...`}
+                    ? this._copy('one_required')
+                    : this._copy('measuring', { point: this._cornerLabel(this._activeCorner) })}
                 </span>
               </div>
               <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"
                    aria-valuenow="${Math.round(this._captureProgress * 100)}">
                 <span style="transform: scaleX(${this._captureProgress})"></span>
               </div>
-              <button class="text-button" @click="${this._cancelCapture}">Cancel measurement</button>
+              <button class="text-button" @click="${this._cancelCapture}">${this._copy('cancel_measurement')}</button>
             </div>
           ` : nothing}
 
           ${allMarked ? html`
             <p class="save-help">
               ${validShape
-                ? 'All four points are ready. Select a point above to measure it again, or save this detection area.'
-                : 'The measured points overlap or do not form a usable area. Select a point above and measure it again.'}
+                ? this._copy('ready')
+                : this._copy('invalid')}
             </p>
           ` : nothing}
 
           <footer>
-            <button class="button secondary" @click="${this._cancel}" ?disabled="${this._capturing}">Cancel</button>
+            <button class="button secondary" @click="${this._cancel}" ?disabled="${this._capturing}">${this._copy('cancel')}</button>
             ${allMarked ? html`
               <button class="button primary" @click="${this._save}" ?disabled="${!validShape || !this._orientationReady}">
                 <ha-icon icon="mdi:content-save-outline"></ha-icon>
-                Save detection area
+                ${this._copy('save')}
               </button>
             ` : html`
               <button class="button primary" @click="${this._startCapture}" ?disabled="${!canMark}">
                 <ha-icon icon="mdi:map-marker-radius"></ha-icon>
-                Mark ${this._cornerLabel(this._activeCorner)}
+                ${this._copy('mark', { point: this._cornerLabel(this._activeCorner) })}
               </button>
             `}
           </footer>
@@ -528,6 +585,17 @@ export class SensorCoverageCalibration extends LitElement {
       background: var(--card-background-color, #fbfcfe);
       box-shadow: 0 24px 70px rgba(4, 11, 27, 0.28);
     }
+    :host([embedded]) .overlay { position: static; display: block; padding: 0; overflow: visible; background: none; }
+    :host([embedded]) .wizard { max-height: none; padding: 0; overflow: visible; border: 0; border-radius: 0; box-shadow: none; }
+    :host([embedded]) .eyebrow { display: none; }
+    :host([embedded]) h2 { font-size: 19px; }
+    :host([embedded]) .coverage-plot svg { height: 245px; }
+    :host([embedded]) .orientation-actions { grid-template-columns: 1fr; }
+    :host([embedded]) .corner-progress { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+    :host([embedded]) .corner-chip { min-width: 0; min-height: 44px; border-radius: 9px; white-space: normal; text-align: start; }
+    .axis-details { margin: 10px 0 13px; font-size: 13px; color: var(--secondary-text-color, #5f6878); }
+    .axis-details summary { min-height: 32px; align-content: center; cursor: pointer; font-weight: 650; }
+    .axis-details p { margin: 0 0 8px; line-height: 1.5; }
     header {
       display: flex;
       align-items: flex-start;
@@ -873,6 +941,13 @@ export class SensorCoverageCalibration extends LitElement {
       }
     }
   `;
+}
+
+if (!customElements.get('shs-sensor-coverage-calibration')) {
+  customElements.define(
+    'shs-sensor-coverage-calibration',
+    SensorCoverageCalibration,
+  );
 }
 
 declare global {

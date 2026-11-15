@@ -82,7 +82,7 @@ export const projectRoomPointToRadar = (
 
 /**
  * Keep a measured sensor-local coverage shape attached to the sensor when its
- * position or software orientation is corrected in Room Designer.
+ * position or software orientation is corrected in the Floorplan Designer.
  */
 export const reprojectRadarCoverage = (
   roomPoints: LocalRadarTarget[],

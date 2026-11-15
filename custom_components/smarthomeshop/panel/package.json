@@ -13,6 +13,7 @@
     "test:quiet-hours": "node --test test/sps30-quiet-hours.test.mjs",
     "test:radar-installation": "node --test test/radar-installation.test.mjs",
     "test:radar-coordinates": "node --test test/radar-coordinates.test.mjs",
+    "check:floor-planner": "node --check ../www/floor-planner/host.js && node --check ../www/floor-planner/editor.js && node --check ../www/floor-planner/card-scene.js && node --check ../www/floor-planner/fusion.js && node --check ../www/floor-planner/safety.js",
     "watch": "rollup -c -w"
   },
   "dependencies": {

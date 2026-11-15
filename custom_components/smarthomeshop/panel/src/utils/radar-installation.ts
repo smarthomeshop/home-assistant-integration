@@ -19,6 +19,15 @@ export type RadarDetectionSector = {
 
 export type RadarMovementSample = { x: number; y: number };
 
+export const expectedRadarHardwareMode = (
+  mountingMode: 'wall' | 'ceiling' | undefined,
+  firmwareRequiredMode: 'top' | 'side' | null,
+): 'top' | 'side' | null => mountingMode === 'ceiling'
+  ? 'top'
+  : mountingMode === 'wall'
+    ? 'side'
+    : firmwareRequiredMode;
+
 export const validateRadarDetectionSector = (
   sector: RadarDetectionSector,
 ): 'ready' | 'range' | 'angle_order' => {

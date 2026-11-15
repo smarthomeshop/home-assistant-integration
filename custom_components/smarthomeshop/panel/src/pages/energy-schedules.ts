@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 import { panelText } from '../utils/panel-translations';
 
@@ -85,7 +85,6 @@ function scheduleAutomation(alias: string, flag: string, target: string, watchdo
   };
 }
 
-@customElement('shs-energy-schedules')
 export class EnergySchedules extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceId = '';
@@ -464,6 +463,10 @@ export class EnergySchedules extends LitElement {
       ${this._renderModal()}
     `;
   }
+}
+
+if (!customElements.get('shs-energy-schedules')) {
+  customElements.define('shs-energy-schedules', EnergySchedules);
 }
 
 declare global {

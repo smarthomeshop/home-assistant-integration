@@ -2,7 +2,7 @@ import { resolveFurnitureRotation, rotatedFurnitureCorners } from './furniture-g
 
 // Shared 3D room renderer for SmartHomeShop.
 //
-// This is a 1:1 port of the Room Designer panel 3D view so the
+// This is a 1:1 port of the Floorplan Designer panel 3D view so the
 // UltimateSensor card shows exactly the same scene. If the panel renderer
 // changes (panel/src/pages/zones-page.ts), port the change here as well.
 //

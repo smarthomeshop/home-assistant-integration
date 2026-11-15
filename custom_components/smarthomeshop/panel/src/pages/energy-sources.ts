@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant } from '../types';
 
 // Energy sources (smart-energy). Our P1 meter only sees the grid connection
@@ -23,7 +23,6 @@ interface EnergySources {
 const dom = (e: string): string => e.split('.')[0];
 type EntityKind = 'power' | 'battery' | 'energy';
 
-@customElement('shs-energy-sources')
 export class EnergySourcesCard extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
 
@@ -308,6 +307,10 @@ export class EnergySourcesCard extends LitElement {
       ${this._renderModal()}
     `;
   }
+}
+
+if (!customElements.get('shs-energy-sources')) {
+  customElements.define('shs-energy-sources', EnergySourcesCard);
 }
 
 declare global {

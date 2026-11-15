@@ -1,5 +1,5 @@
 import { LitElement, html, css, nothing } from 'lit';
-import { customElement, property, state } from 'lit/decorators.js';
+import { property, state } from 'lit/decorators.js';
 import type { HomeAssistant, DeviceEntity } from '../types';
 import './energy-schedules';
 
@@ -196,7 +196,6 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-@customElement('shs-automations-page')
 export class AutomationsPage extends LitElement {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @property() public deviceId!: string;
@@ -638,6 +637,10 @@ export class AutomationsPage extends LitElement {
       ${this._renderModal()}
     `;
   }
+}
+
+if (!customElements.get('shs-automations-page')) {
+  customElements.define('shs-automations-page', AutomationsPage);
 }
 
 declare global {
