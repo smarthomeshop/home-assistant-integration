@@ -1,464 +1,254 @@
-# SmartHomeShop.io Integration for Home Assistant
+# SmartHomeShop.io for Home Assistant
 
-[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default/pull/9476)
+[![Home Assistant Marketplace](https://img.shields.io/badge/Home%20Assistant-Marketplace-41BDF5.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
+[![Latest release](https://img.shields.io/github/v/release/smarthomeshop/home-assistant-integration)](https://github.com/smarthomeshop/home-assistant-integration/releases/latest)
 
-Custom integration for Home Assistant to integrate SmartHomeShop.io devices.
+The official Home Assistant integration for SmartHomeShop.io devices. It turns
+your water, energy and presence sensors into ready-to-use dashboards, a 2D/3D
+floor plan with live presence, and Smart Energy that plans your battery, car
+and appliances around energy prices and solar.
+
+- **Device pages and Lovelace cards** for every SmartHomeShop.io product.
+- **Floorplan Designer**: draw your home in 2D/3D, place your sensors and see
+  where people are, live.
+- **Room presence** from one or more radars per room, with room occupancy,
+  temperature, humidity and CO2 entities.
+- **Smart Energy**: dynamic prices, Home Assistant Energy sync, home battery
+  planning, Smart EV charging and Smart Loads.
+- **Leak detection** for the water kits.
+- Available in English, Dutch, German, French and Spanish.
+
+## Contents
+
+- [Supported devices](#supported-devices)
+- [Installation](#installation)
+- [Adding your devices](#adding-your-devices)
+- [The SmartHomeShop.io panel](#the-smarthomeshopio-panel)
+- [Floorplan Designer and presence](#floorplan-designer-and-presence)
+- [Smart Energy](#smart-energy)
+- [Lovelace cards](#lovelace-cards)
+- [Updating](#updating)
+- [Support](#support)
+- [License](#license)
+
+## Supported devices
+
+| Device | What you get |
+| --- | --- |
+| **WaterP1MeterKit** | Electricity and gas from your P1 smart meter, plus water usage and leak detection |
+| **P1MeterKit** | Electricity and gas readings from your P1 smart meter |
+| **WaterMeterKit** | Water usage tracking and leak detection |
+| **WaterFlowKit** | Flow monitoring for up to four water lines, with leak detection |
+| **UltimateSensor** and **UltimateSensor Mini** | Room comfort (temperature, humidity, CO2, air quality) and radar presence |
+| **CeilSense** | Ceiling-mounted presence and room sensing |
+| **WallSense** | Wall-mounted presence and room sensing |
+
+All devices run ESPHome and work fully local. A SmartHomeShop.io account is
+only needed for Smart Energy prices and the solar forecast.
 
 ## Installation
 
-### HACS (Recommended)
+### Marketplace (Home Assistant 2026.11 and newer)
 
-SmartHomeShop.io is included in the default HACS store. You no longer need to
-add this repository as a custom repository.
+SmartHomeShop.io is part of the default catalog of the Home Assistant
+Marketplace.
 
-1. Open **HACS** in Home Assistant.
-2. Search for **SmartHomeShop.io**.
-3. Open the integration and click **Download**.
-4. Restart Home Assistant.
-5. Go to **Settings > Devices & services > Add integration** and search for
+1. Go to **Settings > Marketplace**.
+2. Search for **SmartHomeShop.io** and open it.
+3. Select **Install** and confirm the version.
+
+Or open it directly in your Home Assistant:
+
+[![Open the SmartHomeShop.io repository in your Home Assistant.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
+
+Already installed it with HACS? Home Assistant 2026.11 moves it into the
+Marketplace for you. Nothing changes: you keep your devices, settings and
+updates.
+
+### HACS (Home Assistant 2026.10 and older)
+
+1. Open **HACS** and search for **SmartHomeShop.io**.
+2. Select **Download**.
+3. Restart Home Assistant.
+
+### Manual
+
+1. Download the latest [release](https://github.com/smarthomeshop/home-assistant-integration/releases/latest).
+2. Copy `custom_components/smarthomeshop` into the `custom_components` folder
+   of your Home Assistant configuration.
+3. Restart Home Assistant.
+
+## Adding your devices
+
+Your device must already be online in Home Assistant through the **ESPHome**
+integration.
+
+1. Go to **Settings > Devices & services > Add integration** and search for
    **SmartHomeShop.io**.
+2. Pick your product and the ESPHome device that belongs to it.
+3. Check the summary and finish.
 
-You can also use this button to open the repository directly in HACS:
+Repeat this for every device. The entities this integration adds end in
+**(CC)**, so you can tell them apart from the ESPHome entities.
 
-[![Open your Home Assistant instance and open the SmartHomeShop.io repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=smarthomeshop&repository=home-assistant-integration&category=integration)
+## The SmartHomeShop.io panel
 
-The repository was [approved and merged into the HACS default repository
-list](https://github.com/hacs/default/pull/9476) on August 1, 2026.
+After setup, **SmartHomeShop.io** appears in the sidebar. It has three parts:
 
-## See SmartHomeShop.io in action
+- **Dashboard**: all your devices with live values. Open a device for its
+  overview, settings, automations and, for radars, a live 2D/3D view of the
+  detected people.
+- **Floorplan Designer**: your home in 2D and 3D, with live presence.
+- **Energy**: live energy flow, prices and all Smart Energy settings.
 
-WaterP1MeterKit, WaterMeterKit and P1MeterKit include purpose-built Lovelace
-cards. The Smart Energy panel adds live grid, solar and battery flow, source
-mapping, Home Assistant Energy sync, ready-to-use automations and complete home
-battery planning. The demo below walks through the cards and the full energy
-management experience.
+## Floorplan Designer and presence
 
-[![Watch the SmartHomeShop.io utility card demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-utility-cards-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
+Draw your rooms or import them (including Apple RoomPlan scans), place them on
+floors and add doors, windows, mirrors and furniture. Then place your
+UltimateSensor, UltimateSensor Mini, CeilSense and WallSense radars where they
+hang in real life. Administrators edit the plan; other users see the live view.
 
-[Watch the full-quality demo video](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
+- **Live positions** for LD2450, LD2460 and LD6002B radars. Presence-only
+  radars such as LD2412 show presence for the whole room instead of a made-up
+  position.
+- **Several radars in one room.** A room is occupied as soon as one selected
+  radar sees someone, and only clear when every selected radar reports clear
+  for the clear delay. Missing or stale data gives unknown, never a false
+  clear.
+- **Room entities** for occupancy, temperature, humidity and CO2, ready for
+  your automations. Climate can use the average, one primary sensor or stay
+  separate per sensor.
+- **Zones** for detection, exclusion and entry lines, sent straight to the
+  radar. Mirrors can get reflection protection against ghost targets.
+- **Radar settings** for a selected sensor: hardware settings, coverage
+  calibration, sensor fusion and height mapping.
 
-### WaterFlowKit
+Cross-radar fusion is experimental and off by default. A built-in walk test
+checks the overlap between radars before it can be turned on.
 
-[![Watch the SmartHomeShop.io WaterFlowKit demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-waterflowkit-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4)
+The radar firmware contract lives in the
+[radar-mounting repository](https://github.com/smarthomeshop/radar-mounting).
 
-### CeilSense
+## Smart Energy
 
-[![Watch the SmartHomeShop.io CeilSense demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ceilsense-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4)
+Connect your SmartHomeShop.io account under **Energy > Settings** to get
+dynamic prices and the solar forecast, and pick the P1 meter Smart Energy
+should use. From there you can:
 
-### UltimateSensor and UltimateSensor Mini
+- **Sync Home Assistant Energy** with your meters, so the Energy dashboard is
+  set up for you.
+- **Plan your home battery** around prices, solar and your normal house load.
+- **Charge your car with Smart EV**: up to eight vehicles, ready by a time you
+  set or the next calendar event, using cheap hours and solar.
+- **Run appliances with Smart Loads**: up to sixteen washing machines,
+  dishwashers, boilers, heat pumps or switches, planned before a ready-by time.
+  It learns how long each one runs.
+- **Use ready-made automations** and price-based schedules for any device.
 
-[![Watch the SmartHomeShop.io UltimateSensor demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ultimatesensor-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4)
+### Built to be safe
 
-### Manual Installation
+- Everything starts in **Advice only** and never touches your hardware. Try
+  **Shadow mode** next to see what would happen, and only then switch to
+  **Automatic**.
+- The live P1 and main fuse guard is always on. Every command is checked
+  against a fresh grid reading right before it is sent. Missing or stale data
+  stops a command instead of guessing.
+- The battery, Smart EV and Smart Loads share one control lock and one power
+  budget, so they never fight over a device or promise the same headroom
+  twice.
+- Smart EV and Smart Loads only stop what they started themselves. A charger
+  or appliance you start by hand is never taken over.
+- A decision journal explains every advice, limit and command. All learning
+  data stays in Home Assistant.
 
-1. Download the latest release
-2. Copy the `custom_components/smarthomeshop` folder to your Home Assistant `custom_components` directory
-3. Restart Home Assistant
+Set the right number of phases for your main connection and your car before
+using automatic mode: a wrong phase count makes the fuse calculation unsafe.
 
-## Configuration
-
-1. Go to **Settings** > **Devices & Services**
-2. Click **Add Integration**
-3. Search for "SmartHomeShop.io"
-4. Follow the configuration steps
-
-## Migration notes
-
-### Water in HA Energy
-
-- When the Energy sync moves the water source to **Water Total
-  Consumption** (`water_total_consumption`), Home Assistant creates a new
-  cost entity for it and leaves the old
-  `sensor.<device>_water_meter_total_cost` behind as unavailable. Nothing
-  uses it any more: remove it under **Settings > Devices & services >
-  Entities** by searching for `water_meter_total_cost`, opening it and
-  choosing **Delete**.
-- Water Total Consumption counts the pulses measured since the kit last
-  started, so it goes back to 0 after a restart or firmware update. That is
-  on purpose: Home Assistant treats the drop as the start of a new meter
-  cycle and keeps counting. Water Meter Total is the calibrated meter
-  reading, which jumps when you enter the reading of your water meter, so
-  Energy does not use it. The name cannot change: the firmware sensor name
-  sets the entity ID, and renaming it would break existing entity IDs,
-  dashboards and statistics.
-- Use Water Total Consumption as the water source in HA Energy; the Energy
-  sync selects it for you. The **Usage (CC)** sensors start again every day,
-  week, month or year and report when that happened (`last_reset`), so their
-  own statistics count each new period instead of a drop.
-
-### Water usage units
-
-**Usage today (CC)**, **Usage this week (CC)**, **Usage this month (CC)** and
-**Usage this year (CC)** have the water device class, so you can pick a
-display unit for each in its entity settings. New installations show all four
-in litres. Existing installations keep their current units (this year in m³)
-until you change them, so dashboards, automations and long-term statistics
-keep their numbers.
-
-These four sensors, **Water cost today (CC)** and the P1 sensors **Energy used
-today (CC)**, **Energy cost today (CC)** and **Energy cost this month (CC)**
-report the start of their period. The first hour after updating, the long-term
-statistics of these sensors can show a single step, because Home Assistant
-then starts counting from the reported period start.
-
-### Rooms and radars (1.17)
-
-- The first start of 1.17 upgrades the room storage. A copy of the old data is
-  kept in `.storage/smarthomeshop.rooms.backup_1_1`. Version 1.16 can still
-  read the upgraded file if you need to go back.
-- A room with one damaged field is no longer hidden. Only the broken part (for
-  example one zone with invalid points) is removed, the room and its entities
-  stay, and **Settings > Repairs** lists the room. The original is kept until
-  you confirm there.
-- Earlier versions allowed one radar in two rooms. A radar cannot tell which of
-  those rooms it sees, so both rooms report presence as unknown and Repairs
-  names the radar and the rooms. Unlink it from all but one room in the
-  Floorplan Designer. Until then, saving other changes keeps working.
-- ESPHome radars without SmartHomeShop firmware metadata stay selectable as long
-  as they expose target X and Y sensors.
-
-### Homes without gas
-
-Without a gas meter, **Gas consumption (CC)** is unavailable and no gas
-helpers are created. **Gas Daily/Weekly/Monthly/Yearly (CC)** helpers made by
-earlier versions can be deleted under **Settings > Devices & services >
-Helpers**. They are created again automatically once the meter reports gas.
-
-## Languages
-
-SmartHomeShop.io automatically follows the language selected by the current
-Home Assistant user, including regional variants such as `nl-NL`, `de-DE` and
-`fr-FR`. The integration setup, entity and service descriptions, SmartHomeShop
-panel, Floorplan Designer, Smart Energy pages, Lovelace cards and card editors are
-fully available in:
-
-- English
-- Dutch
-- German
-- French
-- Spanish
-
-If Home Assistant uses another language, the interface falls back to English.
-
-## Dynamic energy and battery planning
-
-The Energy page combines live contract prices with an hourly outlook. Stored
-market prices are treated as confirmed; missing future hours can be supplied
-as predictions with a confidence score and conservative lower/upper bounds.
-
-The home battery planner is **advice only by default** and offers three clear
-execution modes: advice, simulation/shadow mode and guarded automatic
-execution. Configure it from the Energy page with:
-
-- the battery state-of-charge sensor, usable capacity and protected reserve;
-- maximum charge/discharge power and round-trip efficiency;
-- optional solar and house-load forecast sensors;
-- battery wear cost, grid import/export limits and a minimum confidence level.
-- an optional live P1 grid/fuse guard with a safety margin and stale-data
-  fail-safe;
-- optional capacity-tariff peak protection using configurable tariff tiers;
-- local self-learning for usable capacity, efficiency, observed power and the
-  normal hourly house-load profile.
-
-It exposes a recommendation, target power, target state of charge, expected
-plan savings and confidence as Home Assistant entities. Charge and discharge
-recommendations are also available as binary sensors for your own automations.
-The Energy page includes an explainable local decision journal showing what
-was advised, simulated, applied, limited or blocked and why. Learning samples
-and journal entries remain in Home Assistant.
-
-Automatic execution is opt-in. It supports a grid-charge switch, a signed
-battery-power number entity or a battery-mode select. Every command is checked
-again against the fresh live grid measurement immediately before it is sent;
-number controls can be reduced to the safe power, while switches and selects
-fall back to hold when they cannot express a limited value. Keep automatic
-execution disabled until the simulated actions and configured limits have been
-verified for your specific inverter or battery system.
-
-In automatic mode the current recommendation can also be applied manually or
-from an automation:
+The current battery advice can also be applied from an automation:
 
 ```yaml
 action: smarthomeshop.apply_battery_recommendation
 data: {}
 ```
 
-Use `action: charge`, `hold` or `discharge` in `data` only when deliberately
-overriding the current recommendation. Advice and simulation modes never write
-to battery hardware; the same service call is recorded in the decision journal
-instead.
+## Lovelace cards
 
-### Smart Loads
+The cards are added automatically. Find them in the card picker by searching
+for **SmartHomeShop**.
 
-The Energy settings include a native **Smart Loads** planner for flexible
-household devices such as a washing machine, dishwasher, heat pump, boiler,
-pool pump, relay or custom Home Assistant action. It plans every load around a
-ready-by time using the same quarter-hour price, solar, battery, EV and grid-
-capacity picture as the rest of Smart Energy.
+| Card | For |
+| --- | --- |
+| Water, WaterP1 and WaterFlowKit cards | Water usage, flow, leaks and meter readings |
+| P1MeterKit card | Live grid power, tariffs and phases |
+| UltimateSensor and CeilSense cards | Presence, zones and room climate |
+| Live Home card | Live 2D/3D presence for the whole home, one floor or one room |
+| Energy cards | Live flow, price outlook, power trend, costs, savings and Smart Energy automations |
 
-Each load can use existing Home Assistant entities for control, readiness,
-running state, power, energy, door state and remote-start permission. Weekday
-deadlines, an optional earliest start, price/solar preference and interruptible
-operation are configurable per load. Completed runs remain local and teach the
-planner the measured duration and peak power after enough successful samples.
-The configured duration remains the safety minimum; learning can lengthen a
-plan but never shorten it from a few noisy measurements.
-The Planning and Runs views explain the selected periods, expected cost, solar
-use, savings, live state and every meaningful control decision.
-
-Automatic execution is opt-in. Start with **Advice only**, verify the proposed
-times, continue with **Shadow mode**, and only then enable **Automatic**. A new
-start always requires live feedback plus fresh P1 import and phase-headroom
-data; this protection cannot be disabled. Smart Loads records ownership before starting and
-only stops controls it started itself. External/manual starts are observed but
-never claimed. Non-interruptible cycles are allowed to finish; interruptible
-loads retain their completed runtime between planned periods and can pause when
-the live safety limit changes. A completed **Run now** request is latched until
-the user selects a new mode, preventing accidental restart loops. Failed
-start/stop feedback is shown as a visible problem instead of being assumed
-successful; an uncertain non-interruptible start is never stopped automatically.
-
-Smart Loads, Smart EV and the battery planner exchange both planned demand and
-freshly dispatched power that may not yet be visible in P1, so the same live
-headroom cannot be promised twice. The live P1 guard is checked again after
-ownership is saved and immediately before the hardware command. A two-minute
-polling tolerance can finish a cycle seconds after its requested time only when
-it starts immediately; it never schedules an intentionally late cycle.
-Existing device-page deadline schedules stay available, but none of a load's
-start, stop, control or custom-action entities can simultaneously be used by an
-enabled legacy schedule and automatic Smart Loads. Disable the old schedule
-before migrating that device.
-
-### Smart EV charging
-
-The Energy settings also include a native **Smart EV** planner. It works with
-existing Home Assistant vehicle and charger entities, so it is not tied to one
-car or wallbox brand. Every configured vehicle can use:
-
-- a daily or weekday-specific ready-by time and target state of charge;
-- an optional Home Assistant calendar event as the next departure deadline;
-- live dynamic prices, the solar forecast, expected household load and the
-  home-battery plan in one charging decision;
-- a protected minimum charge level, price-first/solar-first/balanced planning,
-  a continuous-session preference and shared-charger scheduling for multiple
-  cars;
-- advice, simulation/shadow and guarded automatic execution modes;
-- a live P1 import and main-fuse guard, charger-state verification, immediate
-  rollback of an unconfirmed new start, plus a verified stop before one fresh
-  start attempt after a failed owned adjustment
-  to an already confirmed session;
-- one shared live power budget across every configured car and planned home-
-  battery charge, including phase-aware main-fuse headroom;
-- local learning of real charging power and charge speed, plus an explainable
-  decision journal.
-
-Automatic execution is opt-in. Start with **Advice only**, verify the proposed
-windows, continue with **Simulation / shadow mode**, and only then select
-**Automatic execution**. Missing or stale safety measurements stop an automatic
-charge command instead of estimating available grid capacity. Smart EV exposes
-a plan sensor plus charging-plan and problem binary sensors for each vehicle.
-Guarded automatic mode also requires a live charging-power entity for every
-enabled vehicle. That feedback lets the shared P1 budget distinguish existing
-EV load from new load and reduce safely during a real overload without making
-an active charger oscillate on and off. A separate start hysteresis and a
-five-minute safety-stop cooldown prevent rapid relay chatter when available
-headroom fluctuates around the charger's minimum usable power.
-When the remaining safe price horizon is shorter than the time needed to reach
-the target, Smart EV still uses every allowed slot and reports the plan as
-partial instead of discarding useful charging time.
-Select the number of phases the connected vehicle actually uses while charging,
-not only the wallbox capability, before enabling automatic execution. An
-incorrect 1-phase/3-phase setting makes the calculated current and main-fuse
-headroom unsafe. Smart EV observes externally started sessions, but
-never claims or stops them; only a session it started and recorded itself is
-eligible for automatic stopping.
-If a user turns an owned charger off outside Smart EV, that manual stop is
-stored and automatic restart remains paused across Home Assistant restarts.
-Unplugging the car or explicitly changing its mode or charger configuration
-clears that pause. A charger that confirms a lower current while its measured
-power stays unsafe is stopped and placed in a visible safety lockout instead
-of entering a stop/start loop.
-When home-battery support is disabled and an owned EV session makes an
-autonomous home battery discharge, Smart EV stops once and keeps a visible
-lockout. It does not restart every five minutes; unplugging the car or an
-explicit mode/configuration change clears the pause.
-For a charger controlled by a current-number entity, configure a separate stop
-switch whenever that number cannot accept a real `0 A` value. Automatic mode
-will refuse to start such a charger until a verified stop route exists.
-When a new start is not confirmed, Smart EV sends a verified stop and waits
-five minutes before considering the same start again. If an adjustment to an
-already confirmed owned session fails, Smart EV first stops that session
-safely. It may then make one fresh start attempt after checking the live safety
-conditions and stop route again. Safety reductions and confirmed stop routes
-remain available during that wait.
-If a number entity loses its real `0 A` capability during an owned session,
-Smart EV can still reduce it to the live minimum but keeps ownership until a
-complete stop is confirmed. Configure a separate stop switch to restore a
-verifiable full stop route.
-Home Assistant's stop event also releases every Smart EV-owned charger while
-normal entity services are still available. If a stop cannot be confirmed,
-ownership remains stored so the next startup can retry safely.
-
-## Floorplan Designer and Live Home
-
-The **Floorplan Designer** replaces Room Designer and the Live Home page of
-earlier versions. It is one 2D/3D editor for the whole home: draw or import
-rooms, place them on floors, add doors, windows, mirrors and furniture, and
-link each UltimateSensor, UltimateSensor Mini, CeilSense or WallSense radar.
-Administrators edit; other users see the live view of the saved plan.
-
-- LD2450, LD2460 and LD6002B targets appear at their measured position.
-- Presence-only radars such as LD2412 are shown honestly at room level instead
-  of displaying a made-up coordinate.
-- Unavailable and `NaN` target slots disappear immediately.
-- Room exclusion polygons also suppress reflected targets in the live view.
-- Rooms can be hidden from the live view without deleting them.
-- **Radar settings** on a selected sensor opens the hardware settings,
-  calibration, sensor fusion and Z mapping of that radar.
-
-Open **SmartHomeShop.io > Floorplan Designer** to get started.
-
-The live view is also available as a normal Lovelace card (**Live Home**)
-through the card picker, or in YAML:
+Example of the Live Home card in YAML:
 
 ```yaml
 type: custom:smarthomeshop-home-presence-card
 title: Live Home
-floor: all
-view: 3d
+floor: all        # or a floor number, for example 0
+view: 3d          # or 2d
 height: 430
-show_room_names: true
-show_empty_rooms: true
-show_summary: true
 ```
 
-Use `floor: 0` (or another floor number) for one floor, or `room_id` for a
-single room. `view` is `2d` or `3d`. The visual editor offers the same
-choices.
+Use `room_id` instead of `floor` to show a single room.
 
-### Multiple sensors in one room
+### See it in action
 
-The Floorplan Designer can place multiple CeilSense, UltimateSensor and
-UltimateSensor Mini devices in the same room. Every source keeps its own stable identity,
-physical position, orientation, radar capabilities and live diagnostics.
+[![Watch the SmartHomeShop.io utility card demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-utility-cards-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-utility-cards-demo.mp4)
 
-- **Combined presence** becomes occupied when any selected source reports a
-  positive signal. It only becomes clear when every selected source is
-  available, reports clear and the configured clear delay has passed. An
-  unavailable or missing source produces an unknown/degraded result instead
-  of a false clear. Steady ESPHome values remain valid while Home Assistant
-  still reports the entity as available.
-- **Room temperature, humidity and CO2** can independently use the average of
-  available readings, one selected primary sensor, or remain separate. The
-  original device entities always remain available.
-- Home Assistant creates stable room occupancy, room temperature, room
-  humidity and room CO2 entities for dashboards and automations.
-- Positioning tracks stay bound to their source and local track ID. The new
-  room-wide 3D layer can retain one stable room-track identity while a person
-  crosses from one calibrated radar range into another.
-- Cross-radar fusion is experimental and disabled by default. A built-in walk
-  test verifies neighbouring overlap in three well-separated positions. Large
-  rooms can be calibrated as a chain (for example A to B first and then B to C), so
-  every radar does not need to see the same spot. Moving, rotating, relinking
-  or changing the mounting of a sensor invalidates the result immediately.
-- Even after alignment, two nearby source tracks are only merged after several
-  fresh reports show consistent shared movement. During an ambiguous overlap
-  both tracks remain visible and the people count is explicitly unknown. The
-  2D and 3D views use the same confirmed room tracks.
-- Only real Home Assistant coordinate reports participate; browser polling
-  never manufactures a newer timestamp. Missing, `NaN`, unavailable and
-  future-dated target slots are removed. A stationary coordinate stays exact
-  only while Home Assistant continues to report both its X and Y axes within
-  the configured freshness window. If presence remains positive but either
-  coordinate stops reporting, the
-  person stays visible as position unknown and the count is no longer claimed
-  as exact. A short browser-only hold smooths a confirmed handover and is never
-  uploaded.
-- LD6002B firmware can report a Z axis. Because that axis is not automatically
-  a person's height above the floor, it is shown as raw Z by default.
-  Installers may explicitly select and confirm a physically tested floor-up or
-  sensor-down mapping. The 3D view then draws a measured **target point**, never
-  a claimed body height. LD2450 and LD2460 remain honest X/Y tracking sources
-  when no Z entity exists.
+| WaterFlowKit | CeilSense | UltimateSensor |
+| --- | --- | --- |
+| [![WaterFlowKit demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-waterflowkit-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-waterflowkit-demo.mp4) | [![CeilSense demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ceilsense-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ceilsense-demo.mp4) | [![UltimateSensor demo](https://raw.githubusercontent.com/smarthomeshop/home-assistant-integration/main/docs/media/smarthomeshop-ultimatesensor-demo.webp)](https://github.com/smarthomeshop/home-assistant-integration/blob/main/docs/media/smarthomeshop-ultimatesensor-demo.mp4) |
 
-Configure these choices from the **Floorplan Designer**: select the room, open
-**Radar settings**, then use **Room-wide results**.
-The clear delay is stored with the room and survives Home Assistant restarts.
+## Updating
 
-## Universal radar support
+Update from the Marketplace (or HACS) and restart Home Assistant. Your rooms,
+device links, energy settings and statistics are kept. Release notes are on the
+[releases page](https://github.com/smarthomeshop/home-assistant-integration/releases).
 
-The Floorplan Designer reads the mounting and coordinate contract published by current
-SmartHomeShop ESPHome firmware. It discovers the metadata through Home
-Assistant's device and entity registries, so renamed devices and entity-ID
-prefixes remain supported.
+### Notes for 1.17
 
-- LD2450, LD2460 and LD6002B coordinates are normalized to millimetres before
-  room geometry is calculated.
-- Wall-mounted `forward_xy` and ceiling-mounted `floor_xy` projections are
-  handled explicitly.
-- LD2412 and PIR entities remain supplementary occupancy sources and are never
-  treated as positioning targets.
-- A `top_or_side` radar reports a visible mismatch when its hardware mode does
-  not suit the mounting profile. Changing that mode always requires explicit
-  user confirmation.
-- Wall-mounted LD2460 devices expose their radar-stored mounting height and
-  downward angle directly in the radar settings. Values are written through Home
-  Assistant and only shown as saved after the radar reports them back.
-- The LD2460 hardware detection sector is drawn separately from room polygons.
-  Distance and left/right angles are debounced and confirmed by the radar
-  before another change is sent.
-- LD2460 calibration checks the reported side mode, live height and angle, then
-  verifies a forward-Y and sideways-X walk. A physically rotated module is
-  never hidden with a software X/Y swap.
-- Missing or unavailable target slots are removed immediately, so a previous
-  coordinate cannot remain visible while the radar applies a setting.
-- The device Overview for LD2450, LD2460 and LD6002B includes a live 2D/3D
-  diagnostic view with selectable range, a bounded movement trail and the
-  radar's physical detection sector. It uses the same registry-discovered
-  profile and millimetre coordinate system as the Floorplan Designer.
-- The device view shows an explicit installation warning for configurable
-  radars until mounting mode, height and angle are confirmed. A Z value is
-  shown only when the firmware really supplies one; an X/Y-only target is not
-  presented as a measured body height.
-- Detection and exclusion polygons use integer millimetres and enforce the
-  firmware limit of 20 vertices per polygon.
-- Mirrors can be placed on their physical wall. Optional reflection protection
-  previews a sensor-specific wedge behind the mirror, filters matching ghost
-  targets from the Floorplan Designer and the UltimateSensor room view, and synchronizes
-  that wedge to the radar as an exclusion polygon. Each protected mirror uses
-  one of the two firmware exclusion slots; synchronization is blocked
-  instead of silently replacing or dropping a manual exclusion. Raw diagnostic
-  target entities stay unchanged so installers can still troubleshoot radar
-  behaviour.
-- Existing saved rooms keep their range, field of view, height and projection
-  until the user chooses to adopt new firmware defaults.
-- Coverage measurement uses near/far and left/right from the radar's own
-  viewpoint. "Measure again" starts with four fresh points without deleting the
-  saved area until Save is pressed. Moving or rotating the sensor placement
-  keeps that measured coverage attached to the sensor.
-- Polygon services are matched through the Home Assistant device registry, so
-  ESPHome node suffixes such as `_a2799c` are retained and zones cannot be sent
-  to another similarly named sensor.
-- Older firmware continues to work through a clearly identified legacy
-  profile; diagnostics list the metadata needed for a firmware upgrade.
+- The first start upgrades the room storage. A copy of the old data is kept in
+  `.storage/smarthomeshop.rooms.backup_1_1`, and 1.16 can still read the new
+  file if you need to go back.
+- Room Designer and Live Home are now one page: the **Floorplan Designer**.
+- A room with one damaged setting is repaired instead of hidden. **Settings >
+  Repairs** lists it until you confirm.
+- Earlier versions allowed one radar in two rooms. Those rooms now show
+  presence as unknown and Repairs tells you which radar it is. Unlink it from
+  all but one room in the Floorplan Designer.
 
-The shared firmware contract lives in the
-[radar-mounting repository](https://github.com/smarthomeshop/radar-mounting).
+### Water and gas
+
+- The Energy sync uses **Water Total Consumption** as the water source. It
+  starts at 0 again after a restart of the kit, which Home Assistant handles as
+  a new meter cycle. The old `sensor.<device>_water_meter_total_cost` entity is
+  left behind as unavailable and can be deleted under **Settings > Devices &
+  services > Entities**.
+- The **Usage today/this week/this month/this year (CC)** sensors use the water
+  device class, so you can pick the unit in their entity settings.
+- Without a gas meter, no gas helpers are created. Old **Gas Daily, Weekly,
+  Monthly and Yearly (CC)** helpers can be deleted under **Settings > Devices &
+  services > Helpers**.
 
 ## Support
 
 - [Documentation](https://docs.smarthomeshop.io)
-- [Issue Tracker](https://github.com/smarthomeshop/home-assistant-integration/issues)
+- [Report an issue](https://github.com/smarthomeshop/home-assistant-integration/issues)
 
 ## License
 
 Copyright (c) 2025-2026 SmartHomeShop.io.
 
 The integration source code is licensed under the
-[GNU Affero General Public License v3.0](LICENSE). Modified versions and
+[GNU Affero General Public License v3.0](https://github.com/smarthomeshop/home-assistant-integration/blob/main/LICENSE). Modified versions and
 network-accessible derivatives must remain available under the AGPL.
 
 The SmartHomeShop.io name, logos, product names and brand assets are not
-licensed under the AGPL. See [TRADEMARKS.md](TRADEMARKS.md). A separate
+licensed under the AGPL. See [TRADEMARKS.md](https://github.com/smarthomeshop/home-assistant-integration/blob/main/TRADEMARKS.md). A separate
 commercial license is available for organizations that want to incorporate
 this software without the AGPL obligations; contact info@smarthomeshop.io.
