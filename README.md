@@ -18,6 +18,8 @@ and appliances around energy prices and solar.
 - **Leak detection** for the water kits.
 - Available in English, Dutch, German, French and Spanish.
 
+https://github.com/user-attachments/assets/4ae4f82c-ce34-4ee5-94c5-f45d7761d2e5
+
 ## Contents
 
 - [Supported devices](#supported-devices)
