@@ -236,8 +236,9 @@ function ceilingHeightAt(room, point2) {
 // src/js/floor-planner-underlay.mjs
 var bound = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
 var maxImageData = 32e4;
+var wholeImage = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
 function validUnderlay(image) {
-  return image && typeof image.data === "string" && image.data.length <= maxImageData && /^data:image\/jpeg;base64,[a-z\d+/]+={0,2}$/i.test(image.data) && bound(image.ratio, 0.04, 25) && bound(image.width, 0.5, 220) && bound(image.x, -250, 250) && bound(image.y, -250, 250) && bound(image.opacity, 10, 85);
+  return image && typeof image.data === "string" && image.data.length <= maxImageData && /^data:image\/jpeg;base64,[a-z\d+/]+={0,2}$/i.test(image.data) && bound(image.ratio, 0.04, 25) && bound(image.width, 0.5, 220) && bound(image.x, -250, 250) && bound(image.y, -250, 250) && bound(image.opacity, 10, 85) && (image.roomTransparency === void 0 || bound(image.roomTransparency, 0, 100));
 }
 
 // src/js/floor-planner-model.mjs
@@ -2153,6 +2154,13 @@ var FloorPlannerPage = class extends HTMLElement {
       deviceError: () => this.#devicesFailed,
       refreshDevices: () => this.#loadDevices(),
       asset: (path) => `/smarthomeshop_panel/floor-planner${path}`,
+      // Rooms found on an uploaded floor plan, through the linked
+      // SmartHomeShop account. Only administrators edit the plan.
+      recognise: this.#hass?.user?.is_admin ? async (image) => {
+        const answer = await this.#hass.callWS({ type: "smarthomeshop/floor_plan/recognise", image });
+        if (answer?.error) throw Object.assign(new Error(answer.error.message), { code: answer.error.code, quota: answer.quota });
+        return answer;
+      } : void 0,
       calibrationLabel: (roomId) => {
         const calibration = this.#floorPlan.rooms.find((room) => room.id === roomId)?.calibration;
         return calibration?.enabled ? `${this.#text.savedCalibration} · ${calibration.corners?.length ?? 0} ${this.#text.points}` : "";

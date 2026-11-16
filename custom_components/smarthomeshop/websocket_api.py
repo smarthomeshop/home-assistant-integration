@@ -54,6 +54,11 @@ from .device_linking import (
     source_device_storage_key,
 )
 from .energy_runtime import async_schedule_energy_reconfigure
+from .floor_plan_recognition import (
+    MAX_IMAGE_CHARACTERS,
+    FloorPlanRecognitionError,
+    async_recognise_floor_plan,
+)
 from .products.waterflowkit.lines import FLOW_LINES
 from .radar_profiles import discover_radar_device_profiles, radar_profile_for_device
 from .room_config import normalize_room_config
@@ -179,6 +184,7 @@ async def async_register_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_get_rooms)
     websocket_api.async_register_command(hass, ws_get_floor_plan)
     websocket_api.async_register_command(hass, ws_save_floor_plan)
+    websocket_api.async_register_command(hass, ws_recognise_floor_plan)
     websocket_api.async_register_command(hass, ws_get_room_runtime)
     websocket_api.async_register_command(hass, ws_save_room)
     websocket_api.async_register_command(hass, ws_revoke_room_alignment)
@@ -393,6 +399,36 @@ def ws_get_rooms(
 def ws_get_floor_plan(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
     """Return a consistent floor plan and room revision snapshot."""
     connection.send_result(msg["id"], hass.data[DOMAIN]["store"].get_floor_plan())
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "smarthomeshop/floor_plan/recognise",
+    vol.Required("image"): vol.All(
+        str,
+        vol.Length(min=32, max=MAX_IMAGE_CHARACTERS),
+        vol.Match(r"^data:image/jpeg;base64,[A-Za-z0-9+/]+={0,2}$"),
+    ),
+})
+@websocket_api.async_response
+async def ws_recognise_floor_plan(hass: HomeAssistant, connection, msg: dict[str, Any]) -> None:
+    """Find the rooms on an uploaded floor plan through the linked account.
+
+    A recognition that fails on the service side is a normal answer with an
+    error code, so the remaining quota can travel with it.
+    """
+    if not connection.user.is_admin:
+        connection.send_error(msg["id"], "unauthorized", "Administrator required")
+        return
+    account = hass.data[DOMAIN]["store"].get_account()
+    try:
+        result = await async_recognise_floor_plan(hass, account, msg["image"])
+    except FloorPlanRecognitionError as err:
+        connection.send_result(msg["id"], {
+            "error": {"code": err.code, "message": str(err)},
+            "quota": err.quota,
+        })
+        return
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command(

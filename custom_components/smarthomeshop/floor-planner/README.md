@@ -9,6 +9,19 @@ card. This folder is its source; Home Assistant serves the build in
 - `src/js`, `src/css`: the planner itself. Plain ES modules with no Home
   Assistant code in them: drawing, the 3D model, radar coverage, the walk
   test, imports, the coverage map.
+  - `floor-planner-pdf.mjs` turns a page of an uploaded PDF into the image
+    under the plan. It is the only module that uses pdf.js (`pdfjs-dist`), and
+    the planner only loads it once somebody picks a PDF.
+  - `floor-planner-underlay.mjs` holds the uploaded image under the plan.
+    After an upload the planner asks which part of the image to use, so one
+    floor can be kept from a sheet that shows more. The part is cut from the
+    original image, or drawn again from the PDF, so it stays sharp.
+  - `floor-planner-recognise.mjs` turns rooms recognised on an uploaded floor
+    plan into a draft that lies on that image. The recognition itself runs in
+    an account service: Home Assistant passes its own (`recognise` on the
+    host), and `floor-planner-account.js` is the place where a site that
+    offers the planner on its own plugs in one. Without either, the button is
+    not shown.
 - `src/ha`: everything that ties the planner to Home Assistant.
   - `editor-entry.js` starts the editor inside the panel's iframe.
   - `host.js` is the `shs-floor-planner-page` element: it loads rooms and
@@ -35,6 +48,12 @@ npm test
 The build is bundled with esbuild but not minified, so what Home Assistant
 serves stays readable. Files the pages load are versioned by content hash, so
 browsers never keep an old copy after an update.
+
+`pdf.js` in the build is the exception: it holds `floor-planner-pdf.mjs`
+together with the pdf.js library, minified because it is a library from npm,
+with its licence in `pdf.LICENSE.txt`. The editor loads it by itself when a
+PDF is opened. Nothing is fetched from the internet for it, so it also works
+on a Home Assistant without a connection.
 
 Rebuild after every change in `src`, and commit the source together with the
 build.

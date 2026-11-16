@@ -123,6 +123,10 @@ button, summary { cursor: pointer; }
 }
 #fp-sensor-edit-ha { display: grid; gap: 4px; }
 #floor-planner :is(.fp-furniture-dialog, .fp-room-form, .fp-underlay-controls, .fp-recovery) { color: var(--ha-ink); border-color: var(--ha-border); background: var(--ha-panel); }
+#floor-planner :is(.fp-pdf-preview, .fp-crop-stage) { background: var(--ha-input); }
+#floor-planner .fp-underlay-controls button { background: var(--ha-input); }
+#floor-planner .fp-underlay-controls .fp-recognise { color: #fff; border-color: transparent; background: var(--ha-action); }
+#floor-planner .fp-underlay-controls .fp-recognise:hover:not(:disabled) { background: color-mix(in srgb, var(--ha-action), #111827 16%); }
 #floor-planner :is(#fp-search, #fp-inspector input, #fp-inspector select, .fp-room-form-inputs input, .fp-floor-field input:not([type="range"]),
     .fp-room-corner-position input, .fp-placement-copy select, .fp-opening-dimensions input, #fp-zone-type, .fp-sensor-edit select,
     .fp-sensor-edit input[type="number"], .fp-furniture-dialog input, .fp-furniture-dialog select, .fp-underlay-controls input[type="number"],
@@ -137,11 +141,13 @@ button, summary { cursor: pointer; }
 .fp-saved-placements .fp-placed { width: 100%; }
 #floor-planner :is(.fp-warning, .fp-cross-sides) { color: var(--ha-warn); }
 #floor-planner :is(#fp-room-form-error, #fp-start-status, [data-action="delete"], [data-action="remove_floor"]) { color: var(--ha-danger); }
+#floor-planner #fp-start-status[data-busy] { color: var(--ha-muted); }
 
 /* The map shares the same scheme as its controls, including its SVG grid and text. */
 #fp-small-grid path { stroke: var(--ha-grid); }
 #fp-grid path, #fp-space-grid path { stroke: var(--ha-grid-major); }
 #floor-planner .fp-room-floor { fill: var(--ha-room); stroke: var(--ha-room-edge); }
+#floor-planner .fp-room-casing { stroke: var(--ha-room); }
 #floor-planner :is(.fp-room.selected > .fp-room-floor, .fp-room-outline, .fp-wall.selected line:last-child) { stroke: var(--ha-ceiling); }
 #floor-planner :is(.fp-room-label, .fp-wall-measure) { fill: var(--ha-ink); stroke: var(--ha-room); }
 #floor-planner .fp-room-size { fill: var(--ha-muted); }

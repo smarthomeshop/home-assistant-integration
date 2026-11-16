@@ -5,7 +5,8 @@
 //   node build.mjs --out D   write the build somewhere else
 //
 // The output is bundled but not minified, so what Home Assistant serves stays
-// readable next to the source it came from.
+// readable next to the source it came from. The one exception is pdf.js, a
+// large library from npm that is only loaded when somebody opens a PDF.
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -19,6 +20,9 @@ const target = path.join(root, '..', 'www', 'floor-planner');
 const languages = ['en', 'nl', 'de', 'fr', 'es'];
 // Modules other bundles import at run time instead of carrying their own copy.
 const sharedModules = ['fusion', 'safety'];
+// The editor loads this module with import() when somebody opens a PDF. It is
+// built as its own file, pdf.js, so it adds nothing to opening the editor.
+const pdfModule = 'floor-planner-pdf.mjs';
 
 const args = process.argv.slice(2);
 const check = args.includes('--check');
@@ -42,14 +46,23 @@ const options = {
     banner: { js: banner, css: banner.replace('//', '/*') + ' */' },
 };
 
-async function bundle(entryPoints, plugins = []) {
-    const result = await build({ ...options, entryPoints, outdir: out, entryNames: '[name]', plugins });
+async function bundle(entryPoints, plugins = [], extra = {}) {
+    const result = await build({ ...options, ...extra, entryPoints, outdir: out, entryNames: '[name]', plugins });
     return Object.fromEntries(result.outputFiles.map(file => [path.basename(file.path), file.text]));
 }
 
 // fusion.js and safety.js go first: the others load them by a versioned URL.
 const files = await bundle(Object.fromEntries(sharedModules.map(name => [name, path.join(source, 'ha', `${name}.js`)])));
-const versions = Object.fromEntries(sharedModules.map(name => [name, hash(files[`${name}.js`])]));
+
+// So does pdf.js. It is minified because it is a library from npm, not planner
+// source. Its first lines say what it contains and its licence goes next to it.
+const pdfjs = path.join(root, 'node_modules', 'pdfjs-dist');
+const pdfjsVersion = JSON.parse(await fs.readFile(path.join(pdfjs, 'package.json'), 'utf8')).version;
+Object.assign(files, await bundle({ pdf: path.join(source, 'js', pdfModule) }, [], { minify: true, banner: { js:
+    `${banner}\n// Includes PDF.js ${pdfjsVersion} (pdfjs-dist) by the Mozilla Foundation, Apache License 2.0: see pdf.LICENSE.txt.` } }));
+files['pdf.LICENSE.txt'] = await fs.readFile(path.join(pdfjs, 'LICENSE'), 'utf8');
+
+const versions = Object.fromEntries([...sharedModules, 'pdf'].map(name => [name, hash(files[`${name}.js`])]));
 const shared = {
     name: 'shared-modules',
     setup(context) {
@@ -58,6 +71,16 @@ const shared = {
             const name = request.match(filter)[1];
             return { path: `./${name}.js?v=${versions[name]}`, external: true };
         });
+    },
+};
+// import('./floor-planner-pdf.mjs') becomes an import of the built pdf.js. Only
+// the editor ever runs it; the other bundles drop the code that would.
+const lazyPdf = {
+    name: 'lazy-pdf',
+    setup(context) {
+        const filter = new RegExp(`^\\./${pdfModule.replaceAll('.', '\\.')}$`);
+        context.onResolve({ filter }, ({ kind }) =>
+            kind === 'dynamic-import' ? { path: `./pdf.js?v=${versions.pdf}`, external: true } : null);
     },
 };
 
@@ -77,7 +100,7 @@ Object.assign(files, await bundle({
     host: path.join(source, 'ha', 'host.js'),
     'card-scene': path.join(source, 'ha', 'card-scene.js'),
     editor: path.join(source, 'ha', 'editor-entry.js'),
-}, [shared, inlineCss]));
+}, [shared, lazyPdf, inlineCss]));
 files['editor-ha.css'] = await fs.readFile(path.join(source, 'ha', 'editor-ha.css'), 'utf8');
 
 // Each page asks for the editor files by content hash, so an update is never

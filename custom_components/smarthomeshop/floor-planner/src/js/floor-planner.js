@@ -21,7 +21,15 @@ import { wallModes } from './floor-planner-maquette.mjs';
 import { daylights } from './floor-planner-daylight.mjs';
 import { coverageCells, coverageSummary, paintCoverageHeat } from './floor-planner-heatmap.mjs';
 import { removeOrphanedSensorZones, removeZonesOwnedBySensor } from './floor-planner-zones.mjs';
-import { calibrateUnderlay, loadUnderlay, maxImageData } from './floor-planner-underlay.mjs';
+import {
+    calibrateUnderlay, imagePart, loadUnderlay, maxImageData, movedPart, roomTransparency, startingWidth, underlayKind, underlayMessage,
+    usablePart, wholeImage,
+} from './floor-planner-underlay.mjs';
+import { chosenTool, toolRepeats } from './floor-planner-tools.mjs';
+import { recognise as siteRecognise } from './floor-planner-account.js';
+import {
+    draftFromRecognition, planWithDraft, recognitionNote, recognitionProblem, recognitionProgress, recognitionWaiting, roomsWaitingForScale,
+} from './floor-planner-recognise.mjs';
 import {
     devicesForRoomArea, roomWithHomeAssistantArea, roomWithHomeAssistantFloor,
 } from './floor-planner-home-assistant.mjs';
@@ -45,6 +53,9 @@ const simTools = element('fp-sim-tools');
 const simMenus = [simCast, simTools];
 const simReading = root.querySelector('[data-action="show_readings"]');
 const sensorEdit = element('fp-sensor-edit');
+const pdfPages = element('fp-pdf-pages');
+// A page that was made before a part of the image could be chosen has no such dialog.
+const imageParts = element('fp-crop');
 const sensorEditForm = element('fp-sensor-edit-form');
 const projectMenu = element('fp-project-menu');
 const projectTrigger = projectMenu.querySelector('summary');
@@ -67,6 +78,102 @@ const extraSensor = root.querySelector('[data-action="next_extra_sensor"]');
 const copy = JSON.parse(element('fp-copy').textContent);
 const integration = globalThis.floorPlannerHost;
 const appPlanner = integration?.mode === 'app';
+// Finding the rooms on an uploaded floor plan runs in an account service: the
+// host's (Home Assistant), or the one the site provides. Without one, or
+// without the texts for it, the button is not shown at all.
+const recogniseRooms = (integration ? integration.recognise : siteRecognise) || null;
+const recognition = recogniseRooms && copy.recognise_action ? (() => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'fp-recognise';
+    button.dataset.action = 'recognise_underlay';
+    button.textContent = copy.recognise_action;
+    const note = document.createElement('p');
+    note.className = 'fp-note fp-recognise-note';
+    note.setAttribute('role', 'status');
+    const controls = document.getElementById('fp-underlay-controls');
+    controls.insertBefore(button, controls.querySelector('[data-action="scale_underlay"]'));
+    // While the plan is being read: a bar with an estimate of how far it is.
+    const meter = document.createElement('span');
+    meter.className = 'fp-recognise-meter';
+    meter.hidden = true;
+    const bar = document.createElement('progress');
+    bar.max = 100;
+    bar.setAttribute('aria-label', copy.recognise_action);
+    const share = document.createElement('span');
+    share.setAttribute('aria-hidden', 'true');
+    meter.append(bar, share);
+    controls.append(meter, note);
+    // And a light that sweeps over the image itself, where the user is looking.
+    const drawn = name => document.createElementNS('http://www.w3.org/2000/svg', name);
+    const scan = drawn('g');
+    scan.setAttribute('class', 'fp-underlay-scan');
+    scan.setAttribute('pointer-events', 'none');
+    scan.setAttribute('hidden', '');
+    const light = drawn('linearGradient');
+    light.id = 'fp-underlay-scan-light';
+    for (const [offset, opacity] of [[0, 0], [.5, .55], [1, 0]]) {
+        const stop = drawn('stop');
+        stop.setAttribute('offset', offset);
+        stop.setAttribute('stop-opacity', opacity);
+        light.append(stop);
+    }
+    // A drawing of its own with the size of the image, so the light stays inside it.
+    const frame = drawn('svg');
+    const tint = drawn('rect'), beam = drawn('rect');
+    tint.setAttribute('class', 'fp-underlay-scan-tint');
+    beam.setAttribute('class', 'fp-underlay-scan-beam');
+    beam.setAttribute('fill', 'url(#fp-underlay-scan-light)');
+    for (const [shape, width] of [[tint, '100%'], [beam, '16%']]) {
+        shape.setAttribute('width', width);
+        shape.setAttribute('height', '100%');
+    }
+    frame.append(tint, beam);
+    scan.append(light, frame);
+    document.getElementById('fp-underlay').after(scan);
+    const percentage = new Intl.NumberFormat(root.dataset.locale, { style: 'percent' });
+    return { button, note, meter, bar, share, scan, frame, percentage, timer: 0, state: 'idle', image: null, pending: null };
+})() : null;
+
+// Adds the rooms of an answer to the plan, on the image as it lies now.
+function addRecognisedRooms(answer, keepScale) {
+    const draft = draftFromRecognition(answer?.recognition, plan.underlay, { roomName: copy.room, keepScale });
+    const next = draft && planWithDraft(plan, draft);
+    if (!next) throw Object.assign(new Error('No rooms'), { code: draft ? 'recognition_failed' : 'no_rooms_found' });
+    remember();
+    const added = next.rooms.length - plan.rooms.length;
+    plan = next;
+    setTool('edit');
+    finish();
+    fit();
+    showRecognition('idle', recognitionNote(copy, { rooms: added, quota: answer.quota }, value => number.format(value)));
+}
+
+// idle: the plain button. armed: the user saw where the image goes and can
+// send it. busy: waiting for the answer. A message stays until the next step.
+function showRecognition(state, message = '') {
+    if (!recognition) return;
+    recognition.state = state;
+    recognition.button.textContent = copy[state === 'armed' ? 'recognise_send' : 'recognise_action'];
+    recognition.button.disabled = state === 'busy';
+    recognition.button.toggleAttribute('aria-busy', state === 'busy');
+    recognition.note.textContent = state === 'armed' ? `${copy.recognise_privacy} ${copy.recognise_account}`
+        : state === 'busy' ? copy.recognise_busy : message;
+    recognition.note.hidden = !recognition.note.textContent;
+    // The bar and the light over the image only show while the answer is awaited.
+    clearInterval(recognition.timer);
+    recognition.meter.hidden = state !== 'busy';
+    recognition.scan.toggleAttribute('hidden', state !== 'busy');
+    if (state !== 'busy') return;
+    const started = performance.now();
+    const tick = () => {
+        const done = recognitionProgress(performance.now() - started);
+        recognition.bar.value = done;
+        recognition.share.textContent = recognition.percentage.format(done / 100);
+    };
+    tick();
+    recognition.timer = setInterval(tick, 250);
+}
 // Ceilings above the measured range get a conservative estimated outline,
 // in the shop as well as in Home Assistant, instead of no outline at all.
 const coverageRadarOptions = { allowHeightEstimate: true };
@@ -114,6 +221,8 @@ let showMeasures = false;
 let tool = 'edit';
 const placingOpening = () => Object.hasOwn(openingDefaults, tool);
 let choice = null;
+// How many items the active tool has placed since it was chosen.
+let placedWithTool = 0;
 let start = null;
 let roomDraft = [];
 let draftCorner = 0;
@@ -276,6 +385,7 @@ function setTool(next, model = null, device = null) {
     if (interaction?.vertex !== undefined) interaction = null;
     lastRoomClick = null;
     tool = next;
+    placedWithTool = 0;
     placementDevice = device;
     if (next !== 'place') placementAreaId = null;
     if (next !== 'edit') closeSensorTip();
@@ -304,7 +414,13 @@ function setTool(next, model = null, device = null) {
     updateTools();
 }
 
+// A tool that stays active says so while nothing is in progress.
 function hint() {
+    const message = toolHint();
+    return toolRepeats(tool, choice) && !start && !roomDraft.length ? `${message} ${copy.tool_repeat}` : message;
+}
+
+function toolHint() {
     if (tool === 'place') return `${copy.sensor_hint} · ${placementDevice?.name ?? devices[choice].name}`;
     if (tool === 'furnish' || tool === 'move_furniture') {
         const name = tool === 'furnish' ? copy.furniture_items[choice] : selectedItem().item?.name;
@@ -329,6 +445,9 @@ function updateTools() {
     if (status.textContent !== message) status.textContent = message;
     status.hidden = tool === 'edit';
     element('fp-draw-keys').hidden = tool !== 'room' && tool !== 'wall';
+    // Doors, windows, mirrors and zones have a bar with a button to stop.
+    // The wall tool has none, so it gets its own.
+    element('fp-tool-stop').hidden = tool !== 'wall';
     canvas.dataset.tool = tool;
     renderRoomHandles();
     root.querySelectorAll('[data-sensor-marker]').forEach(marker => {
@@ -338,16 +457,21 @@ function updateTools() {
     const placing = tool === 'place';
     const moving = tool === 'move_item';
     const opening = placingOpening();
+    const repeating = toolRepeats(tool, choice);
+    // Once something has been placed, leaving the tool no longer cancels anything.
+    const leave = copy[repeating && placedWithTool ? 'tool_done' : 'cancel_place'];
     const placementBar = element('fp-placement-bar');
     placementBar.hidden = view !== '2d' || (!placing && !furnishing && !moving && !opening);
     const wallPreview = opening && placementPoint ? renderOpeningPreview(placementPoint) : null;
     element('fp-place-title').textContent = placing ? copy.place_model.replace(':model', placementDevice?.name ?? devices[choice].name)
         : opening ? copy[tool] : moving ? copy.move_item : message;
-    element('fp-place-help').textContent = opening ? openingHelp(wallPreview) : moving ? message : placing
+    element('fp-place-help').textContent = opening
+        ? openingHelp(wallPreview) + (repeating && !placementPoint ? ` ${copy.tool_repeat}` : '') : moving ? message : placing
         ? copy[placementPoint ? 'place_confirm_hint' : !integration && !devices[choice].defaultRadar ? 'place_marker_only'
             : matchMedia('(pointer: coarse)').matches ? 'place_touch' : 'place_hover']
             + (!placementPoint && devices[choice].mount === 'wall' && placementInstallation !== 'freestanding' ? ' ' + copy.place_wall_snap : '')
         : '';
+    element('fp-place-cancel').textContent = leave;
     const confirmPlacement = element('fp-place-confirm');
     confirmPlacement.hidden = (!placing && !opening) || !placementPoint;
     confirmPlacement.disabled = opening && Boolean(placementPoint) && !wallPreview?.position;
@@ -389,6 +513,7 @@ function updateTools() {
     const removeCorner = root.querySelector('[data-action="remove_corner"]');
     removeCorner.hidden = !editingOutline;
     removeCorner.disabled = roomDraft.length <= 3;
+    root.querySelector('[data-action="cancel_outline"]').textContent = roomDraft.length ? copy.cancel_place : leave;
     board.setAttribute('aria-describedby', editingOutline ? 'fp-keys fp-outline-keys' : placing || opening ? 'fp-place-help fp-keys' : 'fp-keys');
     element('fp-place-center').hidden = Boolean(placementPoint) || !(furnishing && plan.rooms.length)
         && (tool !== 'place' || !placementRoom() || devices[choice].mount !== 'ceiling');
@@ -1585,9 +1710,145 @@ function renderUnderlay() {
         return;
     }
     if (image.getAttribute('href') !== underlay.data) image.setAttribute('href', underlay.data);
-    for (const [key, value] of Object.entries({ x: underlay.x, y: underlay.y, width: underlay.width,
-        height: underlay.width / underlay.ratio, opacity: underlay.opacity / 100 })) image.setAttribute(key, value);
+    // Another image starts again: its message and consent belong to the old one.
+    if (recognition && recognition.image !== underlay.data && recognition.state !== 'busy') {
+        recognition.image = underlay.data;
+        recognition.pending = null;
+        showRecognition('idle');
+    }
+    const place = { x: underlay.x, y: underlay.y, width: underlay.width, height: underlay.width / underlay.ratio };
+    for (const [key, value] of Object.entries({ ...place, opacity: underlay.opacity / 100 })) image.setAttribute(key, value);
+    if (recognition) for (const [key, value] of Object.entries(place)) recognition.frame.setAttribute(key, value);
     element('fp-underlay-opacity').value = underlay.opacity;
+    element('fp-underlay-rooms').value = roomTransparency(underlay);
+    showRoomTransparency(roomTransparency(underlay));
+}
+
+// Only the floor of a room becomes see-through, and only while the image is
+// shown: the stylesheet uses this value under [data-underlay].
+function showRoomTransparency(percent) {
+    canvas.style.setProperty('--fp-room-fill', (100 - percent) / 100);
+}
+
+// Asks which page of a PDF to use, with a preview of the page. Resolves to the
+// page number, or to null when the dialog is closed without choosing.
+function choosePdfPage(pdf) {
+    const input = element('fp-pdf-page');
+    const preview = element('fp-pdf-preview');
+    const status = element('fp-pdf-status');
+    const use = pdfPages.querySelector('button[type="submit"]');
+    let latest = 0;
+    const show = async () => {
+        if (!input.validity.valid) return;
+        const turn = ++latest;
+        const canvas = await pdf.render(input.valueAsNumber, 440).catch(() => null);
+        if (turn !== latest) return;
+        preview.replaceChildren(...(canvas ? [canvas] : []));
+        status.textContent = canvas ? '' : copy.underlay_pdf_error;
+        use.disabled = !canvas;
+    };
+    input.max = pdf.pages;
+    input.value = 1;
+    element('fp-pdf-page-label').textContent = copy.underlay_pdf_page.replace(':count', number.format(pdf.pages));
+    return new Promise(resolve => {
+        input.oninput = show;
+        pdfPages.onclose = () => {
+            latest += 1;
+            input.oninput = pdfPages.onclose = null;
+            preview.replaceChildren();
+            resolve(pdfPages.returnValue === 'use' ? input.valueAsNumber : null);
+        };
+        pdfPages.returnValue = '';
+        pdfPages.showModal();
+        show();
+    });
+}
+
+// Asks which part of an uploaded image to use, so one floor plan can be kept
+// from a sheet that shows more. Dragging on the picture draws a box, its
+// corners resize it and the box itself can be moved; the keyboard does the
+// same from the picture. Resolves to the part in shares of the image, or to
+// null when the dialog is closed without choosing.
+function chooseImagePart(picture, ratio) {
+    const stage = element('fp-crop-stage'), box = element('fp-crop-box');
+    const whole = imageParts.querySelector('button[value="whole"]'), use = imageParts.querySelector('button[value="part"]');
+    const step = .02;
+    let part = null, drag = null;
+    const show = () => {
+        const usable = usablePart(part, ratio);
+        box.hidden = !part;
+        if (part) {
+            Object.assign(box.style, { left: `${part.x * 100}%`, top: `${part.y * 100}%`,
+                width: `${part.width * 100}%`, height: `${part.height * 100}%` });
+        }
+        use.disabled = !usable;
+        use.classList.toggle('fp-primary', usable);
+        whole.classList.toggle('fp-primary', !usable);
+    };
+    const at = event => {
+        const bounds = stage.getBoundingClientRect();
+        return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
+    };
+    const far = () => ({ x: part.x + part.width, y: part.y + part.height });
+    stage.style.setProperty('--fp-crop-ratio', ratio);
+    stage.prepend(picture);
+    show();
+    return new Promise(resolve => {
+        stage.onpointerdown = event => {
+            if (event.button) return;
+            const point = at(event), corner = event.target.dataset.corner;
+            if (corner && part) {
+                // The opposite corner stays where it is.
+                drag = { from: { x: corner.includes('w') ? far().x : part.x, y: corner.includes('n') ? far().y : part.y } };
+            } else if (event.target === box && part) {
+                drag = { grip: point, start: part };
+            } else {
+                drag = { from: point };
+                part = null;
+                show();
+            }
+            stage.setPointerCapture(event.pointerId);
+        };
+        stage.onpointermove = event => {
+            if (!drag) return;
+            const point = at(event);
+            part = drag.from ? imagePart(drag.from, point, 0) : movedPart(drag.start, point.x - drag.grip.x, point.y - drag.grip.y);
+            show();
+        };
+        stage.onpointerup = stage.onpointercancel = () => {
+            if (!drag) return;
+            drag = null;
+            // A click, or a box too small to be meant, leaves nothing chosen.
+            if (part && !imagePart(part, far())) part = null;
+            show();
+        };
+        stage.onkeydown = event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                (use.disabled ? whole : use).click();
+                return;
+            }
+            const [dx, dy] = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key] ?? [];
+            const removes = part && ['Delete', 'Backspace'].includes(event.key);
+            if (dx === undefined && !removes) return;
+            event.preventDefault();
+            if (removes) part = null;
+            // The first arrow key starts with the middle of the image.
+            else if (!part) part = { x: .25, y: .25, width: .5, height: .5 };
+            else if (event.shiftKey) part = imagePart(part, { x: far().x + dx, y: far().y + dy }) ?? part;
+            else part = movedPart(part, dx, dy);
+            show();
+        };
+        imageParts.onclose = () => {
+            stage.onpointerdown = stage.onpointermove = stage.onpointerup = stage.onpointercancel = stage.onkeydown = null;
+            imageParts.onclose = null;
+            picture.remove();
+            const answer = imageParts.returnValue;
+            resolve(answer === 'part' && usablePart(part, ratio) ? part : answer === 'whole' ? wholeImage : null);
+        };
+        imageParts.returnValue = '';
+        imageParts.showModal();
+    });
 }
 
 function renderDrawing() {
@@ -1822,7 +2083,8 @@ function renderBeam() {
     if (view === '2d') {
         const stair = currentStairTrip();
         replaceMapMarkup(drawing, paintPlan(planForDrawing(plan), showCoverage, selected, number,
-            focus && { ...focus, profile }, { measures: showMeasures, interactiveSensors: true, radarOptions: coverageRadarOptions })
+            focus && { ...focus, profile }, { measures: showMeasures, interactiveSensors: true, radarOptions: coverageRadarOptions,
+                casing: Boolean(plan.underlay) })
             + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : '')
             + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ''));
     }
@@ -3026,6 +3288,10 @@ function makeItem(type, values) {
     remember();
     plan = candidate;
     selected = item.id;
+    if (toolRepeats(tool, choice) && type === `${tool}s`) {
+        continueTool();
+        return true;
+    }
     setTool('edit');
     finish();
     if (type === 'rooms') {
@@ -3040,6 +3306,21 @@ function makeItem(type, values) {
         if (!items.length) focusNext();
     }
     return true;
+}
+
+// After a tool that stays active has placed something: the new item is
+// selected and the tool is ready for the next one.
+function continueTool() {
+    placedWithTool += 1;
+    start = null;
+    placementPoint = null;
+    roomDraft = [];
+    ghost.replaceChildren();
+    ghost.removeAttribute('data-invalid');
+    ghost.removeAttribute('data-preview');
+    finish();
+    showInspectorStart(root.hasAttribute('data-panel'));
+    board.focus({ preventScroll: true });
 }
 
 function cornerHitRadius() {
@@ -3140,6 +3421,10 @@ function saveRoomDraft() {
         remember();
         plan = candidate;
         selected = item.id;
+        if (toolRepeats(tool, choice)) {
+            continueTool();
+            return;
+        }
         setTool('edit');
         finish();
         showInspectorStart();
@@ -3881,6 +4166,40 @@ const actions = {
         finish();
         fit();
         board.focus({ preventScroll: true });
+        // Rooms that were waiting for this scale go in now.
+        const waiting = recognition?.pending;
+        if (waiting) {
+            recognition.pending = null;
+            try {
+                addRecognisedRooms(waiting, true);
+            } catch (error) {
+                showRecognition('idle', recognitionProblem(copy, error, root.dataset.locale));
+            }
+        }
+    },
+    // Two clicks: the first says where the image goes, the second sends it.
+    // The request starts inside the click, so a sign-in window may open.
+    recognise_underlay() {
+        const underlay = plan.underlay;
+        if (!recognition || !underlay || recognition.state === 'busy') return;
+        if (recognition.state !== 'armed') return showRecognition('armed');
+        showRecognition('busy');
+        new Promise(resolve => resolve(recogniseRooms(underlay.data))).then(answer => {
+            // The answer is only for the image it was asked for.
+            if (plan.underlay?.data !== underlay.data) return showRecognition('idle');
+            // A scale somebody measured on this image wins over the one read from it.
+            const measured = plan.underlay.width !== startingWidth;
+            const waiting = roomsWaitingForScale(answer?.recognition);
+            if (!waiting) throw Object.assign(new Error('No rooms'), { code: 'no_rooms_found' });
+            // No scale anywhere: ask for it first and add the rooms after it,
+            // from this same answer.
+            if (!measured && !draftFromRecognition(answer.recognition, plan.underlay)?.scaled) {
+                recognition.pending = answer;
+                showRecognition('idle', recognitionWaiting(copy, waiting, value => number.format(value)));
+                return actions.scale_underlay();
+            }
+            addRecognisedRooms(answer, measured);
+        }).catch(error => showRecognition('idle', recognitionProblem(copy, error, root.dataset.locale)));
     },
     remove_underlay() {
         remember();
@@ -4102,6 +4421,7 @@ const actions = {
         setTool('edit');
         board.focus({ preventScroll: true });
     },
+    stop_tool() { actions.cancel_outline(); },
     auto_walk() {
         const wasAutomatic = (autoWalk && !autoWalk.test) || stairWalk?.repeat;
         stopStairWalk();
@@ -4127,6 +4447,8 @@ const actions = {
     test_smoke() { startWalkTest('smoke'); },
     test_fall() { startWalkTest('fall'); },
     close_sensor_edit() { sensorEdit.close(); },
+    close_pdf_pages() { pdfPages.close(); },
+    close_crop() { imageParts.close(); },
     second_person() { toggleWalker('woman'); },
     child_person() { toggleWalker('child'); },
     show_readings() {
@@ -4360,7 +4682,7 @@ root.addEventListener('click', event => {
     }
     if (next) {
         roomFormOpen = false;
-        setTool(next);
+        setTool(chosenTool(tool, next));
         if (fromToolbox || (!event.detail && next !== 'edit')) board.focus({ preventScroll: true });
     }
     const registered = integration && haDevice(button.dataset.haDevice);
@@ -4569,10 +4891,19 @@ root.addEventListener('change', async ({ target }) => {
     }
     if (target.id === 'fp-underlay-file' && target.files[0]) {
         const file = target.files[0], original = plan;
+        const status = element(showStart ? 'fp-start-status' : 'fp-save');
         target.value = '';
+        // Reading a PDF takes a moment: the status says so, not as an error.
+        const opening = underlayKind(file) === 'pdf';
+        status.toggleAttribute('data-busy', opening);
+        if (opening) status.textContent = copy.underlay_pdf_opening;
         try {
-            const image = await loadUnderlay(file);
-            if (plan !== original) return;
+            const image = await loadUnderlay(file, choosePdfPage, imageParts ? chooseImagePart : undefined);
+            // Nothing changes when choosing the page or the part was cancelled.
+            if (!image || plan !== original) {
+                status.textContent = '';
+                return;
+            }
             if (showStart) {
                 replacePlan({ ...blankPlan(copy.names.untitled), underlay: image });
             } else {
@@ -4584,15 +4915,18 @@ root.addEventListener('change', async ({ target }) => {
             setTool('edit');
             finish();
             fit();
+            status.textContent = '';
             element('fp-save').textContent = copy.underlay_ready;
-        } catch {
-            element(showStart ? 'fp-start-status' : 'fp-save').textContent = copy.underlay_error;
+        } catch (error) {
+            status.textContent = copy[underlayMessage(error)];
+        } finally {
+            status.removeAttribute('data-busy');
         }
         return;
     }
-    if (target.id === 'fp-underlay-opacity' && plan.underlay) {
+    if (['fp-underlay-opacity', 'fp-underlay-rooms'].includes(target.id) && plan.underlay) {
         remember();
-        plan.underlay.opacity = target.valueAsNumber;
+        plan.underlay[target.id === 'fp-underlay-rooms' ? 'roomTransparency' : 'opacity'] = target.valueAsNumber;
         save();
         renderUnderlay();
         return;
@@ -4897,6 +5231,7 @@ element('fp-furniture-search').addEventListener('input', renderFurnitureCatalog)
 element('fp-underlay-opacity').addEventListener('input', event => {
     element('fp-underlay').setAttribute('opacity', event.target.valueAsNumber / 100);
 });
+element('fp-underlay-rooms').addEventListener('input', event => showRoomTransparency(event.target.valueAsNumber));
 arrangeProjectControls();
 if (exampleHome && building?.floors.length > 1) showFloor('all');
 else render();

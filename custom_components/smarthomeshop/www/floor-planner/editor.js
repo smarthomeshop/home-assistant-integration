@@ -522,33 +522,73 @@ var init_floor_planner_geometry = __esm({
 });
 
 // src/js/floor-planner-underlay.mjs
-function validUnderlay(image) {
-  return image && typeof image.data === "string" && image.data.length <= maxImageData && /^data:image\/jpeg;base64,[a-z\d+/]+={0,2}$/i.test(image.data) && bound(image.ratio, 0.04, 25) && bound(image.width, 0.5, 220) && bound(image.x, -250, 250) && bound(image.y, -250, 250) && bound(image.opacity, 10, 85);
+function imagePart(from, to, least = smallestPart) {
+  const x = share(Math.min(from.x, to.x)), y = share(Math.min(from.y, to.y));
+  const width = share(Math.max(from.x, to.x)) - x, height = share(Math.max(from.y, to.y)) - y;
+  return width > 0 && height > 0 && width >= least - rounding && height >= least - rounding ? { x, y, width, height } : null;
 }
-async function loadUnderlay(file) {
-  if (file.size > 12e6 || !["image/png", "image/jpeg", "image/webp"].includes(file.type)) throw new Error("Image format");
+function usablePart(part, ratio) {
+  return Boolean(part) && [part.x, part.y, part.width, part.height].every(Number.isFinite) && part.x >= 0 && part.y >= 0 && part.x + part.width <= 1 + rounding && part.y + part.height <= 1 + rounding && part.width >= smallestPart - rounding && part.height >= smallestPart - rounding && bound(ratio * part.width / part.height, 0.04, 25);
+}
+function validUnderlay(image) {
+  return image && typeof image.data === "string" && image.data.length <= maxImageData && /^data:image\/jpeg;base64,[a-z\d+/]+={0,2}$/i.test(image.data) && bound(image.ratio, 0.04, 25) && bound(image.width, 0.5, 220) && bound(image.x, -250, 250) && bound(image.y, -250, 250) && bound(image.opacity, 10, 85) && (image.roomTransparency === void 0 || bound(image.roomTransparency, 0, 100));
+}
+function underlayKind(file) {
+  if (!file || file.size > maxUnderlayFile) return null;
+  if (["image/png", "image/jpeg", "image/webp"].includes(file.type)) return "image";
+  const unknown = !file.type || file.type === "application/octet-stream";
+  return file.type === "application/pdf" || unknown && /\.pdf$/i.test(file.name ?? "") ? "pdf" : null;
+}
+function underlayFrom(source, width, height, part = wholeImage) {
+  const left = part.x * width, top = part.y * height;
+  const across = part.width * width, down = part.height * height;
+  const ratio = across / down;
+  const canvas2 = document.createElement("canvas");
+  const context = canvas2.getContext("2d");
+  let scale3 = Math.min(1, maxUnderlaySide / Math.max(across, down));
+  let data;
+  do {
+    canvas2.width = Math.max(1, Math.round(across * scale3));
+    canvas2.height = Math.max(1, Math.round(down * scale3));
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, canvas2.width, canvas2.height);
+    context.drawImage(source, left, top, across, down, 0, 0, canvas2.width, canvas2.height);
+    data = canvas2.toDataURL("image/jpeg", 0.82);
+    scale3 *= 0.76;
+  } while (data.length > maxImageData && canvas2.width > 100 && canvas2.height > 100);
+  const result = { data, ratio, x: 0, y: 0, width: startingWidth, opacity: 45, roomTransparency: defaultRoomTransparency };
+  if (!validUnderlay(result)) throw problem("size");
+  return result;
+}
+async function loadUnderlay(file, choosePage = () => 1, choosePart = () => wholeImage) {
+  const kind = underlayKind(file);
+  if (!kind) throw problem("format");
+  const chosen = async (picture, ratio) => {
+    const part = await choosePart(picture, ratio);
+    return part && (usablePart(part, ratio) ? part : wholeImage);
+  };
+  if (kind === "pdf") {
+    const { openPdf } = await import("./pdf.js?v=9cb3ffdffd71");
+    const pdf = await openPdf(await file.arrayBuffer());
+    try {
+      const page = pdf.pages > 1 ? await choosePage(pdf) : 1;
+      if (!page) return null;
+      const whole = await pdf.render(page, maxUnderlaySide);
+      const part = await chosen(whole, whole.width / whole.height);
+      if (!part) return null;
+      const canvas2 = part === wholeImage ? whole : await pdf.render(page, maxUnderlaySide, part);
+      return underlayFrom(canvas2, canvas2.width, canvas2.height);
+    } finally {
+      pdf.close();
+    }
+  }
   const url = URL.createObjectURL(file);
   try {
     const image = new Image();
     image.src = url;
     await image.decode();
-    const ratio = image.naturalWidth / image.naturalHeight;
-    const canvas2 = document.createElement("canvas");
-    const context = canvas2.getContext("2d");
-    let scale3 = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
-    let data;
-    do {
-      canvas2.width = Math.max(1, Math.round(image.naturalWidth * scale3));
-      canvas2.height = Math.max(1, Math.round(image.naturalHeight * scale3));
-      context.fillStyle = "#fff";
-      context.fillRect(0, 0, canvas2.width, canvas2.height);
-      context.drawImage(image, 0, 0, canvas2.width, canvas2.height);
-      data = canvas2.toDataURL("image/jpeg", 0.82);
-      scale3 *= 0.76;
-    } while (data.length > maxImageData && canvas2.width > 100 && canvas2.height > 100);
-    const result = { data, ratio, x: 0, y: 0, width: 10, opacity: 45 };
-    if (!validUnderlay(result)) throw new Error("Image size");
-    return result;
+    const part = await chosen(image, image.naturalWidth / image.naturalHeight);
+    return part ? underlayFrom(image, image.naturalWidth, image.naturalHeight, part) : null;
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -563,11 +603,27 @@ function calibrateUnderlay(image, start3, length, actual) {
   };
   return validUnderlay(next) ? next : null;
 }
-var bound, maxImageData;
+var bound, maxImageData, startingWidth, maxUnderlayFile, maxUnderlaySide, defaultRoomTransparency, roomTransparency, wholeImage, smallestPart, rounding, share, movedPart, problem, underlayMessage;
 var init_floor_planner_underlay = __esm({
   "src/js/floor-planner-underlay.mjs"() {
     bound = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
     maxImageData = 32e4;
+    startingWidth = 10;
+    maxUnderlayFile = 12e6;
+    maxUnderlaySide = 1600;
+    defaultRoomTransparency = 60;
+    roomTransparency = (image) => image?.roomTransparency ?? defaultRoomTransparency;
+    wholeImage = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
+    smallestPart = 0.05;
+    rounding = 1e-9;
+    share = (value) => Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+    movedPart = (part, dx, dy) => ({
+      ...part,
+      x: Math.min(1 - part.width, Math.max(0, part.x + dx)),
+      y: Math.min(1 - part.height, Math.max(0, part.y + dy))
+    });
+    problem = (code) => Object.assign(new Error(`Underlay ${code}`), { code });
+    underlayMessage = (error) => ({ password: "underlay_pdf_password", pdf: "underlay_pdf_error" })[error?.code] ?? "underlay_error";
   }
 });
 
@@ -1004,11 +1060,12 @@ function ceilingMask(rooms, sensors, heightTagSensor) {
         <rect x="${x}" y="${y}" width="${width}" height="${height}" fill="white"/>${sensorsCutout}${labelsCutout}
     </mask>`;
 }
-function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { measures = false, interactiveSensors = false, radarOptions } = {}) {
+function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false } = {}) {
   const selectedClass = (item) => selected2 === item.id ? " selected" : "";
   const activeSensor = plan2.sensors.find((item) => item.id === selected2);
   const activeRoom = plan2.rooms.find((room) => room.id === selected2) ?? (activeSensor && roomForDevice(plan2.rooms, activeSensor));
   const rooms = plan2.rooms.map((room) => `<g data-item="${room.id}" class="fp-room${selectedClass(room)}" transform="translate(${room.x} ${room.y})">
+        ${casing ? paintRoomSurface(room, 'class="fp-room-casing"', true) : ""}
         ${paintRoomSurface(room, 'class="fp-room-floor"', true)}
         ${plan2.windows?.some((window2) => window2.roomId === room.id) ? "" : paintWindows(room)}
     </g>`).join("");
@@ -1099,8 +1156,8 @@ function planeFor([a, b, c]) {
   const normal = [y * w - z * v, z * u - x * w, x * v - y * u];
   const length = Math.hypot(...normal);
   if (length <= epsilon2) return null;
-  const unit2 = normal.map((value) => value / length);
-  return { normal: unit2, offset: dot(unit2, a) };
+  const unit3 = normal.map((value) => value / length);
+  return { normal: unit3, offset: dot(unit3, a) };
 }
 function sideOf(face, plane) {
   const { normal: [x, y, z], offset: offset2 } = plane;
@@ -2966,27 +3023,27 @@ function paintAvatar(person, camera3, animate, detailed = true, occlusion = null
     return projected.get(vertex);
   };
   const intensity = (normal) => 0.79 + Math.max(0, dot2(normal, light)) * 0.25 + 0.05 * Math.max(0, dot2(normal, view2));
-  const polygon2 = (vertices, fill) => `<polygon points="${vertices.map((vertex) => point3(vertex).xy).join(" ")}" fill="${fill}" stroke="${fill}"/>`;
+  const polygon2 = (vertices, fill2) => `<polygon points="${vertices.map((vertex) => point3(vertex).xy).join(" ")}" fill="${fill2}" stroke="${fill2}"/>`;
   const addFace = (vertices, tone, normals) => {
     const normal = unit(cross2(subtract(vertices[1], vertices[0]), subtract(vertices[2], vertices[0])));
     if (!(dot2(normal, view2) > 1e-3)) return;
     const points = vertices.map(point3);
     const levels = normals?.map(intensity) ?? [intensity(normal)];
-    let fill = color(palette[tone], levels.reduce((sum, value) => sum + value, 0) / levels.length);
+    let fill2 = color(palette[tone], levels.reduce((sum, value) => sum + value, 0) / levels.length);
     if (detailed && levels.length > 1) {
       const lo = Math.min(...levels), hi = Math.max(...levels);
       const a = points[levels.indexOf(lo)], b = points[levels.indexOf(hi)];
       if (hi - lo >= 0.029 && Math.hypot(b.x - a.x, b.y - a.y) >= 0.016) {
         const id = prefix + gradients.length;
         gradients.push(`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"><stop stop-color="${color(palette[tone], lo)}"/><stop offset="1" stop-color="${color(palette[tone], hi)}"/></linearGradient>`);
-        fill = `url(#${id})`;
+        fill2 = `url(#${id})`;
       }
     }
     const [below, above] = occlusion ? splitVerticesAtHeight(vertices, floorHeight) : [[], vertices];
     faces.push({
       depth: vertices.reduce((sum, vertex) => sum + dot2(vertex, view2), 0) / vertices.length,
-      below: below.length ? polygon2(below, fill) : "",
-      above: above.length ? polygon2(above, fill) : ""
+      below: below.length ? polygon2(below, fill2) : "",
+      above: above.length ? polygon2(above, fill2) : ""
     });
   };
   const phase = person.moving && animate ? (person.stride ?? 0) / 1.04 : null;
@@ -3878,8 +3935,8 @@ function paintCoverageHeat(cells, { step: step2 = heatStep, project = null } = {
 }
 function coverageSummary(cells) {
   const total = cells.length || 1;
-  const share = (test) => Math.round(cells.filter(test).length / total * 100);
-  return { none: share((cell) => !cell.seen), one: share((cell) => cell.seen === 1), many: share((cell) => cell.seen >= 2) };
+  const share2 = (test) => Math.round(cells.filter(test).length / total * 100);
+  return { none: share2((cell) => !cell.seen), one: share2((cell) => cell.seen === 1), many: share2((cell) => cell.seen >= 2) };
 }
 var heatStep;
 var init_floor_planner_heatmap = __esm({
@@ -3902,6 +3959,196 @@ var init_floor_planner_zones = __esm({
       const available = sensorIds instanceof Set ? sensorIds : new Set(sensorIds || []);
       return (Array.isArray(zones) ? zones : []).filter((zone) => !owner(zone) || available.has(owner(zone)));
     };
+  }
+});
+
+// src/js/floor-planner-tools.mjs
+var repeatingTools, toolRepeats, chosenTool;
+var init_floor_planner_tools = __esm({
+  "src/js/floor-planner-tools.mjs"() {
+    repeatingTools = ["wall", "door", "window", "mirror", "zone"];
+    toolRepeats = (tool2, item = null) => repeatingTools.includes(tool2) && !item;
+    chosenTool = (active, chosen) => chosen === active ? "edit" : chosen;
+  }
+});
+
+// src/js/floor-planner-account.js
+var recognise;
+var init_floor_planner_account = __esm({
+  "src/js/floor-planner-account.js"() {
+    recognise = null;
+  }
+});
+
+// src/js/floor-planner-recognise.mjs
+function snappedLines(values) {
+  const lines = /* @__PURE__ */ new Map();
+  let group = [];
+  const close = () => {
+    const mean = group.reduce((sum, value) => sum + value, 0) / group.length;
+    for (const value of group) lines.set(value, mean);
+  };
+  for (const value of [...new Set(values)].sort((a, b) => a - b)) {
+    if (group.length && value - group[0] > lineSnap) {
+      close();
+      group = [];
+    }
+    group.push(value);
+  }
+  if (group.length) close();
+  return lines;
+}
+function tidy(points) {
+  const distinct = points.filter((point3, index) => {
+    const previous = points[(index + points.length - 1) % points.length];
+    return Math.hypot(point3[0] - previous[0], point3[1] - previous[1]) > 1e-6;
+  });
+  return distinct.filter((point3, index) => {
+    const before = distinct[(index + distinct.length - 1) % distinct.length];
+    const after = distinct[(index + 1) % distinct.length];
+    const cross4 = (point3[0] - before[0]) * (after[1] - point3[1]) - (point3[1] - before[1]) * (after[0] - point3[0]);
+    return Math.abs(cross4) > 1e-6;
+  });
+}
+function roomShape(points) {
+  const shape = outlineBounds(tidy(points));
+  if (shape) return isRectangle(shape) ? { x: shape.x, y: shape.y, width: shape.width, depth: shape.depth } : shape;
+  const xs = points.map(([x2]) => x2), ys = points.map(([, y2]) => y2);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const width = Math.max(...xs) - x, depth = Math.max(...ys) - y;
+  return width >= 0.5 && depth >= 0.5 && width <= 60 && depth <= 60 ? { x, y, width, depth } : null;
+}
+function nearestWall(rooms, point3) {
+  let best = null;
+  for (const room of rooms) {
+    for (const [a, b] of polygonEdges(roomCorners(room))) {
+      const position = edgePosition(a, b, point3);
+      const distance4 = Math.hypot(position.x - point3.x, position.y - point3.y);
+      if (!best || distance4 < best.distance) best = { room, distance: distance4, ...position };
+    }
+  }
+  return best;
+}
+function draftFromRecognition(recognition2, underlay, { roomName = "Room", height = 2.7, keepScale = false } = {}) {
+  if (!validUnderlay(underlay) || !recognition2 || typeof recognition2 !== "object") return null;
+  const found = (Array.isArray(recognition2.rooms) ? recognition2.rooms : []).slice(0, recognitionLimits.rooms).filter((room) => Array.isArray(room?.points) && room.points.length >= 3 && room.points.length <= recognitionLimits.corners && room.points.every(imagePoint));
+  if (!found.length) return null;
+  const realWidth = recognition2.width_m;
+  const rescaled = !keepScale && Number.isFinite(realWidth) ? { ...underlay, width: realWidth } : null;
+  const scaled = Boolean(rescaled && validUnderlay(rescaled));
+  const image = scaled ? rescaled : underlay;
+  const across = ([x]) => x, down = ([, y]) => y / image.ratio;
+  const all = found.flatMap((room) => room.points);
+  const columns = snappedLines(all.map(across)), rows = snappedLines(all.map(down));
+  const onPlan = (u, v) => [millimetres(image.x + u * image.width), millimetres(image.y + v * image.width)];
+  const rooms = [];
+  let skipped = 0;
+  for (const room of found) {
+    const shape = roomShape(room.points.map((point3) => onPlan(columns.get(across(point3)), rows.get(down(point3)))));
+    if (!shape) {
+      skipped++;
+      continue;
+    }
+    const name = typeof room.name === "string" && room.name.trim() ? room.name.trim().slice(0, 48) : `${roomName} ${rooms.length + 1}`;
+    rooms.push({ ...shape, id: newId(), name, height });
+  }
+  if (!rooms.length) return null;
+  const reach = wallReach * image.width;
+  const openings = (list2, minimum, maximum, extra) => (Array.isArray(list2) ? list2 : []).slice(0, recognitionLimits.openings).flatMap((item) => {
+    if (!imagePoint(item?.from) || !imagePoint(item?.to)) return [];
+    const from = onPlan(across(item.from), down(item.from)), to = onPlan(across(item.to), down(item.to));
+    const wall = nearestWall(rooms, { x: (from[0] + to[0]) / 2, y: (from[1] + to[1]) / 2 });
+    if (!wall || wall.distance > reach) return [];
+    const width = millimetres(Math.min(maximum, wall.length, Math.max(minimum, Math.hypot(to[0] - from[0], to[1] - from[1]))));
+    if (width < minimum) return [];
+    const start3 = Math.max(0, Math.min(wall.length - width, wall.along - width / 2));
+    const [dx, dy] = [(wall.b[0] - wall.a[0]) / wall.length, (wall.b[1] - wall.a[1]) / wall.length];
+    return [{
+      id: newId(),
+      roomId: wall.room.id,
+      width,
+      angle: degrees(wall.angle),
+      x: millimetres(wall.a[0] + dx * start3),
+      y: millimetres(wall.a[1] + dy * start3),
+      ...extra
+    }];
+  });
+  return {
+    underlay: image,
+    rooms,
+    doors: openings(recognition2.doors, 0.5, 2, {}),
+    windows: openings(recognition2.windows, 0.1, 8, { base: defaultWindowSill, height: 1 }),
+    scaled,
+    skipped
+  };
+}
+function planWithDraft(plan2, draft) {
+  const rooms = draft.rooms.slice(0, Math.max(0, most - plan2.rooms.length));
+  if (!rooms.length) return null;
+  const kept = new Set(rooms.map((room) => room.id));
+  const fits = (items, present) => items.filter((item) => kept.has(item.roomId)).slice(0, Math.max(0, most - present));
+  const doors = fits(draft.doors, plan2.doors.length), windows2 = fits(draft.windows, plan2.windows?.length ?? 0);
+  const outlined = rooms.some((room) => room.outline) ? Math.max(2, plan2.version) : plan2.version;
+  const base = { ...plan2, underlay: draft.underlay, rooms: [...plan2.rooms, ...rooms] };
+  const full = {
+    ...base,
+    version: windows2.length ? 3 : outlined,
+    doors: [...plan2.doors, ...doors],
+    ...windows2.length ? { windows: [...plan2.windows ?? [], ...windows2] } : {}
+  };
+  if (validPlan(full)) return full;
+  const bare = { ...base, version: outlined };
+  return validPlan(bare) ? bare : null;
+}
+function recognitionNote(copy2, { rooms, quota }, number2 = String) {
+  const lines = [fill(copy2.recognise_done, { count: number2(rooms) })];
+  if (Number.isFinite(quota?.used) && Number.isFinite(quota?.limit)) {
+    lines.push(fill(copy2.recognise_quota, { used: number2(quota.used), limit: number2(quota.limit) }));
+  }
+  return lines.filter(Boolean).join(" ");
+}
+function roomsWaitingForScale(recognition2) {
+  const rooms = Array.isArray(recognition2?.rooms) ? recognition2.rooms : [];
+  return rooms.slice(0, recognitionLimits.rooms).filter((room) => Array.isArray(room?.points) && room.points.length >= 3 && room.points.length <= recognitionLimits.corners && room.points.every(imagePoint)).length;
+}
+function recognitionProblem(copy2, error, locale) {
+  const code = error?.code;
+  if (code === "cancelled") return "";
+  if (code === "quota_exceeded") {
+    const date = new Date(error.quota?.resets_at ?? NaN);
+    return fill(copy2.recognise_error_quota, {
+      limit: Number.isFinite(error.quota?.limit) ? String(error.quota.limit) : "",
+      date: Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(locale, { day: "numeric", month: "long" })
+    }).replace(/\s+/g, " ").trim();
+  }
+  return copy2[{
+    daily_limit_exceeded: "recognise_error_daily",
+    rate_limited: "recognise_error_busy",
+    no_rooms_found: "recognise_error_none",
+    account_required: "recognise_error_account",
+    account_invalid: "recognise_error_account",
+    popup_blocked: "recognise_error_popup"
+  }[code] ?? "recognise_error_failed"] ?? "";
+}
+var recognitionLimits, lineSnap, wallReach, unit2, imagePoint, millimetres, degrees, isRectangle, most, fill, usualPace, recognitionProgress, recognitionWaiting;
+var init_floor_planner_recognise = __esm({
+  "src/js/floor-planner-recognise.mjs"() {
+    init_floor_planner_geometry();
+    init_floor_planner_model();
+    init_floor_planner_underlay();
+    recognitionLimits = { rooms: 40, corners: 24, openings: 80 };
+    lineSnap = 0.012;
+    wallReach = 0.03;
+    unit2 = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
+    imagePoint = (value) => Array.isArray(value) && value.length === 2 && unit2(value[0]) && unit2(value[1]);
+    millimetres = (value) => Math.round(value * 1e3) / 1e3;
+    degrees = (value) => (Math.round(value * 100) / 100 % 360 + 360) % 360;
+    isRectangle = ({ width, depth, outline }) => outline.length === 4 && outline.every(([x, y]) => (Math.abs(x) < 1e-6 || Math.abs(x - width) < 1e-6) && (Math.abs(y) < 1e-6 || Math.abs(y - depth) < 1e-6));
+    most = 80;
+    fill = (text, values) => Object.entries(values).reduce((line, [key, value]) => line.replaceAll(`:${key}`, value), text ?? "");
+    usualPace = 11e3;
+    recognitionProgress = (elapsed) => Math.min(97, Math.round(100 * (1 - Math.exp(-Math.max(0, Number(elapsed) || 0) / usualPace))));
+    recognitionWaiting = (copy2, rooms, number2 = String) => fill(copy2.recognise_needs_scale, { count: number2(rooms) });
   }
 });
 
@@ -4308,7 +4555,7 @@ var init_floor_planner_advice_ui = __esm({
 });
 
 // src/js/floor-planner-roomplan.mjs
-var RoomPlanImportError, isRecord, surfaces, matrix, dimensions, centre, category, roomLabel, wallSegments2, distance3, orderedSegments, polygonArea, cleanPolygon, polygonFromFloor, polygonFromWalls, centreRoom, wallsFromPoints, nearestWall, furnitureMap, titleCase, buildRoom, roomGroups, isAppleRoomPlan, parseAppleRoomPlan;
+var RoomPlanImportError, isRecord, surfaces, matrix, dimensions, centre, category, roomLabel, wallSegments2, distance3, orderedSegments, polygonArea, cleanPolygon, polygonFromFloor, polygonFromWalls, centreRoom, wallsFromPoints, nearestWall2, furnitureMap, titleCase, buildRoom, roomGroups, isAppleRoomPlan, parseAppleRoomPlan;
 var init_floor_planner_roomplan = __esm({
   "src/js/floor-planner-roomplan.mjs"() {
     RoomPlanImportError = class extends Error {
@@ -4485,7 +4732,7 @@ var init_floor_planner_roomplan = __esm({
       const next = points[(index + 1) % points.length];
       return { x1: Math.round(point3.x), y1: Math.round(point3.y), x2: Math.round(next.x), y2: Math.round(next.y) };
     });
-    nearestWall = (point3, points) => {
+    nearestWall2 = (point3, points) => {
       let best = null;
       points.forEach((start3, wallIndex) => {
         const end2 = points[(wallIndex + 1) % points.length];
@@ -4531,7 +4778,7 @@ var init_floor_planner_roomplan = __esm({
         const [width = key === "doors" ? 0.9 : 1.2, height = key === "doors" ? 2 : 1] = dimensions(surface);
         if (!rawCentre || !Number.isFinite(width) || width <= 0)
           return [];
-        const placement = nearestWall(shift2(rawCentre), points);
+        const placement = nearestWall2(shift2(rawCentre), points);
         if (!placement || placement.distance > 1250) {
           warnings.add("skipped_opening");
           return [];
@@ -4665,7 +4912,7 @@ function importRoomGeometry(data, copy2) {
         id: newId(),
         roomId: room.id,
         width,
-        angle: degrees(Math.atan2(dy, dx) * 180 / Math.PI + (reverse ? 180 : 0)),
+        angle: degrees2(Math.atan2(dy, dx) * 180 / Math.PI + (reverse ? 180 : 0)),
         x: a[0] + dx * t,
         y: a[1] + dy * t
       };
@@ -4683,7 +4930,7 @@ function importRoomGeometry(data, copy2) {
       }
       const kind = firstKind(item.typeId ?? item.type);
       const [x, y] = convert(item);
-      const angle2 = degrees(rotation + (finite(item.rotationDeg) ? item.rotationDeg : finite(item.rotation) ? item.rotation : 0));
+      const angle2 = degrees2(rotation + (finite(item.rotationDeg) ? item.rotationDeg : finite(item.rotation) ? item.rotation : 0));
       const object = furnitureAt(kind, safeName(item.name, copy2.furniture_items[kind]), { x, y }, angle2);
       const size = (value) => finite(value) && value >= 20 && value <= 12e3 ? meters(value) : null;
       plan2.furniture.push({
@@ -4726,7 +4973,7 @@ function importRoomGeometry(data, copy2) {
   if (!validBuilding(project)) throw new Error("Invalid imported plan");
   return { project: results.length === 1 && results[0].level === 0 ? results[0].plan : project, backup: Boolean(backup), review };
 }
-var degrees, finite, point2, array, meters, safeName, furnitureTypes, firstKind;
+var degrees2, finite, point2, array, meters, safeName, furnitureTypes, firstKind;
 var init_floor_planner_import = __esm({
   "src/js/floor-planner-import.mjs"() {
     init_floor_planner_building();
@@ -4734,7 +4981,7 @@ var init_floor_planner_import = __esm({
     init_floor_planner_geometry();
     init_floor_planner_model();
     init_floor_planner_roomplan();
-    degrees = (value) => (value % 360 + 360) % 360;
+    degrees2 = (value) => (value % 360 + 360) % 360;
     finite = (value) => typeof value === "number" && Number.isFinite(value);
     point2 = (value) => value && finite(value.x) && finite(value.y);
     array = (value) => Array.isArray(value) ? value : [];
@@ -5037,6 +5284,39 @@ var init_floor_planner_order = __esm({
 
 // src/js/floor-planner.js
 var floor_planner_exports = {};
+function addRecognisedRooms(answer, keepScale) {
+  const draft = draftFromRecognition(answer?.recognition, plan.underlay, { roomName: copy.room, keepScale });
+  const next = draft && planWithDraft(plan, draft);
+  if (!next) throw Object.assign(new Error("No rooms"), { code: draft ? "recognition_failed" : "no_rooms_found" });
+  remember();
+  const added = next.rooms.length - plan.rooms.length;
+  plan = next;
+  setTool("edit");
+  finish();
+  fit();
+  showRecognition("idle", recognitionNote(copy, { rooms: added, quota: answer.quota }, (value) => number.format(value)));
+}
+function showRecognition(state, message = "") {
+  if (!recognition) return;
+  recognition.state = state;
+  recognition.button.textContent = copy[state === "armed" ? "recognise_send" : "recognise_action"];
+  recognition.button.disabled = state === "busy";
+  recognition.button.toggleAttribute("aria-busy", state === "busy");
+  recognition.note.textContent = state === "armed" ? `${copy.recognise_privacy} ${copy.recognise_account}` : state === "busy" ? copy.recognise_busy : message;
+  recognition.note.hidden = !recognition.note.textContent;
+  clearInterval(recognition.timer);
+  recognition.meter.hidden = state !== "busy";
+  recognition.scan.toggleAttribute("hidden", state !== "busy");
+  if (state !== "busy") return;
+  const started = performance.now();
+  const tick = () => {
+    const done = recognitionProgress(performance.now() - started);
+    recognition.bar.value = done;
+    recognition.share.textContent = recognition.percentage.format(done / 100);
+  };
+  tick();
+  recognition.timer = setInterval(tick, 250);
+}
 function readProject(project) {
   const localized = localizeSampleRooms(project, copy.names, copy.sample_name_languages);
   building = localized.format === buildingFormat ? localized : null;
@@ -5106,6 +5386,7 @@ function setTool(next, model = null, device = null) {
   if (interaction?.vertex !== void 0) interaction = null;
   lastRoomClick = null;
   tool = next;
+  placedWithTool = 0;
   placementDevice = device;
   if (next !== "place") placementAreaId = null;
   if (next !== "edit") closeSensorTip();
@@ -5133,6 +5414,10 @@ function setTool(next, model = null, device = null) {
   updateTools();
 }
 function hint() {
+  const message = toolHint();
+  return toolRepeats(tool, choice) && !start2 && !roomDraft.length ? `${message} ${copy.tool_repeat}` : message;
+}
+function toolHint() {
   if (tool === "place") return `${copy.sensor_hint} · ${placementDevice?.name ?? devices[choice].name}`;
   if (tool === "furnish" || tool === "move_furniture") {
     const name = tool === "furnish" ? copy.furniture_items[choice] : selectedItem().item?.name;
@@ -5153,6 +5438,7 @@ function updateTools() {
   if (status.textContent !== message) status.textContent = message;
   status.hidden = tool === "edit";
   element("fp-draw-keys").hidden = tool !== "room" && tool !== "wall";
+  element("fp-tool-stop").hidden = tool !== "wall";
   canvas.dataset.tool = tool;
   renderRoomHandles();
   root.querySelectorAll("[data-sensor-marker]").forEach((marker) => {
@@ -5162,11 +5448,14 @@ function updateTools() {
   const placing = tool === "place";
   const moving = tool === "move_item";
   const opening = placingOpening();
+  const repeating = toolRepeats(tool, choice);
+  const leave = copy[repeating && placedWithTool ? "tool_done" : "cancel_place"];
   const placementBar = element("fp-placement-bar");
   placementBar.hidden = view !== "2d" || !placing && !furnishing && !moving && !opening;
   const wallPreview = opening && placementPoint ? renderOpeningPreview(placementPoint) : null;
   element("fp-place-title").textContent = placing ? copy.place_model.replace(":model", placementDevice?.name ?? devices[choice].name) : opening ? copy[tool] : moving ? copy.move_item : message;
-  element("fp-place-help").textContent = opening ? openingHelp(wallPreview) : moving ? message : placing ? copy[placementPoint ? "place_confirm_hint" : !integration && !devices[choice].defaultRadar ? "place_marker_only" : matchMedia("(pointer: coarse)").matches ? "place_touch" : "place_hover"] + (!placementPoint && devices[choice].mount === "wall" && placementInstallation !== "freestanding" ? " " + copy.place_wall_snap : "") : "";
+  element("fp-place-help").textContent = opening ? openingHelp(wallPreview) + (repeating && !placementPoint ? ` ${copy.tool_repeat}` : "") : moving ? message : placing ? copy[placementPoint ? "place_confirm_hint" : !integration && !devices[choice].defaultRadar ? "place_marker_only" : matchMedia("(pointer: coarse)").matches ? "place_touch" : "place_hover"] + (!placementPoint && devices[choice].mount === "wall" && placementInstallation !== "freestanding" ? " " + copy.place_wall_snap : "") : "";
+  element("fp-place-cancel").textContent = leave;
   const confirmPlacement = element("fp-place-confirm");
   confirmPlacement.hidden = !placing && !opening || !placementPoint;
   confirmPlacement.disabled = opening && Boolean(placementPoint) && !wallPreview?.position;
@@ -5206,6 +5495,7 @@ function updateTools() {
   const removeCorner = root.querySelector('[data-action="remove_corner"]');
   removeCorner.hidden = !editingOutline;
   removeCorner.disabled = roomDraft.length <= 3;
+  root.querySelector('[data-action="cancel_outline"]').textContent = roomDraft.length ? copy.cancel_place : leave;
   board.setAttribute("aria-describedby", editingOutline ? "fp-keys fp-outline-keys" : placing || opening ? "fp-place-help fp-keys" : "fp-keys");
   element("fp-place-center").hidden = Boolean(placementPoint) || !(furnishing && plan.rooms.length) && (tool !== "place" || !placementRoom() || devices[choice].mount !== "ceiling");
   element("fp-space-place-center").hidden = !furnishing || !plan.rooms.length;
@@ -5698,9 +5988,9 @@ function sensorNote(item, room) {
   if (status === "height") {
     const range = ceilingReferenceRange(item.radar);
     const estimated = radarFields(room, item, coverageRadarOptions).some((field2) => field2.estimatedHeight);
-    const fill = (text) => text.replaceAll(":low", number.format(range[0])).replaceAll(":high", number.format(range[1]));
-    if (estimated && range && copy.height_estimate) return Object.assign(new String(fill(copy.height_estimate)), { advice: true });
-    return [copy.height_note, range && fill(copy.ceiling_range)].filter(Boolean).join(" ");
+    const fill2 = (text) => text.replaceAll(":low", number.format(range[0])).replaceAll(":high", number.format(range[1]));
+    if (estimated && range && copy.height_estimate) return Object.assign(new String(fill2(copy.height_estimate)), { advice: true });
+    return [copy.height_note, range && fill2(copy.ceiling_range)].filter(Boolean).join(" ");
   }
   return room.ceiling ? copy.ceiling_local_range : "";
 }
@@ -6164,14 +6454,133 @@ function renderUnderlay() {
     return;
   }
   if (image.getAttribute("href") !== underlay.data) image.setAttribute("href", underlay.data);
-  for (const [key, value] of Object.entries({
-    x: underlay.x,
-    y: underlay.y,
-    width: underlay.width,
-    height: underlay.width / underlay.ratio,
-    opacity: underlay.opacity / 100
-  })) image.setAttribute(key, value);
+  if (recognition && recognition.image !== underlay.data && recognition.state !== "busy") {
+    recognition.image = underlay.data;
+    recognition.pending = null;
+    showRecognition("idle");
+  }
+  const place = { x: underlay.x, y: underlay.y, width: underlay.width, height: underlay.width / underlay.ratio };
+  for (const [key, value] of Object.entries({ ...place, opacity: underlay.opacity / 100 })) image.setAttribute(key, value);
+  if (recognition) for (const [key, value] of Object.entries(place)) recognition.frame.setAttribute(key, value);
   element("fp-underlay-opacity").value = underlay.opacity;
+  element("fp-underlay-rooms").value = roomTransparency(underlay);
+  showRoomTransparency(roomTransparency(underlay));
+}
+function showRoomTransparency(percent) {
+  canvas.style.setProperty("--fp-room-fill", (100 - percent) / 100);
+}
+function choosePdfPage(pdf) {
+  const input = element("fp-pdf-page");
+  const preview = element("fp-pdf-preview");
+  const status = element("fp-pdf-status");
+  const use = pdfPages.querySelector('button[type="submit"]');
+  let latest = 0;
+  const show = async () => {
+    if (!input.validity.valid) return;
+    const turn = ++latest;
+    const canvas2 = await pdf.render(input.valueAsNumber, 440).catch(() => null);
+    if (turn !== latest) return;
+    preview.replaceChildren(...canvas2 ? [canvas2] : []);
+    status.textContent = canvas2 ? "" : copy.underlay_pdf_error;
+    use.disabled = !canvas2;
+  };
+  input.max = pdf.pages;
+  input.value = 1;
+  element("fp-pdf-page-label").textContent = copy.underlay_pdf_page.replace(":count", number.format(pdf.pages));
+  return new Promise((resolve) => {
+    input.oninput = show;
+    pdfPages.onclose = () => {
+      latest += 1;
+      input.oninput = pdfPages.onclose = null;
+      preview.replaceChildren();
+      resolve(pdfPages.returnValue === "use" ? input.valueAsNumber : null);
+    };
+    pdfPages.returnValue = "";
+    pdfPages.showModal();
+    show();
+  });
+}
+function chooseImagePart(picture, ratio) {
+  const stage2 = element("fp-crop-stage"), box2 = element("fp-crop-box");
+  const whole = imageParts.querySelector('button[value="whole"]'), use = imageParts.querySelector('button[value="part"]');
+  const step2 = 0.02;
+  let part = null, drag = null;
+  const show = () => {
+    const usable = usablePart(part, ratio);
+    box2.hidden = !part;
+    if (part) {
+      Object.assign(box2.style, {
+        left: `${part.x * 100}%`,
+        top: `${part.y * 100}%`,
+        width: `${part.width * 100}%`,
+        height: `${part.height * 100}%`
+      });
+    }
+    use.disabled = !usable;
+    use.classList.toggle("fp-primary", usable);
+    whole.classList.toggle("fp-primary", !usable);
+  };
+  const at = (event) => {
+    const bounds = stage2.getBoundingClientRect();
+    return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
+  };
+  const far = () => ({ x: part.x + part.width, y: part.y + part.height });
+  stage2.style.setProperty("--fp-crop-ratio", ratio);
+  stage2.prepend(picture);
+  show();
+  return new Promise((resolve) => {
+    stage2.onpointerdown = (event) => {
+      if (event.button) return;
+      const point3 = at(event), corner = event.target.dataset.corner;
+      if (corner && part) {
+        drag = { from: { x: corner.includes("w") ? far().x : part.x, y: corner.includes("n") ? far().y : part.y } };
+      } else if (event.target === box2 && part) {
+        drag = { grip: point3, start: part };
+      } else {
+        drag = { from: point3 };
+        part = null;
+        show();
+      }
+      stage2.setPointerCapture(event.pointerId);
+    };
+    stage2.onpointermove = (event) => {
+      if (!drag) return;
+      const point3 = at(event);
+      part = drag.from ? imagePart(drag.from, point3, 0) : movedPart(drag.start, point3.x - drag.grip.x, point3.y - drag.grip.y);
+      show();
+    };
+    stage2.onpointerup = stage2.onpointercancel = () => {
+      if (!drag) return;
+      drag = null;
+      if (part && !imagePart(part, far())) part = null;
+      show();
+    };
+    stage2.onkeydown = (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        (use.disabled ? whole : use).click();
+        return;
+      }
+      const [dx, dy] = { ArrowLeft: [-step2, 0], ArrowRight: [step2, 0], ArrowUp: [0, -step2], ArrowDown: [0, step2] }[event.key] ?? [];
+      const removes = part && ["Delete", "Backspace"].includes(event.key);
+      if (dx === void 0 && !removes) return;
+      event.preventDefault();
+      if (removes) part = null;
+      else if (!part) part = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+      else if (event.shiftKey) part = imagePart(part, { x: far().x + dx, y: far().y + dy }) ?? part;
+      else part = movedPart(part, dx, dy);
+      show();
+    };
+    imageParts.onclose = () => {
+      stage2.onpointerdown = stage2.onpointermove = stage2.onpointerup = stage2.onpointercancel = stage2.onkeydown = null;
+      imageParts.onclose = null;
+      picture.remove();
+      const answer = imageParts.returnValue;
+      resolve(answer === "part" && usablePart(part, ratio) ? part : answer === "whole" ? wholeImage : null);
+    };
+    imageParts.returnValue = "";
+    imageParts.showModal();
+  });
 }
 function renderDrawing() {
   renderRoomHandles();
@@ -6292,8 +6701,8 @@ function heatCells(floorPlan) {
   }
   const cells = heatCache.get(key);
   if (floorPlan === plan) {
-    const share = coverageSummary(cells);
-    heatLegend.innerHTML = ["none", "one", "many"].map((level) => `<span data-seen="${level}">${escapeText(copy["heatmap_" + level])} ${share[level]}%</span>`).join("");
+    const share2 = coverageSummary(cells);
+    heatLegend.innerHTML = ["none", "one", "many"].map((level) => `<span data-seen="${level}">${escapeText(copy["heatmap_" + level])} ${share2[level]}%</span>`).join("");
   }
   return cells;
 }
@@ -6351,7 +6760,12 @@ function renderBeam() {
       selected,
       number,
       focus && { ...focus, profile: profile2 },
-      { measures: showMeasures, interactiveSensors: true, radarOptions: coverageRadarOptions }
+      {
+        measures: showMeasures,
+        interactiveSensors: true,
+        radarOptions: coverageRadarOptions,
+        casing: Boolean(plan.underlay)
+      }
     ) + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : "") + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ""));
   } else if (layer) layer.innerHTML = focus ? paintBeam(focus, spaceCamera, profile2) : "";
   const panelKey = `${key}:${beamChoice}`;
@@ -6500,9 +6914,9 @@ function renderPerson() {
   const distanceLabel = route.distance ? copy.sim_route_distance.replace(":covered", tenth.format(route.covered)).replace(":total", tenth.format(route.distance)) : copy.sim_route_empty;
   const routeLabel = route.uncertain > 0.049 ? distanceLabel + " · " + copy.sim_risk_route.replace(":distance", tenth.format(route.uncertain)) : distanceLabel;
   if (distance4.textContent !== routeLabel) distance4.textContent = routeLabel;
-  const fill = element("fp-route-fill");
-  fill.parentElement.hidden = !route.distance;
-  fill.style.width = route.distance ? `${Math.min(100, route.covered / route.distance * 100)}%` : "";
+  const fill2 = element("fp-route-fill");
+  fill2.parentElement.hidden = !route.distance;
+  fill2.style.width = route.distance ? `${Math.min(100, route.covered / route.distance * 100)}%` : "";
   root.querySelector('[data-action="clear_walk"]').disabled = !route.distance;
   root.querySelectorAll("[data-person-pose]").forEach((button) => {
     const pressed = String(button.dataset.personPose === person.pose);
@@ -7445,6 +7859,10 @@ function makeItem(type, values) {
   remember();
   plan = candidate;
   selected = item.id;
+  if (toolRepeats(tool, choice) && type === `${tool}s`) {
+    continueTool();
+    return true;
+  }
   setTool("edit");
   finish();
   if (type === "rooms") {
@@ -7459,6 +7877,18 @@ function makeItem(type, values) {
     if (!items.length) focusNext();
   }
   return true;
+}
+function continueTool() {
+  placedWithTool += 1;
+  start2 = null;
+  placementPoint = null;
+  roomDraft = [];
+  ghost.replaceChildren();
+  ghost.removeAttribute("data-invalid");
+  ghost.removeAttribute("data-preview");
+  finish();
+  showInspectorStart(root.hasAttribute("data-panel"));
+  board.focus({ preventScroll: true });
 }
 function cornerHitRadius() {
   return Math.min(0.22, canvas.viewBox.baseVal.width * 14 / Math.max(1, canvas.clientWidth));
@@ -7564,6 +7994,10 @@ function saveRoomDraft() {
     remember();
     plan = candidate;
     selected = item2.id;
+    if (toolRepeats(tool, choice)) {
+      continueTool();
+      return;
+    }
     setTool("edit");
     finish();
     showInspectorStart();
@@ -8135,7 +8569,7 @@ async function openOrder(opener) {
     orderStep.disabled = false;
   }
 }
-var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
+var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, pdfPages, imageParts, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, recogniseRooms, recognition, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, placedWithTool, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
 var init_floor_planner2 = __esm({
   "src/js/floor-planner.js"() {
     init_floor_planner();
@@ -8161,6 +8595,9 @@ var init_floor_planner2 = __esm({
     init_floor_planner_heatmap();
     init_floor_planner_zones();
     init_floor_planner_underlay();
+    init_floor_planner_tools();
+    init_floor_planner_account();
+    init_floor_planner_recognise();
     init_floor_planner_home_assistant();
     element = (id) => document.getElementById(id);
     root = element("floor-planner");
@@ -8181,6 +8618,8 @@ var init_floor_planner2 = __esm({
     simMenus = [simCast, simTools];
     simReading = root.querySelector('[data-action="show_readings"]');
     sensorEdit = element("fp-sensor-edit");
+    pdfPages = element("fp-pdf-pages");
+    imageParts = element("fp-crop");
     sensorEditForm = element("fp-sensor-edit-form");
     projectMenu = element("fp-project-menu");
     projectTrigger = projectMenu.querySelector("summary");
@@ -8203,6 +8642,56 @@ var init_floor_planner2 = __esm({
     copy = JSON.parse(element("fp-copy").textContent);
     integration = globalThis.floorPlannerHost;
     appPlanner = integration?.mode === "app";
+    recogniseRooms = (integration ? integration.recognise : recognise) || null;
+    recognition = recogniseRooms && copy.recognise_action ? (() => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "fp-recognise";
+      button.dataset.action = "recognise_underlay";
+      button.textContent = copy.recognise_action;
+      const note = document.createElement("p");
+      note.className = "fp-note fp-recognise-note";
+      note.setAttribute("role", "status");
+      const controls = document.getElementById("fp-underlay-controls");
+      controls.insertBefore(button, controls.querySelector('[data-action="scale_underlay"]'));
+      const meter = document.createElement("span");
+      meter.className = "fp-recognise-meter";
+      meter.hidden = true;
+      const bar = document.createElement("progress");
+      bar.max = 100;
+      bar.setAttribute("aria-label", copy.recognise_action);
+      const share2 = document.createElement("span");
+      share2.setAttribute("aria-hidden", "true");
+      meter.append(bar, share2);
+      controls.append(meter, note);
+      const drawn = (name) => document.createElementNS("http://www.w3.org/2000/svg", name);
+      const scan = drawn("g");
+      scan.setAttribute("class", "fp-underlay-scan");
+      scan.setAttribute("pointer-events", "none");
+      scan.setAttribute("hidden", "");
+      const light = drawn("linearGradient");
+      light.id = "fp-underlay-scan-light";
+      for (const [offset2, opacity] of [[0, 0], [0.5, 0.55], [1, 0]]) {
+        const stop = drawn("stop");
+        stop.setAttribute("offset", offset2);
+        stop.setAttribute("stop-opacity", opacity);
+        light.append(stop);
+      }
+      const frame = drawn("svg");
+      const tint = drawn("rect"), beam = drawn("rect");
+      tint.setAttribute("class", "fp-underlay-scan-tint");
+      beam.setAttribute("class", "fp-underlay-scan-beam");
+      beam.setAttribute("fill", "url(#fp-underlay-scan-light)");
+      for (const [shape, width] of [[tint, "100%"], [beam, "16%"]]) {
+        shape.setAttribute("width", width);
+        shape.setAttribute("height", "100%");
+      }
+      frame.append(tint, beam);
+      scan.append(light, frame);
+      document.getElementById("fp-underlay").after(scan);
+      const percentage = new Intl.NumberFormat(root.dataset.locale, { style: "percent" });
+      return { button, note, meter, bar, share: share2, scan, frame, percentage, timer: 0, state: "idle", image: null, pending: null };
+    })() : null;
     coverageRadarOptions = { allowHeightEstimate: true };
     coverageEstimateLabel = integration?.coverageEstimate ?? copy.coverage_estimate ?? copy.height_note;
     coverageEstimateLegend = document.createElement("span");
@@ -8245,6 +8734,7 @@ var init_floor_planner2 = __esm({
     tool = "edit";
     placingOpening = () => Object.hasOwn(openingDefaults, tool);
     choice = null;
+    placedWithTool = 0;
     start2 = null;
     roomDraft = [];
     draftCorner = 0;
@@ -8913,6 +9403,35 @@ var init_floor_planner2 = __esm({
         finish();
         fit();
         board.focus({ preventScroll: true });
+        const waiting = recognition?.pending;
+        if (waiting) {
+          recognition.pending = null;
+          try {
+            addRecognisedRooms(waiting, true);
+          } catch (error) {
+            showRecognition("idle", recognitionProblem(copy, error, root.dataset.locale));
+          }
+        }
+      },
+      // Two clicks: the first says where the image goes, the second sends it.
+      // The request starts inside the click, so a sign-in window may open.
+      recognise_underlay() {
+        const underlay = plan.underlay;
+        if (!recognition || !underlay || recognition.state === "busy") return;
+        if (recognition.state !== "armed") return showRecognition("armed");
+        showRecognition("busy");
+        new Promise((resolve) => resolve(recogniseRooms(underlay.data))).then((answer) => {
+          if (plan.underlay?.data !== underlay.data) return showRecognition("idle");
+          const measured = plan.underlay.width !== startingWidth;
+          const waiting = roomsWaitingForScale(answer?.recognition);
+          if (!waiting) throw Object.assign(new Error("No rooms"), { code: "no_rooms_found" });
+          if (!measured && !draftFromRecognition(answer.recognition, plan.underlay)?.scaled) {
+            recognition.pending = answer;
+            showRecognition("idle", recognitionWaiting(copy, waiting, (value) => number.format(value)));
+            return actions.scale_underlay();
+          }
+          addRecognisedRooms(answer, measured);
+        }).catch((error) => showRecognition("idle", recognitionProblem(copy, error, root.dataset.locale)));
       },
       remove_underlay() {
         remember();
@@ -9151,6 +9670,9 @@ var init_floor_planner2 = __esm({
         setTool("edit");
         board.focus({ preventScroll: true });
       },
+      stop_tool() {
+        actions.cancel_outline();
+      },
       auto_walk() {
         const wasAutomatic = autoWalk && !autoWalk.test || stairWalk?.repeat;
         stopStairWalk();
@@ -9181,6 +9703,12 @@ var init_floor_planner2 = __esm({
       },
       close_sensor_edit() {
         sensorEdit.close();
+      },
+      close_pdf_pages() {
+        pdfPages.close();
+      },
+      close_crop() {
+        imageParts.close();
       },
       second_person() {
         toggleWalker("woman");
@@ -9429,7 +9957,7 @@ var init_floor_planner2 = __esm({
       }
       if (next) {
         roomFormOpen = false;
-        setTool(next);
+        setTool(chosenTool(tool, next));
         if (fromToolbox || !event.detail && next !== "edit") board.focus({ preventScroll: true });
       }
       const registered = integration && haDevice(button.dataset.haDevice);
@@ -9524,10 +10052,17 @@ var init_floor_planner2 = __esm({
       }
       if (target.id === "fp-underlay-file" && target.files[0]) {
         const file = target.files[0], original = plan;
+        const status = element(showStart ? "fp-start-status" : "fp-save");
         target.value = "";
+        const opening = underlayKind(file) === "pdf";
+        status.toggleAttribute("data-busy", opening);
+        if (opening) status.textContent = copy.underlay_pdf_opening;
         try {
-          const image = await loadUnderlay(file);
-          if (plan !== original) return;
+          const image = await loadUnderlay(file, choosePdfPage, imageParts ? chooseImagePart : void 0);
+          if (!image || plan !== original) {
+            status.textContent = "";
+            return;
+          }
           if (showStart) {
             replacePlan({ ...blankPlan(copy.names.untitled), underlay: image });
           } else {
@@ -9539,15 +10074,18 @@ var init_floor_planner2 = __esm({
           setTool("edit");
           finish();
           fit();
+          status.textContent = "";
           element("fp-save").textContent = copy.underlay_ready;
-        } catch {
-          element(showStart ? "fp-start-status" : "fp-save").textContent = copy.underlay_error;
+        } catch (error) {
+          status.textContent = copy[underlayMessage(error)];
+        } finally {
+          status.removeAttribute("data-busy");
         }
         return;
       }
-      if (target.id === "fp-underlay-opacity" && plan.underlay) {
+      if (["fp-underlay-opacity", "fp-underlay-rooms"].includes(target.id) && plan.underlay) {
         remember();
-        plan.underlay.opacity = target.valueAsNumber;
+        plan.underlay[target.id === "fp-underlay-rooms" ? "roomTransparency" : "opacity"] = target.valueAsNumber;
         save();
         renderUnderlay();
         return;
@@ -9846,6 +10384,7 @@ var init_floor_planner2 = __esm({
     element("fp-underlay-opacity").addEventListener("input", (event) => {
       element("fp-underlay").setAttribute("opacity", event.target.valueAsNumber / 100);
     });
+    element("fp-underlay-rooms").addEventListener("input", (event) => showRoomTransparency(event.target.valueAsNumber));
     arrangeProjectControls();
     if (exampleHome && building?.floors.length > 1) showFloor("all");
     else render();

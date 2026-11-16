@@ -141,11 +141,15 @@ function ceilingMask(rooms, sensors, heightTagSensor) {
 export const sensorMarkerAttributes = (item, index) =>
     `data-sensor-marker="" tabindex="0" role="button" aria-haspopup="dialog" aria-label="${String(index + 1).padStart(2, '0')} · ${devices[item.model].name}"`;
 
-export function paintPlan(plan, showCoverage, selected, number, focus = null, { measures = false, interactiveSensors = false, radarOptions } = {}) {
+// With casing, every room outline gets a wider line in the floor colour under
+// it. The editor asks for that while the floors are see-through on top of an
+// image, where the outline alone would fade into a light plan.
+export function paintPlan(plan, showCoverage, selected, number, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false } = {}) {
     const selectedClass = item => selected === item.id ? ' selected' : '';
     const activeSensor = plan.sensors.find(item => item.id === selected);
     const activeRoom = plan.rooms.find(room => room.id === selected) ?? (activeSensor && roomForDevice(plan.rooms, activeSensor));
     const rooms = plan.rooms.map(room => `<g data-item="${room.id}" class="fp-room${selectedClass(room)}" transform="translate(${room.x} ${room.y})">
+        ${casing ? paintRoomSurface(room, 'class="fp-room-casing"', true) : ''}
         ${paintRoomSurface(room, 'class="fp-room-floor"', true)}
         ${plan.windows?.some(window => window.roomId === room.id) ? '' : paintWindows(room)}
     </g>`).join('');

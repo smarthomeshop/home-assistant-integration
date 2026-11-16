@@ -291,6 +291,13 @@ class FloorPlannerPage extends HTMLElement {
             deviceError: () => this.#devicesFailed,
             refreshDevices: () => this.#loadDevices(),
             asset: path => `/smarthomeshop_panel/floor-planner${path}`,
+            // Rooms found on an uploaded floor plan, through the linked
+            // SmartHomeShop account. Only administrators edit the plan.
+            recognise: this.#hass?.user?.is_admin ? async image => {
+                const answer = await this.#hass.callWS({ type: 'smarthomeshop/floor_plan/recognise', image });
+                if (answer?.error) throw Object.assign(new Error(answer.error.message), { code: answer.error.code, quota: answer.quota });
+                return answer;
+            } : undefined,
             calibrationLabel: roomId => {
                 const calibration = this.#floorPlan.rooms.find(room => room.id === roomId)?.calibration;
                 return calibration?.enabled
