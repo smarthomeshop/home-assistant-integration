@@ -4004,12 +4004,12 @@ function cellsFor(room, furniture) {
 }
 function scoreCandidate(item, room, goal, cells, furniture) {
   const mode = { presence: "presence", zones: "xy", height: "xyz" }[goal];
-  const available = radarFields(room, item);
+  const available = radarFields(room, item, { allowHeightEstimate: true });
   const fields = mode === "presence" && !available.some((field2) => field2.mode === "presence") ? available : available.filter((field2) => field2.mode === mode);
   if (!fields.length) return null;
   const origin = { ...item, z: sensorMountHeight(item, room) };
   const coverage2 = cells.map((point3) => fields.some((field2) => fieldCoversPoint(field2, item, point3)) && radarHasLineOfSight(room, item, point3) && !furnitureOcclusion(origin, point3, 0.85, furniture));
-  return { item, coverage: coverage2 };
+  return { item, coverage: coverage2, estimated: fields.some((field2) => field2.estimatedHeight) };
 }
 function layout(scored, cells, existingCoverage) {
   const combined = [...existingCoverage];
@@ -4074,6 +4074,7 @@ function adviseRoom(plan2, room, settings = defaultAdvice, obstacles = prepareAd
       });
     });
     const result = settings.goal === "climate" && candidates.length ? { sensors: [candidates.find((item) => plan2.sensors.some((sensor) => sameSensorPlacement(sensor, item))) ?? candidates[family === "wall" ? Math.min(4, candidates.length - 1) : 0]], percent: null, reachesGoal: true } : layout(candidates.map((item) => scoreCandidate(item, room, settings.goal, cells, furniture)).filter(Boolean), cells, existingCoverage);
+    const estimated = Boolean(result?.sensors?.some((item) => radarFields(room, item, { allowHeightEstimate: true }).some((field2) => field2.estimatedHeight)));
     if (!result) return [];
     const upgrade = needsScd41 && existing.some((sensor) => result.sensors.some((item) => sameSensorPlacement(sensor, item)));
     return [{
@@ -4081,6 +4082,7 @@ function adviseRoom(plan2, room, settings = defaultAdvice, obstacles = prepareAd
       family,
       upgrade,
       needsScd41,
+      estimated,
       needsSurface: family === "freestanding" && !surfaces2.length,
       unmodelled: settings.goal === "climate" ? 0 : existing.length - existingScores.length,
       sensors: result.sensors.map((item) => needsScd41 ? { ...item, climate: true } : item)
@@ -4186,6 +4188,7 @@ function openAdvisor(plan2, current, copy2, locale, place) {
                 <p class="fp-note">${copy2.installations[choice2.sensors[0].installation] ?? ""}</p>
                 ${choice2.unmodelled ? `<p class="fp-note">${copy2.advisor_unmodelled.replace(":count", number2.format(choice2.unmodelled))}</p>` : ""}
                 ${choice2.needsSurface ? `<p class="fp-note">${copy2.advisor_needs_surface}</p>` : ""}
+                ${choice2.estimated && copy2.height_estimate ? `<p class="fp-note">${copy2.height_estimate.replaceAll(":low", number2.format(2)).replaceAll(":high", number2.format(3))}</p>` : ""}
                 ${choice2.reachesGoal ? "" : `<p class="fp-note fp-warning">${copy2.advisor_partial}</p>`}
                 <details class="fp-advisor-positions"><summary>${copy2.advisor_positions}</summary>
                     <p class="fp-note">${copy2.advisor_origin}<br>${choice2.sensors.map((item, index) => `${index + 1} · X ${number2.format(item.x - active.x)} m / Y ${number2.format(item.y - active.y)} m`).join("<br>")}</p>
@@ -5695,11 +5698,9 @@ function sensorNote(item, room) {
   if (status === "height") {
     const range = ceilingReferenceRange(item.radar);
     const estimated = radarFields(room, item, coverageRadarOptions).some((field2) => field2.estimatedHeight);
-    return [
-      copy.height_note,
-      range && copy.ceiling_range.replace(":low", number.format(range[0])).replace(":high", number.format(range[1])),
-      estimated && integration.coverageEstimate ? integration.coverageEstimate + "." : ""
-    ].filter(Boolean).join(" ");
+    const fill = (text) => text.replaceAll(":low", number.format(range[0])).replaceAll(":high", number.format(range[1]));
+    if (estimated && range && copy.height_estimate) return Object.assign(new String(fill(copy.height_estimate)), { advice: true });
+    return [copy.height_note, range && fill(copy.ceiling_range)].filter(Boolean).join(" ");
   }
   return room.ceiling ? copy.ceiling_local_range : "";
 }
@@ -5708,8 +5709,10 @@ function updateSensorDetails(item) {
   const room = roomForDevice(plan.rooms, item);
   const note = element("fp-placement-note");
   if (note) {
-    note.textContent = sensorNote(item, room);
+    const text = sensorNote(item, room);
+    note.textContent = text;
     note.hidden = !note.textContent;
+    note.classList.toggle("fp-warning", !text?.advice);
   }
   const mount = element("fp-mount");
   if (!mount) return;
@@ -8200,9 +8203,9 @@ var init_floor_planner2 = __esm({
     copy = JSON.parse(element("fp-copy").textContent);
     integration = globalThis.floorPlannerHost;
     appPlanner = integration?.mode === "app";
-    coverageRadarOptions = { allowHeightEstimate: Boolean(integration) };
-    coverageEstimateLabel = integration?.coverageEstimate ?? copy.height_note;
-    coverageEstimateLegend = integration && document.createElement("span");
+    coverageRadarOptions = { allowHeightEstimate: true };
+    coverageEstimateLabel = integration?.coverageEstimate ?? copy.coverage_estimate ?? copy.height_note;
+    coverageEstimateLegend = document.createElement("span");
     if (coverageEstimateLegend) {
       const symbol = document.createElement("i");
       symbol.className = "fp-legend-range";

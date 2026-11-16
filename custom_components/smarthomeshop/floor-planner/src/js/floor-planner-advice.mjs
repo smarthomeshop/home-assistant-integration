@@ -92,7 +92,9 @@ function cellsFor(room, furniture) {
 
 function scoreCandidate(item, room, goal, cells, furniture) {
     const mode = { presence: 'presence', zones: 'xy', height: 'xyz' }[goal];
-    const available = radarFields(room, item);
+    // Above the measured ceiling height the conservative estimate still
+    // gives advice; the choice is marked so the interface can say so.
+    const available = radarFields(room, item, { allowHeightEstimate: true });
     const fields = mode === 'presence' && !available.some(field => field.mode === 'presence')
         ? available : available.filter(field => field.mode === mode);
     if (!fields.length) return null;
@@ -100,7 +102,7 @@ function scoreCandidate(item, room, goal, cells, furniture) {
     const coverage = cells.map(point => fields.some(field => fieldCoversPoint(field, item, point))
         && radarHasLineOfSight(room, item, point)
         && !furnitureOcclusion(origin, point, .85, furniture));
-    return { item, coverage };
+    return { item, coverage, estimated: fields.some(field => field.estimatedHeight) };
 }
 
 function layout(scored, cells, existingCoverage) {
@@ -164,9 +166,11 @@ export function adviseRoom(plan, room, settings = defaultAdvice, obstacles = pre
             ? { sensors: [candidates.find(item => plan.sensors.some(sensor => sameSensorPlacement(sensor, item)))
                 ?? candidates[family === 'wall' ? Math.min(4, candidates.length - 1) : 0]], percent: null, reachesGoal: true }
             : layout(candidates.map(item => scoreCandidate(item, room, settings.goal, cells, furniture)).filter(Boolean), cells, existingCoverage);
+        const estimated = Boolean(result?.sensors?.some(item => radarFields(room, item, { allowHeightEstimate: true })
+            .some(field => field.estimatedHeight)));
         if (!result) return [];
         const upgrade = needsScd41 && existing.some(sensor => result.sensors.some(item => sameSensorPlacement(sensor, item)));
-        return [{ ...result, family, upgrade, needsScd41, needsSurface: family === 'freestanding' && !surfaces.length,
+        return [{ ...result, family, upgrade, needsScd41, estimated, needsSurface: family === 'freestanding' && !surfaces.length,
             unmodelled: settings.goal === 'climate' ? 0 : existing.length - existingScores.length,
             sensors: result.sensors.map(item => needsScd41 ? { ...item, climate: true } : item) }];
     }).sort((a, b) => Number(b.upgrade) - Number(a.upgrade)

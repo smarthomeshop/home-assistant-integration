@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickerCopy } from '../src/ha/host-copy.js';
+import { pickerCopy } from '../../src/ha/host-copy.js';
 
 const registryLinkKeys = [
     'homeAssistantLink', 'homeAssistantLinkNote', 'homeAssistantFloor', 'homeAssistantArea', 'notLinked',

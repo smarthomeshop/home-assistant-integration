@@ -83,6 +83,7 @@ export function openAdvisor(plan, current, copy, locale, place) {
                 <p class="fp-note">${copy.installations[choice.sensors[0].installation] ?? ''}</p>
                 ${choice.unmodelled ? `<p class="fp-note">${copy.advisor_unmodelled.replace(':count', number.format(choice.unmodelled))}</p>` : ''}
                 ${choice.needsSurface ? `<p class="fp-note">${copy.advisor_needs_surface}</p>` : ''}
+                ${choice.estimated && copy.height_estimate ? `<p class="fp-note">${copy.height_estimate.replaceAll(':low', number.format(2)).replaceAll(':high', number.format(3))}</p>` : ''}
                 ${choice.reachesGoal ? '' : `<p class="fp-note fp-warning">${copy.advisor_partial}</p>`}
                 <details class="fp-advisor-positions"><summary>${copy.advisor_positions}</summary>
                     <p class="fp-note">${copy.advisor_origin}<br>${choice.sensors.map((item, index) => `${index + 1} · X ${number.format(item.x - active.x)} m / Y ${number.format(item.y - active.y)} m`).join('<br>')}</p>

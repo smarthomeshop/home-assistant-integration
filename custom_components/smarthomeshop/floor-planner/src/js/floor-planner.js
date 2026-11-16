@@ -67,9 +67,11 @@ const extraSensor = root.querySelector('[data-action="next_extra_sensor"]');
 const copy = JSON.parse(element('fp-copy').textContent);
 const integration = globalThis.floorPlannerHost;
 const appPlanner = integration?.mode === 'app';
-const coverageRadarOptions = { allowHeightEstimate: Boolean(integration) };
-const coverageEstimateLabel = integration?.coverageEstimate ?? copy.height_note;
-const coverageEstimateLegend = integration && document.createElement('span');
+// Ceilings above the measured range get a conservative estimated outline,
+// in the shop as well as in Home Assistant, instead of no outline at all.
+const coverageRadarOptions = { allowHeightEstimate: true };
+const coverageEstimateLabel = integration?.coverageEstimate ?? copy.coverage_estimate ?? copy.height_note;
+const coverageEstimateLegend = document.createElement('span');
 if (coverageEstimateLegend) {
     const symbol = document.createElement('i');
     symbol.className = 'fp-legend-range';
@@ -1056,9 +1058,11 @@ function sensorNote(item, room) {
     if (status === 'height') {
         const range = ceilingReferenceRange(item.radar);
         const estimated = radarFields(room, item, coverageRadarOptions).some(field => field.estimatedHeight);
-        return [copy.height_note,
-            range && copy.ceiling_range.replace(':low', number.format(range[0])).replace(':high', number.format(range[1])),
-            estimated && integration.coverageEstimate ? integration.coverageEstimate + '.' : ''].filter(Boolean).join(' ');
+        const fill = text => text.replaceAll(':low', number.format(range[0])).replaceAll(':high', number.format(range[1]));
+        // Too high but still estimable: explain what changes and what helps.
+        // This is advice, not a warning, so it is not shown in warning colours.
+        if (estimated && range && copy.height_estimate) return Object.assign(new String(fill(copy.height_estimate)), { advice: true });
+        return [copy.height_note, range && fill(copy.ceiling_range)].filter(Boolean).join(' ');
     }
     return room.ceiling ? copy.ceiling_local_range : '';
 }
@@ -1068,8 +1072,10 @@ function updateSensorDetails(item) {
     const room = roomForDevice(plan.rooms, item);
     const note = element('fp-placement-note');
     if (note) {
-        note.textContent = sensorNote(item, room);
+        const text = sensorNote(item, room);
+        note.textContent = text;
         note.hidden = !note.textContent;
+        note.classList.toggle('fp-warning', !text?.advice);
     }
     const mount = element('fp-mount');
     if (!mount) return;

@@ -104,3 +104,15 @@ test('a radar that two rooms already share does not block saving, a new share do
     plan.sensors.push(copy);
     assert.throws(() => saveChanges(spread, saved, rooms), error => error.validationCode === 'duplicate_device');
 });
+
+test('every planner shell explains a high ceiling and labels the estimate', async () => {
+    const { readFileSync } = await import('node:fs');
+    for (const language of ['en', 'nl', 'de', 'fr', 'es']) {
+        const html = readFileSync(new URL(`../../src/ha/shells/${language}.html`, import.meta.url), 'utf8');
+        const copy = JSON.parse(html.match(/id="fp-copy">([\s\S]*?)<\/script>/)[1]);
+        assert.match(copy.height_estimate, /:low/, language);
+        assert.match(copy.height_estimate, /:high/, language);
+        assert.ok(copy.coverage_estimate, language);
+        assert.doesNotMatch(copy.height_estimate, /[–—‘’“”…]/, language);
+    }
+});

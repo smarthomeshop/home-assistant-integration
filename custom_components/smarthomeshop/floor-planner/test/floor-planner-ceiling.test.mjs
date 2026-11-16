@@ -71,3 +71,29 @@ test('CeilSense slope contours are opt-in for that room and use local reference 
     assert.equal(ceilingCoverageStatus(sloped, { ...sensor, x: 5 }), 'height');
     assert.deepEqual(guidePlanForRoom({ rooms: [sloped], walls: [], sensors: [sensor] }, sloped), { reason: 'ceiling' });
 });
+
+test('a CeilSense Pro on a 4 m ceiling gets a smaller estimate, never a bigger one', () => {
+    const sensor = { id: 'pro', model: 'ceilsense-pro', radar: 'ld2412', x: 3, y: 4, angle: 0 };
+    const options = { allowHeightEstimate: true };
+    const measured = radarFields({ ...room, height: 3 }, sensor, options)[0];
+    const high = radarFields({ ...room, height: 4 }, sensor, options)[0];
+    assert.equal(measured.estimatedHeight, false);
+    assert.equal(high.estimatedHeight, true);
+    for (const posture of ['moving', 'standing', 'seated']) {
+        const [mx, my] = measured.profiles[posture];
+        const [hx, hy] = high.profiles[posture];
+        assert.ok(hx < mx && hy < my, `${posture} must shrink above the measured range`);
+    }
+});
+
+test('the sensor advisor still advises a ceiling sensor on a 4 m ceiling, marked as an estimate', async () => {
+    const { adviseRoom, defaultAdvice } = await import('../src/js/floor-planner-advice.mjs');
+    const high = { ...room, height: 4 };
+    const plan = { ...blankPlan('Test'), rooms: [high], sensors: [] };
+    const advice = adviseRoom(plan, high, { ...defaultAdvice, mount: 'ceiling' });
+    const ceiling = advice.choices.find(choice => choice.family === 'ceiling');
+    assert.ok(ceiling, 'a ceiling choice is offered');
+    assert.equal(ceiling.estimated, true);
+    const measured = adviseRoom({ ...plan, rooms: [{ ...room, height: 2.8 }] }, { ...room, height: 2.8 }, { ...defaultAdvice, mount: 'ceiling' });
+    assert.equal(measured.choices.find(choice => choice.family === 'ceiling').estimated, false);
+});
