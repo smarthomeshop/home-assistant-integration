@@ -129,7 +129,14 @@ function roomChange({ id, room, level, items }, previous, stored) {
         (near(wall.x1, wall.y1, edge.x1, edge.y1) && near(wall.x2, wall.y2, edge.x2, edge.y2))
         || (near(wall.x1, wall.y1, edge.x2, edge.y2) && near(wall.x2, wall.y2, edge.x1, edge.y1))));
     const walls = wallsKept ? storedWalls : outline;
-    const change = { id, name: record && previous?.room.name === room.name ? record.name : room.name, house };
+    const change = {
+        id,
+        name: record && previous?.room.name === room.name ? record.name : room.name,
+        house,
+        // Null is deliberate: it lets the backend clear an earlier link.
+        haAreaId: room.haAreaId ?? null,
+        haFloorId: room.haFloorId ?? null,
+    };
     if (!wallsKept) change.walls = walls;
     if (previous?.room.height !== room.height) change.ceilingHeightMm = millimetres(room.height);
 

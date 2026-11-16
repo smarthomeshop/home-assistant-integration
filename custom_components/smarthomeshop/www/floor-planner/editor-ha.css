@@ -110,6 +110,17 @@ button, summary { cursor: pointer; }
 #floor-planner #fp-catalog button[data-ha-device] { min-height: 44px; }
 #floor-planner #fp-catalog button[data-ha-device]:disabled { opacity: .8; }
 #floor-planner #fp-catalog button[data-ha-device]:disabled .fp-add { color: var(--ha-wall); }
+.fp-ha-area-filter { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 10px; padding: 9px 10px; border: 1px solid var(--ha-border); border-radius: 8px; color: var(--ha-ink); background: var(--ha-selected); font-size: 12px; }
+#floor-planner .fp-ha-area-filter button { flex: 0 0 auto; min-height: 34px; padding: 5px 9px; border-color: var(--ha-border); color: var(--ha-ink); background: var(--ha-panel); }
+.fp-ha-room-link { display: grid; gap: 9px; margin: 14px 0 4px; padding: 12px; border: 1px solid var(--ha-border); border-radius: 9px; background: var(--ha-input); }
+.fp-ha-room-link legend { padding: 0 5px; color: var(--ha-ink); font-size: 13px; font-weight: 700; }
+.fp-ha-room-link p { margin: 0; color: var(--ha-muted); font-size: 12px; line-height: 1.45; }
+.fp-ha-room-link label { display: grid; gap: 4px; min-width: 0; color: var(--ha-ink); font-size: 12px; font-weight: 650; }
+.fp-ha-room-link select { width: 100%; min-width: 0; }
+@media (max-width: 520px) {
+    .fp-ha-area-filter { align-items: stretch; flex-direction: column; }
+    #floor-planner .fp-ha-area-filter button { width: 100%; }
+}
 #fp-sensor-edit-ha { display: grid; gap: 4px; }
 #floor-planner :is(.fp-furniture-dialog, .fp-room-form, .fp-underlay-controls, .fp-recovery) { color: var(--ha-ink); border-color: var(--ha-border); background: var(--ha-panel); }
 #floor-planner :is(#fp-search, #fp-inspector input, #fp-inspector select, .fp-room-form-inputs input, .fp-floor-field input:not([type="range"]),

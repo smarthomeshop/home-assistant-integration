@@ -368,7 +368,8 @@ class SmartHomeShopStore:
     @staticmethod
     def _floor_plan_geometry(rooms: list[dict[str, Any]]) -> str:
         """Detect design changes independently of calibration and runtime revisions."""
-        fields = ("id", "name", "walls", "doors", "windows", "mirrors", "furniture", "zones", "house", "ceilingHeightMm")
+        fields = ("id", "name", "walls", "doors", "windows", "mirrors", "furniture", "zones", "house", "ceilingHeightMm",
+                  "haAreaId", "haFloorId")
         source_fields = ("id", "deviceId", "device_id", "x", "y", "x_m", "y_m", "heightMm", "height_m",
                          "rotation", "orientation_deg", "mountingMode")
         geometry = [{**{key: room[key] for key in fields if key in room}, "sensors": [

@@ -126,6 +126,22 @@ test('a room can rotate and change floors with its sensor, windows and zone owne
     assert.equal(ground.rooms[0].width, 4);
 });
 
+test('consecutive rooms can move to the same floor after switching the selected room (issue 10)', () => {
+    const secondRoom = { ...room, id: 'second-room', name: 'Second room', x: 5 };
+    const secondSensor = { ...sensor, id: 'second-sensor', x: 7 };
+    const source = { ...ground, rooms: [room, secondRoom], sensors: [sensor, secondSensor], windows: [], zones: [] };
+    const firstMove = moveRoomToFloor(house(source), room, 'upper');
+    assert.equal(firstMove.activeFloor, 'upper');
+    const selectedOnGround = { ...firstMove, activeFloor: 'ground' };
+    const remaining = selectedOnGround.floors[0].plan.rooms.find(entry => entry.id === 'second-room');
+    const secondMove = moveRoomToFloor(selectedOnGround, remaining, 'upper');
+    assert.ok(validProject(secondMove));
+    assert.equal(secondMove.activeFloor, 'upper');
+    assert.deepEqual(secondMove.floors[0].plan.rooms, []);
+    assert.deepEqual(secondMove.floors[1].plan.rooms.map(entry => entry.id).sort(), ['room', 'second-room']);
+    assert.deepEqual(secondMove.floors[1].plan.sensors.map(entry => entry.id).sort(), ['second-sensor', 'sensor']);
+});
+
 test('the demo kitchen window clears the counter and 3D keeps a lower exterior wall on the viewing side', () => {
     const demo = sampleBuilding({ sample:'Demo home', kitchen:'Kitchen' }, {});
     const floor = demo.floors[0].plan;

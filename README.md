@@ -117,6 +117,9 @@ hang in real life. Administrators edit the plan; other users see the live view.
   radar sees someone, and only clear when every selected radar reports clear
   for the clear delay. Missing or stale data gives unknown, never a false
   clear.
+- **Home Assistant room links.** Link each drawn room to its Home Assistant
+  floor and area. The sensor picker then starts with the devices assigned to
+  that area, with an explicit option to show every compatible sensor.
 - **Room entities** for occupancy, temperature, humidity and CO2, ready for
   your automations. Climate can use the average, one primary sensor or stay
   separate per sensor.

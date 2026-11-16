@@ -151,6 +151,10 @@ export interface Zone {
 export interface RoomConfig {
   id: string;
   name: string;
+  /** Optional link to Home Assistant's area registry. */
+  haAreaId?: string;
+  /** Optional link to Home Assistant's floor registry. */
+  haFloorId?: string;
   roomShell?: RoomShell;
   devicePlacement?: DevicePlacement;
   furniture: FurnitureInstance[];

@@ -279,6 +279,14 @@ def ws_get_devices(
             device_entry.id,
             include_disabled_entities=True,
         )
+        entity_area_ids = {
+            entity.area_id
+            for entity in device_entities
+            if getattr(entity, "area_id", None)
+        }
+        effective_area_id = getattr(device_entry, "area_id", None) or (
+            next(iter(entity_area_ids)) if len(entity_area_ids) == 1 else None
+        )
         entity_count = len(device_entities)
         for entity in device_entities:
             if entity.platform == "esphome" and entity.domain in (
@@ -329,6 +337,7 @@ def ws_get_devices(
             "entity_count": entity_count,
             "online": online,
             "last_seen": last_seen.isoformat() if (not online and last_seen) else None,
+            "area_id": effective_area_id,
             "integration_linked": _entry_for_device(hass, device_entry.id) is not None,
             "esphome_configured": True,
         }
@@ -454,6 +463,12 @@ _ROOM_SCHEMA = vol.Schema(
         vol.Optional("zones"): vol.All(list, vol.Length(max=100), [dict]),
         vol.Optional("sensor"): vol.Any(None, dict),
         vol.Optional("calibration"): dict,
+        vol.Optional("haAreaId"): vol.Any(
+            None, vol.All(str, vol.Length(min=1, max=255))
+        ),
+        vol.Optional("haFloorId"): vol.Any(
+            None, vol.All(str, vol.Length(min=1, max=255))
+        ),
     },
     extra=vol.ALLOW_EXTRA,
 )
@@ -538,6 +553,7 @@ _FLOOR_PLAN_ROOM = _ROOM_SCHEMA.extend({
 })
 _FLOOR_PLAN_FIELDS = {
     "id", "name", "walls", "doors", "windows", "mirrors", "furniture", "sensors", "zones", "house", "ceilingHeightMm",
+    "haAreaId", "haFloorId",
 }
 
 

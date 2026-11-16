@@ -56,6 +56,18 @@ def normalize_room_config(room: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("room id is required")
     normalized["id"] = room_id
 
+    # Optional links to Home Assistant's area and floor registries. Keep the
+    # IDs rather than translated names so renames and language changes are
+    # harmless. A null/empty value means the link was deliberately cleared.
+    for field in ("haAreaId", "haFloorId"):
+        value = normalized.get(field)
+        if value is None or value == "":
+            normalized.pop(field, None)
+            continue
+        if not isinstance(value, str) or not value.strip() or len(value) > 255:
+            raise ValueError(f"room {field} must be a Home Assistant registry id")
+        normalized[field] = value.strip()
+
     for field in ("walls", "furniture", "devices", "doors", "windows", "mirrors", "zones"):
         if field not in normalized:
             continue

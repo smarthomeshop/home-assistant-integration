@@ -2,7 +2,9 @@
 // own folder because they only make sense next to the integration.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectFromRooms } from '../../src/ha/ha-rooms.js';
+import {
+    homeAssistantRegistry, plannerDevices, projectFromRooms, withHomeAssistantRegistryLinks,
+} from '../../src/ha/ha-rooms.js';
 import { saveChanges } from '../../src/ha/ha-save.js';
 import { collectLivePresence, radarEntityIds, radarProfiles } from '../../src/ha/ha-live.js';
 import { FloorPlanValidationError, floorPlanValidationCopy, floorPlanValidationMessage } from '../../src/ha/safety.js';
@@ -14,6 +16,45 @@ const living = {
     doors: [{ id: 'door', wallIndex: 0, position: .5, width: 900, openDirection: 'inward' }], windows: [], mirrors: [], furniture: [], zones: [],
     sensors: [{ id: 'source', deviceId: 'radar', x: 100, y: 2000, rotation: 0, heightMm: 1800, mountingMode: 'wall' }],
 };
+
+test('Home Assistant area and floor registry ids reach planner devices without generated-id assumptions', () => {
+    const registry = homeAssistantRegistry([
+        { area_id: 'area-arbitrary-42', name: 'Office', floor_id: 'floor-arbitrary-9' },
+    ], [
+        { floor_id: 'floor-arbitrary-9', name: 'Upper floor', level: 1 },
+    ]);
+    const devices = plannerDevices([], [{
+        id: 'device-arbitrary-7', name: 'CeilSense', model: 'CeilSense V2', product_type: 'ceilsense',
+        area_id: 'area-arbitrary-42',
+    }], registry.areas);
+    assert.deepEqual(registry, {
+        areas: [{ id: 'area-arbitrary-42', name: 'Office', floorId: 'floor-arbitrary-9' }],
+        floors: [{ id: 'floor-arbitrary-9', name: 'Upper floor', level: 1 }],
+    });
+    assert.equal(devices[0].areaId, 'area-arbitrary-42');
+    assert.equal(devices[0].floorId, 'floor-arbitrary-9');
+});
+
+test('room registry links survive project conversion, old saved plans and a save round trip', () => {
+    const linkedRoom = { ...living, haAreaId: 'area-bedroom-uuid', haFloorId: 'floor-upstairs-uuid' };
+    const project = projectFromRooms([linkedRoom], []);
+    const plannerRoom = project.floors[0].plan.rooms[0];
+    assert.equal(plannerRoom.haAreaId, 'area-bedroom-uuid');
+    assert.equal(plannerRoom.haFloorId, 'floor-upstairs-uuid');
+
+    const oldProject = structuredClone(project);
+    delete oldProject.floors[0].plan.rooms[0].haAreaId;
+    delete oldProject.floors[0].plan.rooms[0].haFloorId;
+    const migrated = withHomeAssistantRegistryLinks(oldProject, [linkedRoom]);
+    assert.equal(migrated.floors[0].plan.rooms[0].haAreaId, 'area-bedroom-uuid');
+
+    const edited = structuredClone(project);
+    edited.floors[0].plan.rooms[0].haAreaId = 'area-new-uuid';
+    edited.floors[0].plan.rooms[0].haFloorId = 'floor-new-uuid';
+    assert.deepEqual(saveChanges(edited, project, [linkedRoom]).changes.map(change => ({
+        id: change.id, haAreaId: change.haAreaId, haFloorId: change.haFloorId,
+    })), [{ id: 'living', haAreaId: 'area-new-uuid', haFloorId: 'floor-new-uuid' }]);
+});
 
 test('a door that left its wall is named in the save error, in every language', () => {
     const saved = projectFromRooms([living], []);

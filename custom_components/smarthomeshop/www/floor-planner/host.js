@@ -843,8 +843,34 @@ function roomViews(rooms, profiles = []) {
 var normalisedProduct = (value) => String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
 var radarProducts = /* @__PURE__ */ new Set(["ceilsense", "wallsense", "ultimatesensor", "ultimatesensormini"]);
 var modelsByLength = Object.keys(devices).sort((a, b) => b.length - a.length);
-function plannerDevices(profiles, haDevices) {
+function homeAssistantRegistry(areas = [], floors = []) {
+  const safe = (value, fallback = "") => typeof value === "string" && value.trim() ? value.trim() : fallback;
+  const normalizedFloors = (Array.isArray(floors) ? floors : []).flatMap((floor) => {
+    const id = safe(floor?.floor_id ?? floor?.id);
+    const name = safe(floor?.name);
+    return id && name ? [{ id, name, level: Number.isInteger(floor?.level) ? floor.level : null }] : [];
+  });
+  const floorIds = new Set(normalizedFloors.map((floor) => floor.id));
+  const normalizedAreas = (Array.isArray(areas) ? areas : []).flatMap((area) => {
+    const id = safe(area?.area_id ?? area?.id);
+    const name = safe(area?.name);
+    const rawFloor = safe(area?.floor_id ?? area?.floorId);
+    return id && name ? [{
+      id,
+      name,
+      // Keep the area-to-floor relation when the floor registry is not
+      // available yet. If it is available, reject dangling floor ids.
+      floorId: rawFloor && (!floorIds.size || floorIds.has(rawFloor)) ? rawFloor : null
+    }] : [];
+  });
+  return {
+    areas: normalizedAreas.sort((a, b) => a.name.localeCompare(b.name)),
+    floors: normalizedFloors.sort((a, b) => (a.level ?? 0) - (b.level ?? 0) || a.name.localeCompare(b.name))
+  };
+}
+function plannerDevices(profiles, haDevices, areas = []) {
   const deviceById = new Map(haDevices.map((device) => [device.id, device]));
+  const areaById = new Map(areas.map((area) => [area.id, area]));
   const profileById = new Map(profiles.map((entry) => [entry.device_id, entry]));
   const ids = /* @__PURE__ */ new Set([
     ...profileById.keys(),
@@ -862,6 +888,7 @@ function plannerDevices(profiles, haDevices) {
     const radarModel = profile?.radar_model?.toLowerCase();
     const radar = (mount === "ceiling" ? ["ld2412", "ld2460", "ld6002b", "combined"] : ["ld2450", "ld2460"]).includes(radarModel) ? radarModel : "none";
     const height = profile?.installation_height_m ?? profile?.mounting_height_mm / 1e3;
+    const areaId = device?.area_id || null;
     return [{
       id,
       name: device?.name || entry?.name || id,
@@ -870,6 +897,8 @@ function plannerDevices(profiles, haDevices) {
       radar,
       product: device?.model || device?.product_name || entry?.model || "",
       radarModel: radarModel === "unknown" ? null : radarModel,
+      areaId,
+      floorId: areaById.get(areaId)?.floorId ?? null,
       mountHeight: mount === "wall" && height >= 0.15 && height <= 6 ? height : void 0,
       online: device?.online,
       aliases: [entry?.entity_prefix, ...entry?.aliases ?? []].filter(Boolean)
@@ -901,6 +930,8 @@ function projectFromRooms(rooms, profiles, devices2 = []) {
         ...view.floor,
         name: safeName(room.name, "Room"),
         haRoom: room.id,
+        ...room.haAreaId ? { haAreaId: room.haAreaId } : {},
+        ...room.haFloorId ? { haFloorId: room.haFloorId } : {},
         haFrame: { x: frameMetres(x), y: frameMetres(y), angle: rotationDeg, visible }
       });
       for (const key of ["doors", "windows", "mirrors"]) for (const item of view[key]) {
@@ -983,6 +1014,19 @@ function projectFromRooms(rooms, profiles, devices2 = []) {
   if (!validProject(project)) throw new Error("A room exceeds the safe editor limits. Nothing was changed.");
   if (skippedRooms.length) Object.defineProperty(project, "skippedRooms", { value: skippedRooms, enumerable: false });
   return project;
+}
+function withHomeAssistantRegistryLinks(project, rooms) {
+  const links = new Map(rooms.map((room) => [room.id, room]));
+  const update = (plan) => ({ ...plan, rooms: plan.rooms.map((room) => {
+    const record = links.get(room.haRoom ?? room.id);
+    const { haAreaId: _oldArea, haFloorId: _oldFloor, ...plain } = room;
+    return record ? {
+      ...plain,
+      ...record.haAreaId ? { haAreaId: record.haAreaId } : {},
+      ...record.haFloorId ? { haFloorId: record.haFloorId } : {}
+    } : plain;
+  }) });
+  return project.floors ? { ...project, floors: project.floors.map((floor) => ({ ...floor, plan: update(floor.plan) })) } : update(project);
 }
 function haRoomContents(plan, room) {
   const contents = roomContents(plan, room);
@@ -1106,7 +1150,14 @@ function roomChange({ id, room, level, items }, previous, stored) {
   const near = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by) < 0.01;
   const wallsKept = storedWalls.length === outline.length && storedWalls.every((wall) => outline.some((edge) => near(wall.x1, wall.y1, edge.x1, edge.y1) && near(wall.x2, wall.y2, edge.x2, edge.y2) || near(wall.x1, wall.y1, edge.x2, edge.y2) && near(wall.x2, wall.y2, edge.x1, edge.y1)));
   const walls = wallsKept ? storedWalls : outline;
-  const change = { id, name: record && previous?.room.name === room.name ? record.name : room.name, house };
+  const change = {
+    id,
+    name: record && previous?.room.name === room.name ? record.name : room.name,
+    house,
+    // Null is deliberate: it lets the backend clear an earlier link.
+    haAreaId: room.haAreaId ?? null,
+    haFloorId: room.haFloorId ?? null
+  };
   if (!wallsKept) change.walls = walls;
   if (previous?.room.height !== room.height) change.ceilingHeightMm = millimetres(room.height);
   for (const key of ["doors", "windows", "mirrors", "furniture", "zones"]) {
@@ -1715,7 +1766,19 @@ var pickerCopy = {
     error: "Apparaten konden niet worden geladen. Open het menu opnieuw om het nog eens te proberen.",
     inside: "Kies een plek binnen een kamer.",
     importNote: "De plattegrond is geladen. Plaats je eigen sensoren via Sensor.",
-    savedPositions: "Opgeslagen sensorposities"
+    savedPositions: "Opgeslagen sensorposities",
+    homeAssistantLink: "Home Assistant-koppeling",
+    homeAssistantLinkNote: "Koppel deze getekende ruimte aan de echte verdieping en ruimte in Home Assistant. Dit verplaatst de tekening niet.",
+    homeAssistantFloor: "Home Assistant-verdieping",
+    homeAssistantArea: "Home Assistant-ruimte",
+    notLinked: "Niet gekoppeld",
+    missingArea: "Niet meer beschikbaar ({id})",
+    areaAlreadyLinked: "al aan een andere ruimte gekoppeld",
+    showingArea: "Sensoren uit {area}",
+    showAll: "Alle sensoren tonen",
+    showAreaOnly: "Alleen deze ruimte",
+    noAreaDevices: "In deze Home Assistant-ruimte zijn geen geschikte sensoren gevonden.",
+    wrongArea: "Deze sensor hoort bij een andere Home Assistant-ruimte. Kies een sensor uit {area} of toon alle sensoren."
   },
   en: {
     title: "Add a Home Assistant sensor",
@@ -1735,7 +1798,19 @@ var pickerCopy = {
     error: "Devices could not be loaded. Reopen this menu to try again.",
     inside: "Choose a position inside a room.",
     importNote: "The floor plan is loaded. Place your own devices via Sensor.",
-    savedPositions: "Saved sensor positions"
+    savedPositions: "Saved sensor positions",
+    homeAssistantLink: "Home Assistant link",
+    homeAssistantLinkNote: "Link this drawn room to its real Home Assistant floor and area. This does not move the drawing.",
+    homeAssistantFloor: "Home Assistant floor",
+    homeAssistantArea: "Home Assistant area",
+    notLinked: "Not linked",
+    missingArea: "No longer available ({id})",
+    areaAlreadyLinked: "already linked to another room",
+    showingArea: "Sensors from {area}",
+    showAll: "Show all sensors",
+    showAreaOnly: "Only this area",
+    noAreaDevices: "No compatible sensors were found in this Home Assistant area.",
+    wrongArea: "This sensor belongs to another Home Assistant area. Choose a sensor from {area} or show all sensors."
   },
   de: {
     title: "Home-Assistant-Sensor hinzufügen",
@@ -1755,7 +1830,19 @@ var pickerCopy = {
     error: "Geräte konnten nicht geladen werden. Öffne dieses Menü erneut, um es noch einmal zu versuchen.",
     inside: "Wähle eine Position innerhalb eines Raums.",
     importNote: "Der Grundriss wurde geladen. Platziere deine eigenen Geräte über Sensor.",
-    savedPositions: "Gespeicherte Sensorpositionen"
+    savedPositions: "Gespeicherte Sensorpositionen",
+    homeAssistantLink: "Home-Assistant-Verknüpfung",
+    homeAssistantLinkNote: "Verknüpfe diesen gezeichneten Raum mit der tatsächlichen Etage und dem Bereich in Home Assistant. Die Zeichnung wird dabei nicht verschoben.",
+    homeAssistantFloor: "Home-Assistant-Etage",
+    homeAssistantArea: "Home-Assistant-Bereich",
+    notLinked: "Nicht verknüpft",
+    missingArea: "Nicht mehr verfügbar ({id})",
+    areaAlreadyLinked: "bereits mit einem anderen Raum verknüpft",
+    showingArea: "Sensoren aus {area}",
+    showAll: "Alle Sensoren anzeigen",
+    showAreaOnly: "Nur dieser Bereich",
+    noAreaDevices: "In diesem Home-Assistant-Bereich wurden keine kompatiblen Sensoren gefunden.",
+    wrongArea: "Dieser Sensor gehört zu einem anderen Home-Assistant-Bereich. Wähle einen Sensor aus {area} oder zeige alle Sensoren an."
   },
   fr: {
     title: "Ajouter un capteur Home Assistant",
@@ -1775,7 +1862,19 @@ var pickerCopy = {
     error: "Impossible de charger les appareils. Rouvrez ce menu pour réessayer.",
     inside: "Choisissez une position à l'intérieur d'une pièce.",
     importNote: "Le plan est chargé. Placez vos propres appareils via Capteur.",
-    savedPositions: "Positions enregistrées des capteurs"
+    savedPositions: "Positions enregistrées des capteurs",
+    homeAssistantLink: "Association Home Assistant",
+    homeAssistantLinkNote: "Associez cette pièce dessinée à son étage et à sa zone réels dans Home Assistant. Cela ne déplace pas le dessin.",
+    homeAssistantFloor: "Étage Home Assistant",
+    homeAssistantArea: "Zone Home Assistant",
+    notLinked: "Non associé",
+    missingArea: "Plus disponible ({id})",
+    areaAlreadyLinked: "déjà associée à une autre pièce",
+    showingArea: "Capteurs de {area}",
+    showAll: "Afficher tous les capteurs",
+    showAreaOnly: "Uniquement cette zone",
+    noAreaDevices: "Aucun capteur compatible trouvé dans cette zone Home Assistant.",
+    wrongArea: "Ce capteur appartient à une autre zone Home Assistant. Choisissez un capteur de {area} ou affichez tous les capteurs."
   },
   es: {
     title: "Añadir un sensor de Home Assistant",
@@ -1795,7 +1894,19 @@ var pickerCopy = {
     error: "No se pudieron cargar los dispositivos. Vuelve a abrir este menú para intentarlo de nuevo.",
     inside: "Elige una posición dentro de una habitación.",
     importNote: "El plano está cargado. Coloca tus propios dispositivos mediante Sensor.",
-    savedPositions: "Posiciones guardadas de los sensores"
+    savedPositions: "Posiciones guardadas de los sensores",
+    homeAssistantLink: "Vínculo con Home Assistant",
+    homeAssistantLinkNote: "Vincula esta habitación dibujada con su planta y zona reales de Home Assistant. Esto no mueve el dibujo.",
+    homeAssistantFloor: "Planta de Home Assistant",
+    homeAssistantArea: "Zona de Home Assistant",
+    notLinked: "Sin vincular",
+    missingArea: "Ya no está disponible ({id})",
+    areaAlreadyLinked: "ya vinculada a otra habitación",
+    showingArea: "Sensores de {area}",
+    showAll: "Mostrar todos los sensores",
+    showAreaOnly: "Solo esta zona",
+    noAreaDevices: "No se encontraron sensores compatibles en esta zona de Home Assistant.",
+    wrongArea: "Este sensor pertenece a otra zona de Home Assistant. Elige un sensor de {area} o muestra todos los sensores."
   }
 };
 var coverageEstimateCopy = {
@@ -1846,6 +1957,8 @@ var FloorPlannerPage = class extends HTMLElement {
   #runtime;
   #profiles = [];
   #devices = [];
+  #areas = [];
+  #floors = [];
   #devicesRequest;
   #devicesFailed = false;
   #receipts = new EntityReportReceiptTracker();
@@ -2005,7 +2118,7 @@ var FloorPlannerPage = class extends HTMLElement {
     try {
       const [floorPlan] = await Promise.all([this.#hass.callWS({ type: "smarthomeshop/floor_plan" }), this.#loadDevices()]);
       if (!this.isConnected) return;
-      this.#saved = validProject(floorPlan.project) ? floorPlan.project : projectFromRooms(floorPlan.rooms, this.#profiles, this.#devices);
+      this.#saved = validProject(floorPlan.project) ? withHomeAssistantRegistryLinks(floorPlan.project, floorPlan.rooms) : projectFromRooms(floorPlan.rooms, this.#profiles, this.#devices);
       this.#floorPlan = floorPlan;
       if (this.#saved.skippedRooms?.length) this.#showError(this.#skippedRooms(this.#saved.skippedRooms.length));
       if (Number(floorPlan.recovery?.count) > 0) this.#showError(this.#skippedRooms(floorPlan.recovery.count));
@@ -2034,6 +2147,8 @@ var FloorPlannerPage = class extends HTMLElement {
       picker: pickerCopy[language] ?? pickerCopy.en,
       coverageEstimate: coverageEstimateCopy[language] ?? coverageEstimateCopy.en,
       devices: () => this.#devices,
+      areas: () => this.#areas,
+      floors: () => this.#floors,
       device: (id) => findPlannerDevice(this.#devices, id),
       deviceError: () => this.#devicesFailed,
       refreshDevices: () => this.#loadDevices(),
@@ -2059,19 +2174,35 @@ var FloorPlannerPage = class extends HTMLElement {
       }
     };
   }
-  // Radar profiles and Home Assistant devices, one request at a time.
+  // Radar profiles, Home Assistant devices and the area/floor registries,
+  // one request at a time. Registry failures never hide otherwise usable
+  // devices; they only postpone the optional room link controls.
   #loadDevices() {
     this.#devicesRequest ??= Promise.allSettled([
       this.#hass.callWS({ type: "smarthomeshop/radar/profiles" }),
-      this.#hass.callWS({ type: "smarthomeshop/devices" })
-    ]).then(([profiles, devices2]) => {
+      this.#hass.callWS({ type: "smarthomeshop/devices" }),
+      this.#hass.callWS({ type: "config/area_registry/list" }),
+      this.#hass.callWS({ type: "config/floor_registry/list" })
+    ]).then(([profiles, devices2, areas, floors]) => {
       if (profiles.status === "fulfilled") this.#profiles = radarProfiles(profiles.value?.devices);
       this.#devicesFailed = profiles.status === "rejected" && devices2.status === "rejected";
       if (this.#devicesFailed) return;
-      const hidden = (devices2.value?.hidden_devices ?? []).map((device) => ({ ...device, hidden: true }));
-      const found = plannerDevices(this.#profiles, [...devices2.value?.devices ?? [], ...hidden]);
-      const changed = !same2(this.#devices, found);
+      const values = (value) => Array.isArray(value) ? value : Object.values(value ?? {});
+      const registry = homeAssistantRegistry(
+        areas.status === "fulfilled" ? areas.value : values(this.#hass?.areas),
+        floors.status === "fulfilled" ? floors.value : values(this.#hass?.floors)
+      );
+      const hidden = (devices2.status === "fulfilled" ? devices2.value?.hidden_devices ?? [] : []).map((device) => ({ ...device, hidden: true }));
+      const discovered = devices2.status === "fulfilled" ? devices2.value?.devices ?? [] : [];
+      const withAreas = [...discovered, ...hidden].map((device) => ({
+        ...device,
+        area_id: device.area_id ?? this.#hass?.devices?.[device.id]?.area_id ?? null
+      }));
+      const found = plannerDevices(this.#profiles, withAreas, registry.areas);
+      const changed = !same2(this.#devices, found) || !same2(this.#areas, registry.areas) || !same2(this.#floors, registry.floors);
       this.#devices = found;
+      this.#areas = registry.areas;
+      this.#floors = registry.floors;
       if (changed) this.#editor?.devicesChanged?.();
       this.#renderLive();
     }).finally(() => {

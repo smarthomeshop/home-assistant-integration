@@ -64,6 +64,26 @@ def test_legacy_source_id_is_stable_across_reloads() -> None:
     assert first["sensors"][0]["id"] == second["sensors"][0]["id"]
 
 
+def test_home_assistant_area_and_floor_registry_links_are_preserved_and_clearable() -> None:
+    room = normalize_room_config({
+        "id": "linked-room",
+        "name": "Linked room",
+        "haAreaId": "area-arbitrary-uuid",
+        "haFloorId": "floor-arbitrary-uuid",
+    })
+    assert room["haAreaId"] == "area-arbitrary-uuid"
+    assert room["haFloorId"] == "floor-arbitrary-uuid"
+
+    cleared = normalize_room_config({**room, "haAreaId": None, "haFloorId": ""})
+    assert "haAreaId" not in cleared
+    assert "haFloorId" not in cleared
+
+    with pytest.raises(ValueError):
+        normalize_room_config({"id": "bad-link", "haAreaId": 42})
+    with pytest.raises(ValueError):
+        normalize_room_config({"id": "long-link", "haFloorId": "x" * 256})
+
+
 def test_outside_room_suppression_requires_an_ordered_simple_wall_chain() -> None:
     ordered = [
         {"x1": 0, "y1": 0, "x2": 5000, "y2": 0},

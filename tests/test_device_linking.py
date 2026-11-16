@@ -318,6 +318,7 @@ def test_pre_2026_8_shared_device_remains_the_source(monkeypatch) -> None:
 
 def test_dashboard_returns_one_card_for_three_2026_8_splits(monkeypatch) -> None:
     esphome = _device("esp-device", "esp-entry", composite_id="old-device")
+    esphome.area_id = "area-arbitrary-uuid"
     helper = _device("helper-device", "shs-entry", composite_id="old-device")
     protect = _device("protect-device", "protect-entry", composite_id="old-device")
     entities = [
@@ -362,6 +363,7 @@ def test_dashboard_returns_one_card_for_three_2026_8_splits(monkeypatch) -> None
 
     assert [device["id"] for device in connection.result["devices"]] == [esphome.id]
     assert connection.result["devices"][0]["integration_linked"] is True
+    assert connection.result["devices"][0]["area_id"] == "area-arbitrary-uuid"
 
     hass.data = {
         websocket_api.DOMAIN: {

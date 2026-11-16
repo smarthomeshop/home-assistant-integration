@@ -182,8 +182,35 @@ const radarProducts = new Set(['ceilsense', 'wallsense', 'ultimatesensor', 'ulti
 const modelsByLength = Object.keys(plannerModels).sort((a, b) => b.length - a.length);
 
 // The SmartHomeShop radars Home Assistant knows about, as the planner sees them.
-export function plannerDevices(profiles, haDevices) {
+export function homeAssistantRegistry(areas = [], floors = []) {
+    const safe = (value, fallback = '') => typeof value === 'string' && value.trim() ? value.trim() : fallback;
+    const normalizedFloors = (Array.isArray(floors) ? floors : []).flatMap(floor => {
+        const id = safe(floor?.floor_id ?? floor?.id);
+        const name = safe(floor?.name);
+        return id && name ? [{ id, name, level: Number.isInteger(floor?.level) ? floor.level : null }] : [];
+    });
+    const floorIds = new Set(normalizedFloors.map(floor => floor.id));
+    const normalizedAreas = (Array.isArray(areas) ? areas : []).flatMap(area => {
+        const id = safe(area?.area_id ?? area?.id);
+        const name = safe(area?.name);
+        const rawFloor = safe(area?.floor_id ?? area?.floorId);
+        return id && name ? [{
+            id,
+            name,
+            // Keep the area-to-floor relation when the floor registry is not
+            // available yet. If it is available, reject dangling floor ids.
+            floorId: rawFloor && (!floorIds.size || floorIds.has(rawFloor)) ? rawFloor : null,
+        }] : [];
+    });
+    return {
+        areas: normalizedAreas.sort((a, b) => a.name.localeCompare(b.name)),
+        floors: normalizedFloors.sort((a, b) => (a.level ?? 0) - (b.level ?? 0) || a.name.localeCompare(b.name)),
+    };
+}
+
+export function plannerDevices(profiles, haDevices, areas = []) {
     const deviceById = new Map(haDevices.map(device => [device.id, device]));
+    const areaById = new Map(areas.map(area => [area.id, area]));
     const profileById = new Map(profiles.map(entry => [entry.device_id, entry]));
     const ids = new Set([...profileById.keys(),
         ...haDevices.filter(device => radarProducts.has(normalisedProduct(device.product_type))).map(device => device.id)]);
@@ -202,10 +229,13 @@ export function plannerDevices(profiles, haDevices) {
         const radar = (mount === 'ceiling' ? ['ld2412', 'ld2460', 'ld6002b', 'combined'] : ['ld2450', 'ld2460']).includes(radarModel)
             ? radarModel : 'none';
         const height = profile?.installation_height_m ?? profile?.mounting_height_mm / 1000;
+        const areaId = device?.area_id || null;
         return [{
             id, name: device?.name || entry?.name || id, model, mount, radar,
             product: device?.model || device?.product_name || entry?.model || '',
             radarModel: radarModel === 'unknown' ? null : radarModel,
+            areaId,
+            floorId: areaById.get(areaId)?.floorId ?? null,
             mountHeight: mount === 'wall' && height >= .15 && height <= 6 ? height : undefined,
             online: device?.online,
             aliases: [entry?.entity_prefix, ...(entry?.aliases ?? [])].filter(Boolean),
@@ -242,6 +272,8 @@ export function projectFromRooms(rooms, profiles, devices = []) {
             .map(key => [key, plan[key].length]));
         try {
             plan.rooms.push({ ...view.floor, name: safeName(room.name, 'Room'), haRoom: room.id,
+                ...(room.haAreaId ? { haAreaId: room.haAreaId } : {}),
+                ...(room.haFloorId ? { haFloorId: room.haFloorId } : {}),
                 haFrame: { x: frameMetres(x), y: frameMetres(y), angle: rotationDeg, visible } });
             for (const key of ['doors', 'windows', 'mirrors']) for (const item of view[key]) {
                 const index = Number(item.id.split('-').at(-1));
@@ -303,6 +335,25 @@ export function projectFromRooms(rooms, profiles, devices = []) {
     if (!validProject(project)) throw new Error('A room exceeds the safe editor limits. Nothing was changed.');
     if (skippedRooms.length) Object.defineProperty(project, 'skippedRooms', { value: skippedRooms, enumerable: false });
     return project;
+}
+
+// A valid saved editor project can predate area/floor links. The canonical
+// room records always win so registry changes made elsewhere cannot leave a
+// stale link hidden in the editor document.
+export function withHomeAssistantRegistryLinks(project, rooms) {
+    const links = new Map(rooms.map(room => [room.id, room]));
+    const update = plan => ({ ...plan, rooms: plan.rooms.map(room => {
+        const record = links.get(room.haRoom ?? room.id);
+        const { haAreaId: _oldArea, haFloorId: _oldFloor, ...plain } = room;
+        return record ? {
+            ...plain,
+            ...(record.haAreaId ? { haAreaId: record.haAreaId } : {}),
+            ...(record.haFloorId ? { haFloorId: record.haFloorId } : {}),
+        } : plain;
+    }) });
+    return project.floors
+        ? { ...project, floors: project.floors.map(floor => ({ ...floor, plan: update(floor.plan) })) }
+        : update(project);
 }
 
 // What belongs to one room. Items carry the Home Assistant room they came

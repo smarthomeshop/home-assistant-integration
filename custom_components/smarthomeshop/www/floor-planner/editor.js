@@ -3905,6 +3905,35 @@ var init_floor_planner_zones = __esm({
   }
 });
 
+// src/js/floor-planner-home-assistant.mjs
+function devicesForRoomArea(devices2, room, areaOnly = true) {
+  if (!areaOnly || !room?.haAreaId) return devices2;
+  return devices2.filter((device) => device.areaId === room.haAreaId);
+}
+function roomWithHomeAssistantArea(room, areaId, areas) {
+  const next = { ...room };
+  const area = areas.find((candidate) => candidate.id === areaId);
+  if (!area) {
+    delete next.haAreaId;
+    return next;
+  }
+  next.haAreaId = area.id;
+  if (area.floorId) next.haFloorId = area.floorId;
+  return next;
+}
+function roomWithHomeAssistantFloor(room, floorId, areas) {
+  const next = { ...room };
+  if (floorId) next.haFloorId = floorId;
+  else delete next.haFloorId;
+  const area = areas.find((candidate) => candidate.id === next.haAreaId);
+  if (area?.floorId && area.floorId !== floorId) delete next.haAreaId;
+  return next;
+}
+var init_floor_planner_home_assistant = __esm({
+  "src/js/floor-planner-home-assistant.mjs"() {
+  }
+});
+
 // src/js/floor-planner-advice.mjs
 function usableSurfaces(plan2, room) {
   return (plan2.furniture ?? []).filter((item) => flatSurfaces.has(item.kind) && item.width >= 0.18 && item.depth >= 0.15 && contains(room, item) && item.base + item.height + 0.05 <= ceilingHeightAt(room, item) - 0.15);
@@ -5075,6 +5104,7 @@ function setTool(next, model = null, device = null) {
   lastRoomClick = null;
   tool = next;
   placementDevice = device;
+  if (next !== "place") placementAreaId = null;
   if (next !== "edit") closeSensorTip();
   choice = model;
   if (model && Object.hasOwn(devices, model)) placementInstallation = catalogMount === "wall" && installationsFor(model).includes("wall-bracket") ? "wall-bracket" : installationsFor(model)[0];
@@ -5240,18 +5270,26 @@ function renderHaCatalog() {
   const placements = haPlacements();
   const query = element("fp-search").value.trim().toLocaleLowerCase(root.dataset.locale);
   const registered = integration.devices();
-  const matching = registered.filter((device) => [device.name, device.product, device.radarModel].some((term) => term?.toLocaleLowerCase(root.dataset.locale).includes(query)));
+  const room = roomById(catalogRoomId);
+  const available = devicesForRoomArea(registered, room, catalogAreaOnly);
+  const matching = available.filter((device) => [device.name, device.product, device.radarModel].some((term) => term?.toLocaleLowerCase(root.dataset.locale).includes(query)));
   const status = element("fp-search-empty");
-  status.textContent = !registered.length ? integration.deviceError() ? picked.error : picked.empty : !matching.length ? picked.noResults : matching.every((device) => placements.has(device.id)) && !query ? picked.allPlaced : "";
+  status.textContent = !registered.length ? integration.deviceError() ? picked.error : picked.empty : catalogAreaOnly && room?.haAreaId && !available.length ? picked.noAreaDevices : !matching.length ? picked.noResults : matching.every((device) => placements.has(device.id)) && !query ? picked.allPlaced : "";
   status.hidden = !status.textContent;
   element("fp-search").hidden = !registered.length;
   element("fp-library-context").hidden = !registered.length;
-  element("fp-catalog").innerHTML = [false, true].map((placed) => {
+  const area = room?.haAreaId ? homeAssistantAreaName(room.haAreaId) : "";
+  const areaFilter = room?.haAreaId ? `<div class="fp-ha-area-filter">
+        <span>${escapeText(picked.showingArea.replace("{area}", area))}</span>
+        <button type="button" data-action="toggle_area_filter">${escapeText(catalogAreaOnly ? picked.showAll : picked.showAreaOnly)}</button>
+    </div>` : "";
+  element("fp-catalog").innerHTML = areaFilter + [false, true].map((placed) => {
     const group = matching.filter((device) => placements.has(device.id) === placed);
     if (!group.length) return "";
     return `<div class="fp-device-group"><p>${placed ? picked.placed : picked.free}</p>${group.map((device) => {
       const details = [
         device.product !== device.name ? device.product : "",
+        !catalogAreaOnly && device.areaId ? homeAssistantAreaName(device.areaId) : "",
         placed ? placements.get(device.id) : device.online === false ? picked.offline : ""
       ].filter(Boolean).join(" · ");
       return `<button type="button" data-ha-device="${escapeText(device.id)}" ${placed ? "disabled" : ""}>
@@ -5422,7 +5460,7 @@ function openSensorEdit(id) {
     const select = sensorEditForm.elements.haDevice;
     const current = haDevice(item.haDevice);
     const placed = haPlacements(item.id);
-    const choices = integration.devices().filter((device) => device.mount === devices[item.model].mount && device.id !== current?.id && !placed.has(device.id));
+    const choices = devicesForRoomArea(integration.devices(), room, Boolean(room?.haAreaId)).filter((device) => device.mount === devices[item.model].mount && device.id !== current?.id && !placed.has(device.id));
     select.replaceChildren(
       new Option(item.haDevice ? current?.name ?? integration.picker.missing : integration.picker.choose, item.haDevice ?? ""),
       ...choices.map((device) => new Option(device.name, device.id))
@@ -5686,6 +5724,38 @@ function updateSensorDetails(item) {
   const ridge = room.ceiling?.type === "gable" && Math.abs(ceilingPosition(room, item) - 0.5) < 1e-6;
   element("fp-mount-profile").innerHTML = room.ceiling ? crossSection2(room, item) + (ridge && item.levelMountRoom !== room.id ? `<p class="fp-note">${copy.ceiling_ridge_note}</p>` : "") : "";
 }
+function homeAssistantRoomLink(room) {
+  if (!integration) return "";
+  const picked = integration.picker;
+  const floors = homeAssistantFloors();
+  const areas = homeAssistantAreas();
+  const used = linkedAreaIds(room);
+  const selectedFloor = room.haFloorId ?? "";
+  const selectedArea = room.haAreaId ?? "";
+  const floorKnown = !selectedFloor || floors.some((floor) => floor.id === selectedFloor);
+  const areaKnown = !selectedArea || areas.some((area) => area.id === selectedArea);
+  const floorOptions = [
+    `<option value="">${escapeText(picked.notLinked)}</option>`,
+    ...!floorKnown ? [`<option value="${escapeText(selectedFloor)}" selected>${escapeText(picked.missingArea.replace("{id}", selectedFloor))}</option>`] : [],
+    ...floors.map((floor) => `<option value="${escapeText(floor.id)}" ${floor.id === selectedFloor ? "selected" : ""}>${escapeText(floor.name)}</option>`)
+  ].join("");
+  const areaOptions = areas.filter((area) => !selectedFloor || !area.floorId || area.floorId === selectedFloor || area.id === selectedArea);
+  const optionsHtml = [
+    `<option value="">${escapeText(picked.notLinked)}</option>`,
+    ...!areaKnown ? [`<option value="${escapeText(selectedArea)}" selected>${escapeText(picked.missingArea.replace("{id}", selectedArea))}</option>`] : [],
+    ...areaOptions.map((area) => {
+      const unavailable = used.has(area.id);
+      const label = unavailable ? `${area.name} · ${picked.areaAlreadyLinked}` : area.name;
+      return `<option value="${escapeText(area.id)}" ${area.id === selectedArea ? "selected" : ""} ${unavailable ? "disabled" : ""}>${escapeText(label)}</option>`;
+    })
+  ].join("");
+  return `<fieldset class="fp-ha-room-link">
+        <legend>${escapeText(picked.homeAssistantLink)}</legend>
+        <p>${escapeText(picked.homeAssistantLinkNote)}</p>
+        <label>${escapeText(picked.homeAssistantFloor)}<select id="fp-room-ha-floor">${floorOptions}</select></label>
+        <label>${escapeText(picked.homeAssistantArea)}<select id="fp-room-ha-area">${optionsHtml}</select></label>
+    </fieldset>`;
+}
 function renderInspector() {
   const { type, item } = selectedItem();
   const inspector = element("fp-inspector");
@@ -5711,7 +5781,8 @@ function renderInspector() {
             ${item.outline ? `<p class="fp-note">${copy.room_outline} · ${number.format(roomArea(item))} m²</p>` : `<div class="fp-fields">${field(item, "width", copy.width, 0.5, 60, "any")}${field(item, "depth", copy.depth, 0.5, 60, "any")}</div>`}
             ${item.ceiling ? roomCeilingFields(item) : heightField("height", copy.height, item.height)}
             ${roomFinishFields(item)}
-            ${calibration ? `<p class="fp-note">${escapeText(calibration)}</p>` : ""}`;
+            ${calibration ? `<p class="fp-note">${escapeText(calibration)}</p>` : ""}
+            ${homeAssistantRoomLink(item)}`;
   } else if (type === "walls") {
     settings = `<div class="fp-fields">${field(item, "endX", copy.end_x, -100, 100, "any")}${field(item, "endY", copy.end_y, -100, 100, "any")}</div>`;
   } else if (type === "doors") {
@@ -5858,6 +5929,8 @@ function openLibrary(opener, position = null) {
   root.setAttribute("data-panel", "");
   libraryOpener = opener;
   quickPlacement = position?.point ?? null;
+  catalogRoomId = position?.room?.id ?? placementRoom()?.id ?? null;
+  catalogAreaOnly = Boolean(roomById(catalogRoomId)?.haAreaId);
   drawingMenu.open = false;
   const context = element("fp-library-context");
   context.textContent = integration?.picker.prompt ?? (position ? copy.quick_place_room.replace(":room", position.room.name) : copy.catalog_prompt);
@@ -5902,6 +5975,8 @@ function closeLibrary(restore = true) {
   if (restore) (libraryOpener ?? libraryButton).focus({ preventScroll: true });
   libraryOpener = null;
   quickPlacement = null;
+  catalogRoomId = null;
+  catalogAreaOnly = false;
 }
 function arrangeProjectControls() {
   const name = element("fp-project-name");
@@ -7687,8 +7762,13 @@ function drawAt(point3) {
       element("fp-place-help").textContent = integration.picker.invalid;
       return;
     }
-    if (integration && !plan.rooms.some((room) => contains(room, point3))) {
+    const destination = integration && plan.rooms.find((room) => contains(room, point3));
+    if (integration && !destination) {
       element("fp-place-help").textContent = integration.picker.inside;
+      return;
+    }
+    if (integration && placementAreaId && destination.haAreaId && destination.haAreaId !== placementAreaId) {
+      element("fp-place-help").textContent = integration.picker.wrongArea.replace("{area}", homeAssistantAreaName(destination.haAreaId));
       return;
     }
     makeItem("sensors", sensorPlacement(point3));
@@ -8052,7 +8132,7 @@ async function openOrder(opener) {
     orderStep.disabled = false;
   }
 }
-var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
+var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
 var init_floor_planner2 = __esm({
   "src/js/floor-planner.js"() {
     init_floor_planner();
@@ -8078,6 +8158,7 @@ var init_floor_planner2 = __esm({
     init_floor_planner_heatmap();
     init_floor_planner_zones();
     init_floor_planner_underlay();
+    init_floor_planner_home_assistant();
     element = (id) => document.getElementById(id);
     root = element("floor-planner");
     canvas = element("fp-plan");
@@ -8215,6 +8296,9 @@ var init_floor_planner2 = __esm({
     quickPlacement = null;
     placementPoint = null;
     catalogMount = "all";
+    catalogRoomId = null;
+    catalogAreaOnly = false;
+    placementAreaId = null;
     lastRoomClick = null;
     placementOpener = null;
     furnitureOpener = null;
@@ -8237,6 +8321,11 @@ var init_floor_planner2 = __esm({
     }
     currentStairTrip = () => building?.staircase ? stairTrip(projectDocument()) : null;
     deviceIcon = (mount) => mount === "ceiling" ? '<svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6"/><circle cx="10" cy="10" r="2"/></svg>' : '<svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="5" width="12" height="10" rx="2"/><path d="m8 11 2-2 2 2"/></svg>';
+    homeAssistantAreas = () => integration?.areas?.() ?? [];
+    homeAssistantFloors = () => integration?.floors?.() ?? [];
+    roomById = (id) => projectFloors().flatMap((floor) => floor.plan.rooms).find((room) => room.id === id) ?? null;
+    linkedAreaIds = (exceptRoom) => new Set(projectFloors().flatMap((floor) => floor.plan.rooms).filter((room) => room.id !== exceptRoom?.id && room.haAreaId).map((room) => room.haAreaId));
+    homeAssistantAreaName = (id) => homeAssistantAreas().find((area) => area.id === id)?.name ?? id;
     furnitureDialog = element("fp-furniture-library");
     sensorEditForm.addEventListener("change", (event) => {
       const item = plan.sensors.find((item2) => item2.id === editingSensor?.id);
@@ -8353,6 +8442,8 @@ var init_floor_planner2 = __esm({
       setLibraryExpanded(event.newState === "open");
       if (event.newState === "closed") {
         quickPlacement = null;
+        catalogRoomId = null;
+        catalogAreaOnly = false;
         root.toggleAttribute("data-panel", libraryPanelWasOpen);
       }
     });
@@ -9221,6 +9312,11 @@ var init_floor_planner2 = __esm({
         filterCatalog();
         return;
       }
+      if (button.dataset.action === "toggle_area_filter") {
+        catalogAreaOnly = !catalogAreaOnly;
+        renderHaCatalog();
+        return;
+      }
       if (simulation && button.closest(".fp-drawing")) button.focus({ preventScroll: true });
       const { personMove, personPose, walker } = button.dataset;
       if (walker) {
@@ -9335,12 +9431,14 @@ var init_floor_planner2 = __esm({
       }
       const registered = integration && haDevice(button.dataset.haDevice);
       if (integration ? registered && !haPlacements().has(registered.id) : model) {
+        const strictArea = catalogAreaOnly ? roomById(catalogRoomId)?.haAreaId ?? null : null;
         placementOpener = libraryOpener ?? libraryButton;
         const point3 = quickPlacement;
         closeLibrary(false);
         root.removeAttribute("data-panel");
         setView("2d");
         setTool("place", registered?.model ?? model, registered || null);
+        placementAreaId = strictArea;
         if (point3) {
           const firstSensor = !plan.sensors.length;
           drawAt(point3);
@@ -9361,6 +9459,19 @@ var init_floor_planner2 = __esm({
       }
     });
     root.addEventListener("change", async ({ target }) => {
+      if (integration && (target.id === "fp-room-ha-area" || target.id === "fp-room-ha-floor")) {
+        const { type, item } = selectedItem();
+        if (type !== "rooms") return;
+        const next = target.id === "fp-room-ha-area" ? roomWithHomeAssistantArea(item, target.value, homeAssistantAreas()) : roomWithHomeAssistantFloor(item, target.value, homeAssistantAreas());
+        if (JSON.stringify(next) === JSON.stringify(item)) return;
+        remember();
+        plan.rooms = plan.rooms.map((room) => room.id === item.id ? next : room);
+        selected = next.id;
+        finish();
+        showInspectorStart();
+        element(target.id)?.focus({ preventScroll: true });
+        return;
+      }
       if (target.id === "fp-room-floor" && building) {
         const { type, item } = selectedItem();
         if (type !== "rooms" || target.value === building.activeFloor) return;

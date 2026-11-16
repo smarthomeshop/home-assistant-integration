@@ -12,7 +12,10 @@
 //   fires open-radar-tools with the selected room and sensor
 import { StatefulWholeHomeFusion, applyAuthoritativeRuntimeTracking, runtimeSnapshotIsAuthoritative } from './fusion.js';
 import { FloorPlanValidationError, floorPlanValidationMessage } from './safety.js';
-import { findPlannerDevice, plannerDevices, projectFromRooms, roomsInHouse, withoutHiddenRooms } from './ha-rooms.js';
+import {
+    findPlannerDevice, homeAssistantRegistry, plannerDevices, projectFromRooms, roomsInHouse,
+    withHomeAssistantRegistryLinks, withoutHiddenRooms,
+} from './ha-rooms.js';
 import { saveChanges } from './ha-save.js';
 import {
     collectLivePresence, detectionSummary, livePeople, liveTracks, radarEntityIds, radarProfiles, withFusedRooms,
@@ -67,6 +70,8 @@ class FloorPlannerPage extends HTMLElement {
     #runtime;
     #profiles = [];
     #devices = [];
+    #areas = [];
+    #floors = [];
     #devicesRequest;
     #devicesFailed = false;
     #receipts = new EntityReportReceiptTracker();
@@ -248,7 +253,7 @@ class FloorPlannerPage extends HTMLElement {
         try {
             const [floorPlan] = await Promise.all([this.#hass.callWS({ type: 'smarthomeshop/floor_plan' }), this.#loadDevices()]);
             if (!this.isConnected) return;
-            this.#saved = validProject(floorPlan.project) ? floorPlan.project
+            this.#saved = validProject(floorPlan.project) ? withHomeAssistantRegistryLinks(floorPlan.project, floorPlan.rooms)
                 : projectFromRooms(floorPlan.rooms, this.#profiles, this.#devices);
             this.#floorPlan = floorPlan;
             if (this.#saved.skippedRooms?.length) this.#showError(this.#skippedRooms(this.#saved.skippedRooms.length));
@@ -280,6 +285,8 @@ class FloorPlannerPage extends HTMLElement {
             picker: pickerCopy[language] ?? pickerCopy.en,
             coverageEstimate: coverageEstimateCopy[language] ?? coverageEstimateCopy.en,
             devices: () => this.#devices,
+            areas: () => this.#areas,
+            floors: () => this.#floors,
             device: id => findPlannerDevice(this.#devices, id),
             deviceError: () => this.#devicesFailed,
             refreshDevices: () => this.#loadDevices(),
@@ -311,19 +318,37 @@ class FloorPlannerPage extends HTMLElement {
         };
     }
 
-    // Radar profiles and Home Assistant devices, one request at a time.
+    // Radar profiles, Home Assistant devices and the area/floor registries,
+    // one request at a time. Registry failures never hide otherwise usable
+    // devices; they only postpone the optional room link controls.
     #loadDevices() {
         this.#devicesRequest ??= Promise.allSettled([
             this.#hass.callWS({ type: 'smarthomeshop/radar/profiles' }),
             this.#hass.callWS({ type: 'smarthomeshop/devices' }),
-        ]).then(([profiles, devices]) => {
+            this.#hass.callWS({ type: 'config/area_registry/list' }),
+            this.#hass.callWS({ type: 'config/floor_registry/list' }),
+        ]).then(([profiles, devices, areas, floors]) => {
             if (profiles.status === 'fulfilled') this.#profiles = radarProfiles(profiles.value?.devices);
             this.#devicesFailed = profiles.status === 'rejected' && devices.status === 'rejected';
             if (this.#devicesFailed) return;
-            const hidden = (devices.value?.hidden_devices ?? []).map(device => ({ ...device, hidden: true }));
-            const found = plannerDevices(this.#profiles, [...devices.value?.devices ?? [], ...hidden]);
-            const changed = !same(this.#devices, found);
+            const values = value => Array.isArray(value) ? value : Object.values(value ?? {});
+            const registry = homeAssistantRegistry(
+                areas.status === 'fulfilled' ? areas.value : values(this.#hass?.areas),
+                floors.status === 'fulfilled' ? floors.value : values(this.#hass?.floors),
+            );
+            const hidden = (devices.status === 'fulfilled' ? devices.value?.hidden_devices ?? [] : [])
+                .map(device => ({ ...device, hidden: true }));
+            const discovered = devices.status === 'fulfilled' ? devices.value?.devices ?? [] : [];
+            const withAreas = [...discovered, ...hidden].map(device => ({
+                ...device,
+                area_id: device.area_id ?? this.#hass?.devices?.[device.id]?.area_id ?? null,
+            }));
+            const found = plannerDevices(this.#profiles, withAreas, registry.areas);
+            const changed = !same(this.#devices, found)
+                || !same(this.#areas, registry.areas) || !same(this.#floors, registry.floors);
             this.#devices = found;
+            this.#areas = registry.areas;
+            this.#floors = registry.floors;
             if (changed) this.#editor?.devicesChanged?.();
             this.#renderLive();
         }).finally(() => {
