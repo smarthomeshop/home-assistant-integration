@@ -57,8 +57,9 @@ function wallOpening(item, record, walls, toRoom, height, roomName) {
     const { x1, y1, x2, y2 } = walls[wall.index];
     const start = toRoom(item);
     const inward = (middle.x - start.x) * (x2 - x1) + (middle.y - start.y) * (y2 - y1) < 0;
+    const { closed: _, ...kept } = record ?? {};
     return {
-        ...record,
+        ...kept,
         id: record?.id ?? item.id,
         wallIndex: wall.index,
         position: wall.along / wall.length,
@@ -68,7 +69,8 @@ function wallOpening(item, record, walls, toRoom, height, roomName) {
             protectionEnabled: item.protectionEnabled === true,
             reflectionDepthMm: Math.round(Math.max(.25, Math.min(6, Number(item.reflectionDepthM) || 2)) * 1000),
         } : {}),
-        ...(height === undefined ? { openDirection: inward ? 'inward' : 'outward' } : {}),
+        // A door is open unless it is kept closed; a closed door stops the radars.
+        ...(height === undefined ? { openDirection: inward ? 'inward' : 'outward', ...(item.closed ? { closed: true } : {}) } : {}),
     };
 }
 

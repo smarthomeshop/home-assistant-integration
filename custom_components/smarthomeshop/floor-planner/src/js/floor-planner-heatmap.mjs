@@ -8,12 +8,14 @@ import { roomCorners } from './floor-planner-geometry.mjs';
 import { contains } from './floor-planner-model.mjs';
 import { prepareFurnitureOcclusion } from './floor-planner-obstruction.mjs';
 import { personSignals, preparePersonSensors } from './floor-planner-person.mjs';
+import { prepareSight } from './floor-planner-sight.mjs';
 
 export const heatStep = .25;
 
 export function coverageCells(plan, { step = heatStep, furniture = true } = {}) {
     const sensors = preparePersonSensors(plan);
     const obstacles = furniture ? prepareFurnitureOcclusion(plan.furniture ?? []) : [];
+    const sight = prepareSight(plan);
     const cells = [];
     for (const room of plan.rooms) {
         const corners = roomCorners(room);
@@ -23,7 +25,7 @@ export function coverageCells(plan, { step = heatStep, furniture = true } = {}) 
             for (let x = left; x < Math.max(...xs); x += step) {
                 const centre = { x: x + step / 2, y: y + step / 2 };
                 if (!contains(room, centre, false)) continue;
-                const readings = personSignals(plan, { ...centre, pose: 'standing', heading: 0 }, sensors, obstacles);
+                const readings = personSignals(plan, { ...centre, pose: 'standing', heading: 0 }, sensors, obstacles, sight);
                 const seen = readings.filter(reading => reading.seen).length;
                 cells.push({ x, y, seen, shadow: !seen && readings.some(reading => reading.obstacle) });
             }

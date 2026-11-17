@@ -287,6 +287,7 @@ export function projectFromRooms(rooms, profiles, devices = []) {
                 const inward = key === 'doors' && record.openDirection === 'inward';
                 const radians = angle * Math.PI / 180;
                 plan[key].push({ ...item, haIndex: index, haRecord: record.id, haRoom: room.id,
+                    ...(key === 'doors' && record.closed === true ? { closed: true } : {}),
                     angle: degrees(angle + (inward ? 180 : 0)),
                     x: item.x + (inward ? Math.cos(radians) * width : 0),
                     y: item.y + (inward ? Math.sin(radians) * width : 0) });

@@ -1808,6 +1808,18 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron {
   stroke: #ffdfaa;
   stroke-width: 2px;
 }
+.fp-door-shut {
+  fill: none;
+  stroke: #cab18d;
+  stroke-width: 3px;
+  vector-effect: non-scaling-stroke;
+}
+.fp-door.selected .fp-door-shut {
+  stroke: #ffdfaa;
+}
+.fp-shell[data-simulation] .fp-door {
+  cursor: pointer;
+}
 .fp-door rect {
   fill: transparent;
 }
@@ -2334,6 +2346,13 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron {
 .fp-space-door.selected {
   stroke: #ffe0a8;
   stroke-width: 3px;
+}
+.fp-space-door-leaf {
+  --fp-model-top: #dcc7a3;
+  --fp-model-face: #c3a57a;
+}
+.fp-shell[data-simulation] #fp-space :is(.fp-space-door, .fp-space-door-leaf) {
+  cursor: pointer;
 }
 .fp-space-ceiling {
   pointer-events: none;

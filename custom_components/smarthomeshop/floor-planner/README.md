@@ -16,6 +16,10 @@ card. This folder is its source; Home Assistant serves the build in
     After an upload the planner asks which part of the image to use, so one
     floor can be kept from a sheet that shows more. The part is cut from the
     original image, or drawn again from the PDF, so it stays sharp.
+  - `floor-planner-sight.mjs` decides what a radar can see: walls stop it, an
+    open door lets it through up to the door frame, and a closed door is a
+    wall until a test person stands at it. Detection, the coverage map and
+    the drawn ranges all use it.
   - `floor-planner-recognise.mjs` turns rooms recognised on an uploaded floor
     plan into a draft that lies on that image. The recognition itself runs in
     an account service: Home Assistant passes its own (`recognise` on the

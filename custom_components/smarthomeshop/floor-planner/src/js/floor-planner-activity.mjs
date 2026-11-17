@@ -4,6 +4,7 @@ import { furnitureParts, furnitureProjection } from './floor-planner-furniture.m
 import { roomCorners } from './floor-planner-geometry.mjs';
 import { contains } from './floor-planner-model.mjs';
 import { movePerson, personSignals } from './floor-planner-person.mjs';
+import { prepareSight } from './floor-planner-sight.mjs';
 import { projectSpace } from './floor-planner-space.mjs';
 
 const seats = new Set(['chair', 'sofa', 'corner', 'armchair']);
@@ -36,6 +37,7 @@ export function createWalkActivities(plan, walls, sensors, obstacles, network) {
         return room ? [{ item, room }] : [];
     });
     const heightRadar = sensors.filter(({ fields }) => fields.some(field => field.radar === 'ld6002b'));
+    const sight = prepareSight(plan);
 
     function furnitureActivity(kind, person, nodes, occupied) {
         let best = null;
@@ -72,7 +74,7 @@ export function createWalkActivities(plan, walls, sensors, obstacles, network) {
             });
             if (heading === undefined) continue;
             const onGround = { ...person, ...approach, pose: 'lying', heading, elevation: 0 };
-            const detector = personSignals(plan, onGround, heightRadar, obstacles).find(reading =>
+            const detector = personSignals(plan, onGround, heightRadar, obstacles, sight).find(reading =>
                 reading.signals.some(signal => signal.radar === 'ld6002b' && signal.seen));
             const activity = { kind: 'fall', room: approach.room, approach, heading, detector };
             if (detector) return activity;

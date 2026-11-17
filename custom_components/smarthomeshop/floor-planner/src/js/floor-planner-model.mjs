@@ -127,7 +127,9 @@ export function validPlan(plan) {
         && (item.priority == null || (numberBetween(item.priority.x, .05, .95) && numberBetween(item.priority.y, .05, .95))))) return false;
     if (!list(plan.walls, item => point(item) && point({ x: item.endX, y: item.endY }) &&
         (item.x !== item.endX || item.y !== item.endY))) return false;
-    if (!list(plan.doors, item => point(item) && angle(item.angle) && numberBetween(item.width, .5, 2))) return false;
+    // A door is open unless it says it is closed.
+    if (!list(plan.doors, item => point(item) && angle(item.angle) && numberBetween(item.width, .5, 2)
+        && (item.closed === undefined || typeof item.closed === 'boolean'))) return false;
     if (!list(plan.sensors, item => point(item) && angle(item.angle) &&
         Object.hasOwn(devices, item.model) && validSensorRadar(item)
         && (item.installation === undefined || installationsFor(item.model).includes(item.installation))

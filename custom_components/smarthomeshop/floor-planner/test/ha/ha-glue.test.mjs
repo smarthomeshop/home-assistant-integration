@@ -56,6 +56,27 @@ test('room registry links survive project conversion, old saved plans and a save
     })), [{ id: 'living', haAreaId: 'area-new-uuid', haFloorId: 'floor-new-uuid' }]);
 });
 
+test('a closed door is kept with the room and comes back closed', () => {
+    const saved = projectFromRooms([living], []);
+    assert.equal(saved.floors[0].plan.doors[0].closed, undefined);
+    // Closing the door is a change of the room, and the door record says so.
+    const closed = structuredClone(saved);
+    closed.floors[0].plan.doors[0].closed = true;
+    const [change] = saveChanges(closed, saved, [living]).changes;
+    assert.equal(change.doors[0].closed, true);
+    assert.equal(change.doors[0].openDirection, 'inward');
+    // Loaded again, the door is closed in the planner.
+    const stored = { ...living, doors: change.doors };
+    const reloaded = projectFromRooms([stored], []);
+    assert.equal(reloaded.floors[0].plan.doors[0].closed, true);
+    // Opening it removes the mark again instead of storing an open door as a value.
+    const opened = structuredClone(reloaded);
+    delete opened.floors[0].plan.doors[0].closed;
+    const [reopened] = saveChanges(opened, reloaded, [stored]).changes;
+    assert.equal(Object.hasOwn(reopened.doors[0], 'closed'), false);
+    assert.equal(saveChanges(reloaded, reloaded, [stored]).changes.length, 0);
+});
+
 test('a door that left its wall is named in the save error, in every language', () => {
     const saved = projectFromRooms([living], []);
     const project = structuredClone(saved);

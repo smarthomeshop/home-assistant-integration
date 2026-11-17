@@ -20,6 +20,7 @@ import { prepareFurnitureOcclusion } from './floor-planner-obstruction.mjs';
 import { wallModes } from './floor-planner-maquette.mjs';
 import { daylights } from './floor-planner-daylight.mjs';
 import { coverageCells, coverageSummary, paintCoverageHeat } from './floor-planner-heatmap.mjs';
+import { doorAt, doorsHeldOpen, planWithOpenDoors, prepareSight } from './floor-planner-sight.mjs';
 import { removeOrphanedSensorZones, removeZonesOwnedBySensor } from './floor-planner-zones.mjs';
 import {
     calibrateUnderlay, imagePart, loadUnderlay, maxImageData, movedPart, roomTransparency, startingWidth, underlayKind, underlayMessage,
@@ -259,6 +260,11 @@ const walkersOnFloor = () => Object.entries(walkers).filter(([, walker]) => walk
 let walkWalls = [];
 let walkSensors = [];
 let walkFurniture = [];
+// What the test people are seen through: the walls and open doors of the
+// floor. A closed door counts as open while somebody stands at it.
+let walkSight = null;
+let heldDoors = new Set();
+let heldDoorPaint = false;
 let readingKey = null;
 let autoWalk = null;
 let autoWalkFrame = 0;
@@ -351,6 +357,8 @@ function remember(previous = JSON.stringify(plan)) {
 }
 
 function finish() {
+    // Walls and doors may have changed.
+    walkSight = null;
     save();
     render();
 }
@@ -585,8 +593,49 @@ function visibleSensors(floorPlan) {
     return integration ? floorPlan.sensors.filter(sensor => haDevice(sensor.haDevice)) : floorPlan.sensors;
 }
 
+const visiblePlan = floorPlan => integration ? { ...floorPlan, sensors: visibleSensors(floorPlan) } : floorPlan;
+
+// The plan as it is drawn: a door a test person stands at is shown open.
 function planForDrawing(floorPlan) {
-    return integration ? { ...floorPlan, sensors: visibleSensors(floorPlan) } : floorPlan;
+    return floorPlan === plan ? planWithOpenDoors(visiblePlan(floorPlan), heldDoors) : visiblePlan(floorPlan);
+}
+
+// `placed` is a person who is being put somewhere and is not among the
+// walkers yet: { name, person }. They stand where they are put, not where the
+// walker of that name stood before.
+function walkSightNow(placed = null) {
+    const people = walkersOnFloor().filter(([name]) => name !== placed?.name).map(([, walker]) => walker.person);
+    if (placed) people.push(placed.person);
+    const held = simulation ? doorsHeldOpen(plan, people) : new Set();
+    const key = [...held].sort().join(' ');
+    if (walkSight?.plan !== plan || walkSight.key !== key) {
+        const changed = [...heldDoors].sort().join(' ') !== key;
+        heldDoors = held;
+        walkSight = Object.assign(prepareSight(plan, held), { plan, key });
+        // The door swings open or shut on the drawing as well.
+        if (changed && !heldDoorPaint) {
+            heldDoorPaint = true;
+            queueMicrotask(() => {
+                heldDoorPaint = false;
+                renderDrawing();
+            });
+        }
+    }
+    return walkSight;
+}
+
+// Opens or closes a door. During the coverage test the people are read again at once.
+function toggleDoor(door) {
+    remember();
+    if (door.closed) delete door.closed;
+    else door.closed = true;
+    finish();
+    if (!simulation) return;
+    for (const [, walker] of walkersOnFloor()) {
+        walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
+    }
+    readingKey = null;
+    renderPerson();
 }
 
 function haPlacements(except = null) {
@@ -898,7 +947,7 @@ sensorEditForm.addEventListener('submit', event => {
         if (simulation) {
             walkSensors = preparePersonSensors(planForDrawing(plan));
             for (const [, walker] of walkersOnFloor()) {
-                walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+                walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
             }
             readingKey = null;
         }
@@ -1360,7 +1409,9 @@ function renderInspector() {
             <span>${copy.nudge_title}</span>${[['left','←'],['up','↑'],['down','↓'],['right','→']].map(([direction, icon]) =>
                 `<button type="button" data-nudge="${direction}" aria-label="${copy['nudge_' + direction]}">${icon}</button>`).join('')}</div>
             <p class="fp-note fp-warning" id="fp-placement-note" hidden></p>` : ''}
+        ${type === 'doors' && copy.door_note ? `<p class="fp-note">${copy.door_note}</p>` : ''}
         ${type === 'rooms' ? '' : `<div class="fp-inspector-actions">
+            ${type === 'doors' && copy.door_close ? `<button type="button" data-action="toggle_door">${item.closed ? copy.door_open : copy.door_close}</button>` : ''}
             ${['doors', 'windows', 'mirrors'].includes(type) ? `<button type="button" data-action="move_opening">${copy.opening_move}</button>` : ''}
             ${type === 'zones' && item.type !== 'entry' && item.parts.length < 12 ? `<button type="button" data-action="zone_part">${copy.zone_add_part}</button>` : ''}
             ${type === 'zones' ? `<button type="button" data-action="edit_zone_part">${copy.zone_edit_part}</button>` : ''}
@@ -1854,13 +1905,14 @@ function chooseImagePart(picture, ratio) {
 function renderDrawing() {
     renderRoomHandles();
     heatLegend.hidden = !showHeatmap;
+    const sight = showCoverage ? prepareSight(planForDrawing(plan)) : null;
     beamChoices = showCoverage ? visibleSensors(plan).flatMap((item, index) => {
         const room = roomForDevice(plan.rooms, item);
         const marker = String(index + 1).padStart(2, '0');
         return radarFields(room, item, coverageRadarOptions).reverse().map(field => {
             const radar = field.radar.toUpperCase();
             return {
-                item, room, field, key: `${item.id}:${field.radar}`,
+                item, room, field, sight, key: `${item.id}:${field.radar}`,
                 label: `${marker} · ${devices[item.model].name} · ${radar}`,
                 shortLabel: `${marker} · ${radar}`,
             };
@@ -2003,9 +2055,10 @@ element('fp-walk-stage')?.append(heatLegend);
 // The map only changes when rooms, sensors, furniture or zones do, so it is
 // worked out once per change and then reused for every frame.
 function heatCells(floorPlan) {
-    const drawn = planForDrawing(floorPlan);
+    // The map shows the plan as it is set, not a door a test person happens to hold open.
+    const drawn = visiblePlan(floorPlan);
     const furniture = element('fp-include-furniture')?.checked !== false;
-    const key = JSON.stringify([drawn.rooms, drawn.sensors, furniture ? drawn.furniture : null, drawn.zones]);
+    const key = JSON.stringify([drawn.rooms, drawn.sensors, furniture ? drawn.furniture : null, drawn.zones, drawn.doors, drawn.walls]);
     heatCache ??= new Map();
     if (!heatCache.has(key)) {
         if (heatCache.size > 8) heatCache.clear();
@@ -2324,7 +2377,7 @@ function loadWalkFloor(id) {
     readingKey = null;
     prepareWalkFloor();
     for (const [, walker] of walkersOnFloor()) {
-        walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+        walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
     }
 }
 
@@ -2382,7 +2435,7 @@ function setSimulation(active) {
 
 function startWalker(position, avatar) {
     const person = { ...position, avatar, moving: false, stride: 0 };
-    return { person, floorId: walkFloorId(), route: emptyRoute(), readings: personSignals(plan, person, walkSensors, walkFurniture) };
+    return { person, floorId: walkFloorId(), route: emptyRoute(), readings: personSignals(plan, person, walkSensors, walkFurniture, walkSightNow({ name: avatar, person })) };
 }
 
 function updateWalkerControls() {
@@ -2493,10 +2546,10 @@ function advanceWalker(name, dx, dy, distance, slide = false) {
     }
     const before = person;
     const hadCoverage = routeCoverage(before.moving ? readings
-        : personSignals(plan, { ...before, moving: true }, walkSensors, walkFurniture));
+        : personSignals(plan, { ...before, moving: true }, walkSensors, walkFurniture, walkSightNow()));
     const stride = ((before.stride ?? 0) + Math.hypot(next.x - before.x, next.y - before.y)) % 1.1;
     walker.person = { ...next, pose: 'standing', moving: true, stride };
-    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
     recordWalk(route, before, walker.person, hadCoverage, routeCoverage(walker.readings));
     if (view === '2d' && (name === activeWalker || !currentWalker().person.moving)) {
         const { x, y, width, height } = canvas.viewBox.baseVal;
@@ -2513,7 +2566,7 @@ function settleWalk(name) {
     const walker = walkers[name];
     if (walker?.floorId !== walkFloorId() || !walker.person.moving) return false;
     walker.person.moving = false;
-    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
     return true;
 }
 
@@ -2857,7 +2910,7 @@ function beginWalkActivity(name, route, now) {
     const pose = activity.kind === 'seat' ? 'sitting' : activity.kind === 'bed' ? 'lying' : 'standing';
     walker.person = { ...before, ...activity.point, heading: activity.heading, moving: false,
         pose, elevation: activity.elevation, activity: activity.kind };
-    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
     route.playing = { ...activity, before, name, started: now };
     updateWalkTest(walker, route.playing, now);
     if (autoWalk.test) updateAutoWalkStatus('');
@@ -2886,7 +2939,7 @@ function updateWalkTest(walker, activity, now) {
     if (activity.checked) return false;
     walker.person.fallProgress = phase.fallProgress;
     if (phase.checked) walker.person.pose = 'lying';
-    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture);
+    walker.readings = personSignals(plan, walker.person, walkSensors, walkFurniture, walkSightNow());
     if (phase.checked) {
         activity.detector = walker.readings.find(reading =>
             reading.signals.some(signal => signal.radar === 'ld6002b' && signal.seen));
@@ -2899,7 +2952,7 @@ function updateWalkTest(walker, activity, now) {
 function finishWalkActivity(name, route) {
     if (!route.playing) return false;
     walkers[name].person = route.playing.before;
-    walkers[name].readings = personSignals(plan, walkers[name].person, walkSensors, walkFurniture);
+    walkers[name].readings = personSignals(plan, walkers[name].person, walkSensors, walkFurniture, walkSightNow());
     route.playing = null;
     return true;
 }
@@ -3119,10 +3172,15 @@ space.addEventListener('click', event => {
         return;
     }
     if (simulation) {
-        if (currentWalker() && event.target.closest('.fp-space-floor')) {
+        // A click on a door opens or closes it; anywhere else on the floor the person walks there.
+        const leaf = plan.doors.find(item => item.id === event.target.closest('.fp-space-door-leaf, .fp-space-door')?.dataset.item);
+        if (leaf) toggleDoor(leaf);
+        else if (currentWalker() && event.target.closest('.fp-space-floor')) {
             const point = eventPoint(event, space);
             const [x, y] = unprojectFloor([point.x, point.y], spaceCamera);
-            if (plan.rooms.some(room => contains(room, { x, y }))) restartWalk({ x, y });
+            const door = doorAt(plan, { x, y });
+            if (door) toggleDoor(door);
+            else if (plan.rooms.some(room => contains(room, { x, y }))) restartWalk({ x, y });
         }
         focusWalkMap();
         return;
@@ -3814,7 +3872,10 @@ canvas.addEventListener('click', event => {
     }
     if (!currentWalker()) return;
     const point = eventPoint(event);
-    if (plan.rooms.some(room => contains(room, point))) restartWalk(point);
+    // During the coverage test a click on a door opens or closes it.
+    const door = simulation && doorAt(plan, point);
+    if (door) toggleDoor(door);
+    else if (plan.rooms.some(room => contains(room, point))) restartWalk(point);
 });
 
 canvas.addEventListener('contextmenu', event => {
@@ -4367,6 +4428,10 @@ const actions = {
         }
         board.focus({ preventScroll: true });
     },
+    toggle_door() {
+        const door = plan.doors.find(item => item.id === selected);
+        if (door) toggleDoor(door);
+    },
     move_opening() {
         const { type, item } = selectedItem();
         if (!['doors', 'windows', 'mirrors'].includes(type)) return;
@@ -4589,7 +4654,7 @@ root.addEventListener('click', event => {
         walkControls.stop();
         const { person } = currentWalker();
         person.pose = personPose;
-        currentWalker().readings = personSignals(plan, person, walkSensors, walkFurniture);
+        currentWalker().readings = personSignals(plan, person, walkSensors, walkFurniture, walkSightNow());
         renderPerson();
         return;
     }

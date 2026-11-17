@@ -69,6 +69,16 @@ test('every planner shell lets a part of an uploaded image be chosen', () => {
     }
 });
 
+test('every planner shell can open and close a door and says what that does', () => {
+    for (const { language, copy } of shells) {
+        for (const key of ['door_open', 'door_close', 'door_note']) {
+            assert.ok(copy[key]?.trim(), `${language}.${key}`);
+            assert.doesNotMatch(copy[key], typographic, `${language}.${key}`);
+        }
+        assert.notEqual(copy.door_open, copy.door_close, language);
+    }
+});
+
 test('every planner shell has the same text keys', () => {
     const keys = shell => Object.keys(shell.copy).sort();
     for (const shell of shells) assert.deepEqual(keys(shell), keys(shells[0]), shell.language);

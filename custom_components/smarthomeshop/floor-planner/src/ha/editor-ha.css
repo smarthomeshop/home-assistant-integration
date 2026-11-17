@@ -163,7 +163,7 @@ button, summary { cursor: pointer; }
     .fp-space-marker circle, .fp-sensor { fill: var(--ha-room); }
     .fp-space-marker.selected circle { fill: var(--ha-selected); }
     .fp-building-label { fill: var(--ha-ink); stroke: var(--ha-map); }
-    :is(.fp-door-leaf, .fp-space-door) { stroke: #91612d; }
+    :is(.fp-door-leaf, .fp-door-shut, .fp-space-door) { stroke: #91612d; }
     .fp-opening { color: #216d99; }
     .fp-opening.mirrors { color: #864cb2; }
     .fp-plan-zone { color: #217956; }

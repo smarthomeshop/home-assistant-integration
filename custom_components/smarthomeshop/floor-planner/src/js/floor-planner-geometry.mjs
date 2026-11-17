@@ -183,11 +183,14 @@ export const doorsOnPlan = plan => plan.doors.map(door => {
     return [[door.x, door.y], [door.x + door.width * Math.cos(angle), door.y + door.width * Math.sin(angle)]];
 });
 
-export function wallSegments(a, b, doors) {
+// The parts of the wall from a to b that are left between the doors. A door
+// counts when it lies within reach of the wall's line: a few centimetres for a
+// door drawn on this wall, more to also open the other face of a thick wall.
+export function wallSegments(a, b, doors, reach = .04) {
     const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
     const length = Math.hypot(dx, dy);
     const position = ([x, y]) => ((x - a[0]) * dx + (y - a[1]) * dy) / length ** 2;
-    const onLine = ([x, y]) => Math.abs((x - a[0]) * dy - (y - a[1]) * dx) / length < .04;
+    const onLine = ([x, y]) => Math.abs((x - a[0]) * dy - (y - a[1]) * dx) / length < reach;
     const openings = doors.filter(door => door.every(onLine)).map(door => door.map(position).sort((a, b) => a - b))
         .filter(([from, to]) => to > 0 && from < 1)
         .sort(([a], [b]) => a - b);

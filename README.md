@@ -116,6 +116,10 @@ when you ask for it). Then place your
 UltimateSensor, UltimateSensor Mini, CeilSense and WallSense radars where they
 hang in real life. Administrators edit the plan; other users see the live view.
 
+- **Coverage that follows your walls and doors.** A radar sees through an open
+  door into the next room and stops at walls, also the ones you draw inside a
+  room. Mark a door as closed to see what is left, or click it during the
+  coverage test. The test person opens a closed door when walking through it.
 - **Live positions** for LD2450, LD2460 and LD6002B radars. Presence-only
   radars such as LD2412 show presence for the whole room instead of a made-up
   position.

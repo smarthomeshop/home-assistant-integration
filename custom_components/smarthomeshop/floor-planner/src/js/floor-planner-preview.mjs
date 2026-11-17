@@ -2,6 +2,7 @@ import { paintFloorCoverage } from './floor-planner-beam.mjs';
 import { contains } from './floor-planner-model.mjs';
 import { prepareFurnitureOcclusion } from './floor-planner-obstruction.mjs';
 import { paintPerson, personSignals, preparePersonSensors, solidWalls } from './floor-planner-person.mjs';
+import { prepareSight } from './floor-planner-sight.mjs';
 import { defaultSpaceCamera, paintBuilding, projectSpace } from './floor-planner-space.mjs';
 import { floorStackHeight, stairGait, stairGaitDuration, stairHeading, stairOcclusionId, stairWalls } from './floor-planner-stairs.mjs';
 import { createWalkNetwork } from './floor-planner-walk-route.mjs';
@@ -84,6 +85,7 @@ export function startDemoPreview(section, floors, stair, copy, reducedMotion) {
         return {
             floor, plan: floor.plan, layer,
             sensors: preparePersonSensors(floor.plan), furniture: prepareFurnitureOcclusion(floor.plan.furniture ?? []),
+            sight: prepareSight(floor.plan),
             elements: layer.querySelectorAll('.fp-space-marker, .fp-stack-beam, .fp-wall-fan'),
         };
     });
@@ -93,7 +95,7 @@ export function startDemoPreview(section, floors, stair, copy, reducedMotion) {
     let sequence, paused = reducedMotion.matches, visible = false;
 
     function draw(floor, pose, crossing = false) {
-        const readings = crossing ? [] : personSignals(floor.plan, pose, floor.sensors, floor.furniture);
+        const readings = crossing ? [] : personSignals(floor.plan, pose, floor.sensors, floor.furniture, floor.sight);
         const detected = readings.filter(reading => reading.seen);
         for (const layer of markers) {
             for (const element of layer.elements) {

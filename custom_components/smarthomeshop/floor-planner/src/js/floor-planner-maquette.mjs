@@ -1,3 +1,4 @@
+import { doorHeight } from './floor-planner-sight.mjs';
 import { contains } from './floor-planner-model.mjs';
 import { depthOrder, onFaceEdge } from './floor-planner-depth.mjs';
 import { paintZone } from './floor-planner-drawing.mjs';
@@ -215,6 +216,16 @@ export function paintMaquette(plan, project, depthOf, towardCamera, selected, fl
             `fp-space-opening ${type}${item.id === selected ? ' selected' : ''}`, `data-item="${item.id}"`);
     }
     const zones = (plan.zones ?? []).map(item => paintZone(item, point => project(point, .025), item.id === selected)).join('');
+    // A closed door fills its opening, as high as the wall around it is drawn.
+    doors.forEach(([a, b], index) => {
+        const door = plan.doors[index];
+        if (!door.closed) return;
+        const normal = inward(a, b);
+        const { height } = wallGeometry(a, b, plan.rooms.find(room => room.id === door.roomId) ?? null, normal);
+        const leaf = [shift(a, normal, -.025), shift(b, normal, -.025), shift(b, normal, .025), shift(a, normal, .025)];
+        objects.push(...blockFaces(leaf, 0, Math.min(doorHeight, height),
+            `class="fp-space-wall fp-space-door-leaf${door.id === selected ? ' selected' : ''}" data-item="${door.id}"`));
+    });
     const openings = doors.map((door, index) => spacePolygon('polyline', door.map(point => project(point)),
         `class="fp-space-door${plan.doors[index].id === selected ? ' selected' : ''}" data-item="${plan.doors[index].id}"`));
     const shadowId = `fp-floor-clip-${sceneId}`;

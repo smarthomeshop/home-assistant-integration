@@ -294,7 +294,7 @@ function validPlan(plan) {
   if (plan.underlay !== void 0 && !validUnderlay(plan.underlay)) return false;
   if (!list(plan.rooms, (item) => point(item) && validName(item.name) && validRoomDimensions(item) && validFinish(item) && (item.useSampleName === void 0 || typeof item.useSampleName === "boolean") && (item.outline === void 0 || plan.version >= 2 && validRoomOutline(item)) && (item.obstacles === void 0 || typeof item.obstacles === "boolean") && (item.priority == null || numberBetween(item.priority.x, 0.05, 0.95) && numberBetween(item.priority.y, 0.05, 0.95)))) return false;
   if (!list(plan.walls, (item) => point(item) && point({ x: item.endX, y: item.endY }) && (item.x !== item.endX || item.y !== item.endY))) return false;
-  if (!list(plan.doors, (item) => point(item) && angle(item.angle) && numberBetween(item.width, 0.5, 2))) return false;
+  if (!list(plan.doors, (item) => point(item) && angle(item.angle) && numberBetween(item.width, 0.5, 2) && (item.closed === void 0 || typeof item.closed === "boolean"))) return false;
   if (!list(plan.sensors, (item) => point(item) && angle(item.angle) && Object.hasOwn(devices, item.model) && validSensorRadar(item) && (item.installation === void 0 || installationsFor(item.model).includes(item.installation)) && (item.climate === void 0 || item.model === "ceilsense-v2" && typeof item.climate === "boolean") && (item.mountHeight === void 0 || devices[item.model].mount === "wall" && numberBetween(item.mountHeight, 0.15, 6)) && (item.levelMountRoom == null || plan.rooms.some((room) => room.id === item.levelMountRoom && room.ceiling)))) return false;
   if (plan.furniture !== void 0 && !list(plan.furniture, (item) => point(item) && angle(item.angle) && validName(item.name) && Object.hasOwn(furnitureCatalog, item.kind) && furnitureMaterials.includes(item.material) && numberBetween(item.width, 0.02, 12) && numberBetween(item.depth, 0.02, 12) && numberBetween(item.height, 0.01, 6) && numberBetween(item.base, 0, 6), maxFurniture)) return false;
   const roomIds = new Set(plan.rooms.map((room) => room.id));
@@ -948,6 +948,7 @@ function projectFromRooms(rooms, profiles, devices2 = []) {
           haIndex: index,
           haRecord: record.id,
           haRoom: room.id,
+          ...key === "doors" && record.closed === true ? { closed: true } : {},
           angle: degrees(angle2 + (inward ? 180 : 0)),
           x: item.x + (inward ? Math.cos(radians) * width : 0),
           y: item.y + (inward ? Math.sin(radians) * width : 0)
@@ -1098,8 +1099,9 @@ function wallOpening(item, record, walls, toRoom, height, roomName) {
   const { x1, y1, x2, y2 } = walls[wall.index];
   const start = toRoom(item);
   const inward = (middle.x - start.x) * (x2 - x1) + (middle.y - start.y) * (y2 - y1) < 0;
+  const { closed: _, ...kept } = record ?? {};
   return {
-    ...record,
+    ...kept,
     id: record?.id ?? item.id,
     wallIndex: wall.index,
     position: wall.along / wall.length,
@@ -1109,7 +1111,8 @@ function wallOpening(item, record, walls, toRoom, height, roomName) {
       protectionEnabled: item.protectionEnabled === true,
       reflectionDepthMm: Math.round(Math.max(0.25, Math.min(6, Number(item.reflectionDepthM) || 2)) * 1e3)
     } : {},
-    ...height === void 0 ? { openDirection: inward ? "inward" : "outward" } : {}
+    // A door is open unless it is kept closed; a closed door stops the radars.
+    ...height === void 0 ? { openDirection: inward ? "inward" : "outward", ...item.closed ? { closed: true } : {} } : {}
   };
 }
 function saveChanges(project, saved, haRooms) {

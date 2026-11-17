@@ -1,7 +1,8 @@
 import { exampleWindows, furnitureParts } from './floor-planner-furniture.mjs';
-import { ceilingProfiles, radarFields, radarOrigin, wallSector } from './floor-planner-radar.mjs';
+import { ceilingProfiles, radarFields, radarOrigin, sensorMountHeight, wallSector } from './floor-planner-radar.mjs';
 import { devices, roomForDevice } from './floor-planner-model.mjs';
-import { polygonEdges, roomArea, roomCorners, roomInteriorPoint, roomVisibility } from './floor-planner-geometry.mjs';
+import { polygonEdges, roomArea, roomCorners, roomInteriorPoint } from './floor-planner-geometry.mjs';
+import { prepareSight, sightPolygon } from './floor-planner-sight.mjs';
 
 import { ceilingHeightAt } from './floor-planner-ceiling.mjs';
 
@@ -51,7 +52,9 @@ export function paintFurniture(item, selected = false, interactive = true) {
         <rect class="fp-furniture-hit" x="${-item.width / 2}" y="${-item.depth / 2}" width="${item.width}" height="${item.depth}"/>${shape}</g>`;
 }
 
-function coverage(item, room, isSelected, focus, radarOptions) {
+// The range of a sensor, cut off where it cannot see: at walls and closed
+// doors, and past an open door only as far as it looks through it.
+function coverage(item, room, isSelected, focus, radarOptions, sight) {
     const fields = radarFields(room, item, radarOptions);
     if (!fields.length) return '';
     const ceiling = devices[item.model].mount === 'ceiling';
@@ -67,10 +70,11 @@ function coverage(item, room, isSelected, focus, radarOptions) {
         const [rx, ry] = field.radii;
         return `<ellipse${style} rx="${rx}" ry="${ry}"/>`;
     }).join('');
-    const clipId = room.outline ? 'fp-sight-' + item.id : 'clip-' + room.id;
-    const clip = room.outline ? `<defs><clipPath id="${clipId}">
-        <polygon points="${roomVisibility(room, radarOrigin(item)).map(point => point.join(',')).join(' ')}"/>
-    </clipPath></defs>` : '';
+    const clipId = 'fp-sight-' + item.id;
+    const seen = sightPolygon(sight, radarOrigin(item), { height: sensorMountHeight(item, room) });
+    const clip = `<defs><clipPath id="${clipId}">
+        <polygon points="${seen.map(point => point.map(value => Number(value.toFixed(3))).join(',')).join(' ')}"/>
+    </clipPath></defs>`;
     return `${clip}<g class="fp-range ${ceiling ? 'ceiling' : 'wall'} ${isSelected ? 'selected' : ''}"
         ${fields.some(field => field.estimatedHeight) ? 'data-height-estimate' : ''} clip-path="url(#${clipId})">
         <g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">${shape}</g></g>`;
@@ -81,7 +85,7 @@ export function paintPlacementPreview(plan, item, radarOptions) {
     const mount = devices[item.model].mount;
     const marker = mount === 'ceiling' ? '<circle r=".18"/>' : '<rect x="-.19" y="-.14" width=".38" height=".28" rx=".05"/>';
     return `<g class="fp-placement-preview">
-        ${coverage({ ...item, id: '__placement_preview' }, room, true, null, radarOptions)}
+        ${coverage({ ...item, id: '__placement_preview' }, room, true, null, radarOptions, prepareSight(plan))}
         <g class="fp-placement-marker ${mount}" transform="translate(${item.x} ${item.y}) rotate(${item.angle})">
             <circle r=".34" class="fp-placement-ring"/>${marker}<path d="M-.07 0H.07M0-.07V.07"/>
         </g>
@@ -177,16 +181,18 @@ export function paintPlan(plan, showCoverage, selected, number, focus = null, { 
     </g>`).join('');
     const ceilingLayer = marks ? `<g${slopeMask ? ' mask="url(#fp-slope-clearance)"' : ''}>${marks}</g>` : '';
     const clips = plan.rooms.map(room => `<clipPath id="clip-${room.id}">${paintRoomSurface(room)}</clipPath>`).join('');
+    const sight = showCoverage ? prepareSight(plan) : null;
     const ranges = showCoverage ? plan.sensors.map(item =>
-        coverage(item, roomForDevice(plan.rooms, item), selected === item.id, focus, radarOptions)).join('') : '';
+        coverage(item, roomForDevice(plan.rooms, item), selected === item.id, focus, radarOptions, sight)).join('') : '';
     const outline = activeRoom && activeRoom.id === selected
         ? paintRoomSurface(activeRoom, 'class="fp-room-outline"') : '';
     const walls = plan.walls.map(wall => `<g class="fp-wall${selectedClass(wall)}" data-item="${wall.id}">
         <line class="fp-wall-hit" x1="${wall.x}" y1="${wall.y}" x2="${wall.endX}" y2="${wall.endY}"/>
         <line x1="${wall.x}" y1="${wall.y}" x2="${wall.endX}" y2="${wall.endY}"/></g>`).join('');
-    const doors = plan.doors.map(door => `<g data-item="${door.id}" class="fp-door${selectedClass(door)}" transform="translate(${door.x} ${door.y}) rotate(${door.angle})">
+    const doors = plan.doors.map(door => `<g data-item="${door.id}" class="fp-door${door.closed ? ' closed' : ''}${selectedClass(door)}" transform="translate(${door.x} ${door.y}) rotate(${door.angle})">
         <path class="fp-door-gap" d="M0 0h${door.width}"/>
-        <path class="fp-door-leaf" d="M0 0v-${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>
+        ${door.closed ? `<path class="fp-door-shut" d="M0 0h${door.width}"/>`
+            : `<path class="fp-door-leaf" d="M0 0v-${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>`}
         ${rectangle(-.12, -door.width - .12, door.width + .24, door.width + .24)}
     </g>`).join('');
     const sensors = plan.sensors.map((item, index) => {
