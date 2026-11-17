@@ -192,7 +192,8 @@ export function paintPlan(plan, showCoverage, selected, number, focus = null, { 
     const doors = plan.doors.map(door => `<g data-item="${door.id}" class="fp-door${door.closed ? ' closed' : ''}${selectedClass(door)}" transform="translate(${door.x} ${door.y}) rotate(${door.angle})">
         <path class="fp-door-gap" d="M0 0h${door.width}"/>
         ${door.closed ? `<path class="fp-door-shut" d="M0 0h${door.width}"/>`
-            : `<path class="fp-door-leaf" d="M0 0v-${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>`}
+            : `<path class="fp-door-swing" d="M0 -${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>
+                <path class="fp-door-leaf" d="M0 0v-${door.width}"/>`}
         ${rectangle(-.12, -door.width - .12, door.width + .24, door.width + .24)}
     </g>`).join('');
     const sensors = plan.sensors.map((item, index) => {

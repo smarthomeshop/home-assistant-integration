@@ -2,12 +2,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { paintPlan } from '../src/js/floor-planner-drawing.mjs';
 import { coverageCells } from '../src/js/floor-planner-heatmap.mjs';
 import { blankPlan, validPlan } from '../src/js/floor-planner-model.mjs';
 import { personSignals } from '../src/js/floor-planner-person.mjs';
 import {
-    doorHeight, doorReach, doorsHeldOpen, planWithOpenDoors, prepareSight, sightBlocked, sightPolygon, sightReach,
+    doorAt, doorHeight, doorReach, doorsHeldOpen, planWithOpenDoors, prepareSight, sightBlocked, sightPolygon, sightReach,
 } from '../src/js/floor-planner-sight.mjs';
+import { defaultSpaceCamera, paintSpace } from '../src/js/floor-planner-space.mjs';
 
 const room = (id, x, extra = {}) => ({ id, name: id, x, y: 0, width: 4, depth: 4, height: 2.6, ...extra });
 // Two rooms side by side with a door of one metre in the wall between them.
@@ -141,4 +143,32 @@ test('the coverage map shows what spills through an open door', () => {
     assert.equal(covered(shut, 4), 0);
     // The radar's own room is covered the same either way.
     assert.equal(open.filter(cell => cell.x < 4 && cell.seen).length, shut.filter(cell => cell.x < 4 && cell.seen).length);
+});
+
+test('a door can be seen in the floor plan and stands in the 3D model, open or closed', () => {
+    const number = new Intl.NumberFormat('en');
+    const open = paintPlan(home(), false, null, number);
+    assert.match(open, /class="fp-door" /);
+    assert.ok(open.includes('fp-door-leaf') && open.includes('fp-door-swing') && !open.includes('fp-door-shut'));
+    const shut = paintPlan(home({ closed: true }), false, null, number);
+    assert.match(shut, /class="fp-door closed" /);
+    assert.ok(shut.includes('fp-door-shut') && !shut.includes('fp-door-leaf') && !shut.includes('fp-door-swing'));
+
+    // In 3D the door is a panel that can be clicked, with the arc it swings through while it is open.
+    const model = plan => paintSpace(plan, defaultSpaceCamera, 'door').markup;
+    const openModel = model(home()), shutModel = model(home({ closed: true }));
+    for (const markup of [openModel, shutModel]) assert.match(markup, /class="fp-space-wall fp-space-door-leaf selected" data-item="door"/);
+    assert.ok(openModel.includes('fp-space-door-swing'));
+    assert.ok(!shutModel.includes('fp-space-door-swing'));
+    assert.notEqual(openModel, shutModel);
+});
+
+test('a click near a door finds that door, also on the edge of a room', () => {
+    const plan = home();
+    assert.equal(doorAt(plan, { x: 4, y: 2 }, .16).id, 'door');
+    assert.equal(doorAt(plan, { x: 4.1, y: 1.6 }, .16).id, 'door');
+    // Further along the same wall, or well inside the room, there is no door.
+    assert.equal(doorAt(plan, { x: 4, y: .8 }, .16), null);
+    assert.equal(doorAt(plan, { x: 3.5, y: 2 }, .16), null);
+    assert.equal(doorAt({ ...plan, doors: [] }, { x: 4, y: 2 }), null);
 });

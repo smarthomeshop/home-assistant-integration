@@ -250,6 +250,21 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron { transform: rotate(180d
 .fp-drawing-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px; margin-top: 4px; padding: 4px; border: 1px solid #596373; border-radius: 7px; }
 .fp-scale { display: grid; position: absolute; inset: auto auto 12px 15px; min-width: 30px; width: var(--metre, 30px); text-align: center; font-size: 11px; white-space: nowrap; }
 .fp-scale span { height: 6px; border: solid #c6d0dc; border-width: 0 1px 1px; margin-bottom: 2px; }
+/* Zoom on the map itself: in, how far the map is zoomed, out, and back to the whole plan. */
+.fp-zoom-bar { position: absolute; inset: auto 14px 14px auto; z-index: 3; display: grid; width: 40px; border: 1px solid #4c5664; border-radius: 10px; color: #e6ebf2; background: #262d38f0; overflow: hidden; }
+.fp .fp-zoom-bar button { display: grid; place-items: center; width: 100%; min-height: 0; height: 38px; padding: 0; border: 0; border-radius: 0; color: inherit; background: transparent; }
+.fp .fp-zoom-bar button:hover:not(:disabled) { color: #fff; background: #3a4350; }
+.fp .fp-zoom-bar button:disabled { opacity: .38; cursor: default; }
+.fp-zoom-bar svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.fp-zoom-bar [data-action="map_fit"] { border-top: 1px solid #4c5664; }
+.fp-zoom-level { padding: 4px 0; border-block: 1px solid #4c5664; text-align: center; font-size: 11px; font-weight: 650; font-variant-numeric: tabular-nums; }
+/* On a narrow screen the bottom is taken by the tools, so the zoom bar sits halfway up the side. */
+@media (max-width: 760px) {
+    .fp-zoom-bar { inset: 50% 8px auto auto; width: 36px; transform: translateY(-50%); }
+    .fp .fp-zoom-bar button { height: 34px; }
+}
+.fp .fp-primary.fp-danger { background: #b3261e; }
+.fp .fp-primary.fp-danger:hover { background: #8f1d17; }
 
 .fp-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; min-height: 36px; padding: 8px 12px; border-radius: 0 0 0 13px; border-top: 1px solid var(--fp-border); color: var(--fp-muted); background: var(--fp-panel); font-size: 11px; }
 .fp-legend > span { display: flex; align-items: center; gap: 6px; }
@@ -369,10 +384,14 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron { transform: rotate(180d
 .fp-wall .fp-wall-hit { stroke: transparent; stroke-width: 16px; }
 .fp-wall.selected line:last-child { stroke: #c5bdff; }
 .fp-door-gap { stroke: #282f38; stroke-width: 5px; vector-effect: non-scaling-stroke; }
-.fp-door-leaf { fill: none; stroke: #cab18d; stroke-width: 1.2px; vector-effect: non-scaling-stroke; }
-.fp-door.selected .fp-door-leaf { stroke: #ffdfaa; stroke-width: 2px; }
+.fp-door-leaf { fill: none; stroke: #e0bd84; stroke-width: 3px; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.fp-door-swing { fill: none; stroke: #cab18d; stroke-width: 1.2px; vector-effect: non-scaling-stroke; }
+.fp-door.selected :is(.fp-door-leaf, .fp-door-swing) { stroke: #ffdfaa; }
+.fp-door.selected .fp-door-swing { stroke-width: 2px; }
+/* On an uploaded plan the door needs a darker line to stand out from the paper. */
+.fp-shell[data-underlay] .fp-door:not(.selected) :is(.fp-door-leaf, .fp-door-swing, .fp-door-shut) { stroke: #b0661a; }
 /* A closed door fills its opening. */
-.fp-door-shut { fill: none; stroke: #cab18d; stroke-width: 3px; vector-effect: non-scaling-stroke; }
+.fp-door-shut { fill: none; stroke: #e0bd84; stroke-width: 3.4px; vector-effect: non-scaling-stroke; }
 .fp-door.selected .fp-door-shut { stroke: #ffdfaa; }
 /* During the coverage test a click on a door opens or closes it. */
 .fp-shell[data-simulation] .fp-door { cursor: pointer; }
@@ -524,7 +543,13 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron { transform: rotate(180d
 .fp .fp-depth-boundary { fill: none; }
 .fp-space-door { stroke: #d1b795; stroke-width: 1.6px; vector-effect: non-scaling-stroke; }
 .fp-space-door.selected { stroke: #ffe0a8; stroke-width: 3px; }
-.fp-space-door-leaf { --fp-model-top: #dcc7a3; --fp-model-face: #c3a57a; }
+.fp-space-door-leaf { --fp-model-top: #e3c08c; --fp-model-face: #c59a5f; cursor: pointer; }
+.fp-space-door-leaf.selected { --fp-model-top: #ffe0a8; --fp-model-face: #f0c477; }
+.fp-space-door-swing { fill: none; stroke-dasharray: 4 3; }
+/* What can be done with the selected door, on the map itself. */
+.fp-door-actions { position: absolute; inset: auto auto 92px 50%; z-index: 3; align-items: center; padding: 6px 8px 6px 13px; border: 1px solid #4c5664; border-radius: 10px; color: #e6ebf2; background: #262d38f0; font-size: 12px; font-weight: 650; transform: translateX(-50%); white-space: nowrap; }
+.fp-door-actions [data-action="delete"] { color: #ffb4b0; }
+@media (max-width: 760px) { .fp-door-actions { bottom: 134px; } }
 .fp-shell[data-simulation] #fp-space :is(.fp-space-door, .fp-space-door-leaf) { cursor: pointer; }
 .fp-space-ceiling { pointer-events: none; }
 .fp-space-ceiling :is(polygon, polyline) { fill: none; stroke: #9babbf; stroke-width: 1px; stroke-dasharray: 4 5; vector-effect: non-scaling-stroke; }

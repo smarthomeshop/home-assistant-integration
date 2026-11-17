@@ -1194,7 +1194,8 @@ function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { mea
         <line x1="${wall.x}" y1="${wall.y}" x2="${wall.endX}" y2="${wall.endY}"/></g>`).join("");
   const doors = plan2.doors.map((door) => `<g data-item="${door.id}" class="fp-door${door.closed ? " closed" : ""}${selectedClass(door)}" transform="translate(${door.x} ${door.y}) rotate(${door.angle})">
         <path class="fp-door-gap" d="M0 0h${door.width}"/>
-        ${door.closed ? `<path class="fp-door-shut" d="M0 0h${door.width}"/>` : `<path class="fp-door-leaf" d="M0 0v-${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>`}
+        ${door.closed ? `<path class="fp-door-shut" d="M0 0h${door.width}"/>` : `<path class="fp-door-swing" d="M0 -${door.width}a${door.width} ${door.width} 0 0 1 ${door.width} ${door.width}"/>
+                <path class="fp-door-leaf" d="M0 0v-${door.width}"/>`}
         ${rectangle2(-0.12, -door.width - 0.12, door.width + 0.24, door.width + 0.24)}
     </g>`).join("");
   const sensors = plan2.sensors.map((item, index) => {
@@ -1859,24 +1860,33 @@ function paintMaquette(plan2, project, depthOf, towardCamera2, selected2, floorO
     );
   }
   const zones = (plan2.zones ?? []).map((item) => paintZone(item, (point3) => project(point3, 0.025), item.id === selected2)).join("");
+  const swings = [];
   doors.forEach(([a, b], index) => {
     const door = plan2.doors[index];
-    if (!door.closed) return;
-    const normal = inward(a, b);
-    const { height } = wallGeometry(a, b, plan2.rooms.find((room) => room.id === door.roomId) ?? null, normal);
-    const leaf = [shift(a, normal, -0.025), shift(b, normal, -0.025), shift(b, normal, 0.025), shift(a, normal, 0.025)];
-    objects.push(...blockFaces(
-      leaf,
-      0,
-      Math.min(doorHeight, height),
-      `class="fp-space-wall fp-space-door-leaf${door.id === selected2 ? " selected" : ""}" data-item="${door.id}"`
-    ));
+    const pick = `${door.id === selected2 ? " selected" : ""}" data-item="${door.id}"`;
+    const { height } = wallGeometry(a, b, plan2.rooms.find((room) => room.id === door.roomId) ?? null, inward(a, b));
+    const turn = door.angle * Math.PI / 180;
+    const swung = (share2) => [
+      a[0] + door.width * (Math.cos(turn) * Math.sin(share2) + Math.sin(turn) * Math.cos(share2)),
+      a[1] + door.width * (Math.sin(turn) * Math.sin(share2) - Math.cos(turn) * Math.cos(share2))
+    ];
+    const end2 = door.closed ? b : swung(0);
+    const side = inward(a, end2);
+    const leaf = [shift(a, side, -0.025), shift(end2, side, -0.025), shift(end2, side, 0.025), shift(a, side, 0.025)];
+    objects.push(...blockFaces(leaf, 0, Math.min(doorHeight, Math.max(height, doorStub)), `class="fp-space-wall fp-space-door-leaf${pick}`));
+    if (!door.closed) {
+      swings.push(spacePolygon(
+        "polyline",
+        Array.from({ length: 13 }, (_, step2) => project(swung(step2 / 12 * Math.PI / 2))),
+        `class="fp-space-door fp-space-door-swing${pick}`
+      ));
+    }
   });
-  const openings = doors.map((door, index) => spacePolygon(
+  const openings = [...swings, ...doors.map((door, index) => spacePolygon(
     "polyline",
     door.map((point3) => project(point3)),
     `class="fp-space-door${plan2.doors[index].id === selected2 ? " selected" : ""}" data-item="${plan2.doors[index].id}"`
-  ));
+  ))];
   const shadowId = `fp-floor-clip-${sceneId}`;
   const interiorShadows = floorClip.length && !draft ? `<defs><clipPath id="${shadowId}">${floorClip.join("")}</clipPath></defs>
         <g class="fp-interior-shadow" clip-path="url(#${shadowId})">
@@ -1890,7 +1900,7 @@ function paintMaquette(plan2, project, depthOf, towardCamera2, selected2, floorO
             ${openings.join("")}${paintFaces(objects, project, towardCamera2, light)}`
   };
 }
-var floorSlabDepth, spacePolygon, midpoint, shift, inward, wallColor, rectangle3, wallModes;
+var floorSlabDepth, spacePolygon, midpoint, shift, inward, wallColor, rectangle3, wallModes, doorStub;
 var init_floor_planner_maquette = __esm({
   "src/js/floor-planner-maquette.mjs"() {
     init_floor_planner_sight();
@@ -1912,6 +1922,7 @@ var init_floor_planner_maquette = __esm({
     wallColor = (room) => room?.wallColor ? ` data-wall="${room.wallColor}"` : "";
     rectangle3 = (x, y, w, d) => [[x, y], [x + w, y], [x + w, y + d], [x, y + d]];
     wallModes = ["cutaway", "up", "down"];
+    doorStub = 0.9;
   }
 });
 
@@ -5421,6 +5432,13 @@ var init_floor_planner_order = __esm({
 
 // src/js/floor-planner.js
 var floor_planner_exports = {};
+function showDoorActions() {
+  if (!doorActions) return;
+  const { type, item } = selectedItem();
+  const shown = type === "doors" && tool === "edit" && !simulation && !liveMode;
+  doorActions.bar.hidden = !shown;
+  if (shown) doorActions.toggle.textContent = item.closed ? copy.door_open : copy.door_close;
+}
 function addRecognisedRooms(answer, keepScale) {
   const draft = draftFromRecognition(answer?.recognition, plan.underlay, { roomName: copy.room, keepScale });
   const next = draft && planWithDraft(plan, draft);
@@ -5577,6 +5595,7 @@ function updateTools() {
   status.hidden = tool === "edit";
   element("fp-draw-keys").hidden = tool !== "room" && tool !== "wall";
   element("fp-tool-stop").hidden = tool !== "wall";
+  showDoorActions();
   canvas.dataset.tool = tool;
   renderRoomHandles();
   root.querySelectorAll("[data-sensor-marker]").forEach((marker) => {
@@ -6219,6 +6238,7 @@ function homeAssistantRoomLink(room) {
     </fieldset>`;
 }
 function renderInspector() {
+  showDoorActions();
   const { type, item } = selectedItem();
   const inspector = element("fp-inspector");
   const title = element("fp-inspector-title");
@@ -6292,8 +6312,9 @@ function renderInspector() {
         <div>${type === "rooms" ? ceilingTypeField(item.ceiling) : ""}${roomFloor}${positionFields}<div class="fp-inspector-actions">
             <button type="button" data-action="edit_outline">${copy.room_edit_outline}</button>
             <button type="button" data-action="rotate_room">${copy.rotate}</button>
-            <button type="button" data-action="delete">${copy.remove}</button>
-        </div></div></details>`;
+            ${copy.room_delete_confirm ? "" : `<button type="button" data-action="delete">${copy.remove}</button>`}
+        </div></div></details>
+        ${copy.room_delete_confirm ? `<div class="fp-inspector-actions"><button type="button" class="fp-room-remove" data-action="delete">${copy.room_delete_confirm}</button></div>` : ""}`;
   inspector.innerHTML = `
         ${isSensor ? '<div id="fp-sensor-config"></div>' : ""}
         ${isSensor ? '<div class="fp-range-key" id="fp-range-key"></div>' : ""}
@@ -6890,6 +6911,7 @@ function updateSpaceControls() {
   follow.setAttribute("aria-pressed", String(spaceFollow));
   root.querySelector('[data-action="space_zoom_out"]').disabled = spaceZoom <= 1;
   root.querySelector('[data-action="space_zoom_in"]').disabled = spaceZoom >= 3.2;
+  showZoom();
 }
 function zoomSpace(factor) {
   spaceZoom = Math.max(1, Math.min(3.2, spaceZoom * factor));
@@ -7856,6 +7878,7 @@ function setView(next) {
   renderUnderlay();
   renderFloors();
   if (!spatial) updateView();
+  showZoom();
 }
 function stopOrbit() {
   orbitDrag = null;
@@ -7921,14 +7944,14 @@ function updateView() {
   const metres = pixelsPerMetre > 110 ? 0.5 : pixelsPerMetre > 34 ? 1 : pixelsPerMetre > 15 ? 2 : 5;
   scale3.style.setProperty("--metre", `${metres * pixelsPerMetre}px`);
   scale3.lastChild.textContent = `${number.format(metres)} m`;
+  showZoom();
   refreshSensorTip();
 }
-function fit() {
+function fittedCamera() {
   const items = [...plan.rooms, ...plan.walls, ...plan.doors, ...plan.sensors];
   if (plan.underlay) items.push({ ...plan.underlay, depth: plan.underlay.width / plan.underlay.ratio });
-  if (!items.length) {
-    camera2 = { x: 5, y: 3.5, height: 10 };
-  } else {
+  if (!items.length) return { x: 5, y: 3.5, height: 10 };
+  {
     const xs = items.flatMap((item) => [item.x, item.endX ?? item.x + (item.depth ? item.width : 0)]);
     const ys = items.flatMap((item) => [item.y, item.endY ?? item.y + (item.depth ?? 0)]);
     for (const [x, y] of plan.furniture.flatMap(furnitureFootprint)) {
@@ -7947,13 +7970,23 @@ function fit() {
     const usableHeight = Math.max(1, clientHeight - topGap - bottomGap);
     const ratio = clientWidth / usableHeight || 1;
     const height = Math.max(4, bottom - top + 1.12, (right - left + 1.35) / ratio) * Math.max(1, clientHeight) / usableHeight;
-    camera2 = {
+    return {
       x: (left + right) / 2,
       y: (top + bottom) / 2 + (bottomGap - topGap) * height / (2 * Math.max(1, clientHeight)),
       height
     };
   }
+}
+function fit() {
+  camera2 = fittedCamera();
   updateView();
+}
+function showZoom() {
+  if (!zoomBar) return;
+  const flat = view !== "3d";
+  zoomBar.level.textContent = zoomBar.share.format(flat ? fittedCamera().height / camera2.height : spaceZoom);
+  zoomBar.zoomIn.disabled = flat ? camera2.height <= 2 : spaceZoom >= 3.2;
+  zoomBar.zoomOut.disabled = flat ? camera2.height >= 280 : spaceZoom <= 1;
 }
 function zoom(factor, anchor = null) {
   const height = Math.max(2, Math.min(280, camera2.height * factor));
@@ -8616,6 +8649,34 @@ function cancelPlacement() {
   placementOpener?.focus();
   placementOpener = null;
 }
+function askRoomRemoval(room) {
+  if (roomRemoval.open) return;
+  element("fp-room-delete-text").textContent = copy.room_delete_text.replaceAll(":name", room.name);
+  roomRemoval.returnValue = "";
+  roomRemoval.onclose = () => {
+    roomRemoval.onclose = null;
+    if (roomRemoval.returnValue === "delete" && selectedItem().item?.id === room.id) removeSelected();
+    if (view === "2d") board.focus({ preventScroll: true });
+  };
+  roomRemoval.showModal();
+}
+function removeSelected() {
+  {
+    const { type, item } = selectedItem();
+    if (!item) return;
+    remember();
+    plan[type] = plan[type].filter((entry) => entry.id !== item.id);
+    if (type === "rooms") {
+      clearRoomMounts(item.id);
+      for (const key of ["windows", "mirrors", "zones"]) if (plan[key]) plan[key] = plan[key].filter((entry) => entry.roomId !== item.id);
+      plan.doors = plan.doors.map((door) => door.roomId === item.id ? { ...door, roomId: void 0 } : door);
+    }
+    if (type === "sensors" && plan.zones) plan.zones = removeZonesOwnedBySensor(plan.zones, item.id);
+    selected = null;
+    recentUndo = copy.undo_removed;
+    finish();
+  }
+}
 function readField(item, key) {
   if (key === "ceilingType") return item.ceiling?.type ?? "flat";
   if (key === "levelMount") return Boolean(item.levelMountRoom && item.levelMountRoom === currentRoom()?.id);
@@ -8742,7 +8803,7 @@ async function openOrder(opener) {
     orderStep.disabled = false;
   }
 }
-var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, pdfPages, imageParts, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, recogniseRooms, recognition, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, placedWithTool, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, walkSight, heldDoors, heldDoorPaint, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, visiblePlan, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
+var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, pdfPages, imageParts, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, recogniseRooms, recognition, zoomBar, doorActions, roomRemoval, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, placedWithTool, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, walkSight, heldDoors, heldDoorPaint, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, visiblePlan, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
 var init_floor_planner2 = __esm({
   "src/js/floor-planner.js"() {
     init_floor_planner();
@@ -8865,6 +8926,66 @@ var init_floor_planner2 = __esm({
       document.getElementById("fp-underlay").after(scan);
       const percentage = new Intl.NumberFormat(root.dataset.locale, { style: "percent" });
       return { button, note, meter, bar, share: share2, scan, frame, percentage, timer: 0, state: "idle", image: null, pending: null };
+    })() : null;
+    zoomBar = copy.zoom_in && copy.zoom_out && copy.fit ? (() => {
+      const bar = document.createElement("div");
+      bar.className = "fp-zoom-bar";
+      bar.setAttribute("role", "group");
+      bar.setAttribute("aria-label", copy.zoom_controls ?? copy.zoom_in);
+      const button = (action, label, drawing2) => {
+        const control = document.createElement("button");
+        control.type = "button";
+        control.dataset.action = action;
+        control.title = label;
+        control.setAttribute("aria-label", label);
+        control.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="${drawing2}"/></svg>`;
+        return control;
+      };
+      const zoomIn = button("map_zoom_in", copy.zoom_in, "M4 10h12m-6-6v12");
+      const level = document.createElement("output");
+      level.className = "fp-zoom-level";
+      const zoomOut = button("map_zoom_out", copy.zoom_out, "M4 10h12");
+      const whole = button("map_fit", copy.fit, "M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4");
+      bar.append(zoomIn, level, zoomOut, whole);
+      document.getElementById("fp-walk-stage").append(bar);
+      return { zoomIn, zoomOut, level, share: new Intl.NumberFormat(root.dataset.locale, { style: "percent", maximumFractionDigits: 0 }) };
+    })() : null;
+    doorActions = copy.door_close && copy.door_open ? (() => {
+      const bar = document.createElement("div");
+      bar.className = "fp-place-actions fp-door-actions";
+      bar.setAttribute("role", "group");
+      bar.setAttribute("aria-label", copy.door);
+      bar.hidden = true;
+      const name = document.createElement("span");
+      name.textContent = copy.door;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.dataset.action = "toggle_door";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.dataset.action = "delete";
+      remove.textContent = copy.remove;
+      bar.append(name, toggle, remove);
+      document.getElementById("fp-walk-stage").append(bar);
+      return { bar, toggle };
+    })() : null;
+    roomRemoval = copy.room_delete_title && copy.room_delete_confirm ? (() => {
+      const dialog = document.createElement("dialog");
+      dialog.className = "fp-furniture-dialog fp-sensor-edit";
+      dialog.id = "fp-room-delete";
+      dialog.setAttribute("aria-labelledby", "fp-room-delete-title");
+      dialog.setAttribute("aria-describedby", "fp-room-delete-text");
+      dialog.innerHTML = `<div class="fp-furniture-heading"><div><h2 id="fp-room-delete-title"></h2><p id="fp-room-delete-text"></p></div></div>
+        <form method="dialog"><div class="fp-sensor-edit-footer">
+            <button type="submit" value="" autofocus></button>
+            <button type="submit" class="fp-primary fp-danger" value="delete"></button>
+        </div></form>`;
+      dialog.querySelector("h2").textContent = copy.room_delete_title;
+      const [keep, remove] = dialog.querySelectorAll("button");
+      keep.textContent = copy.cancel_place;
+      remove.textContent = copy.room_delete_confirm;
+      pdfPages.after(dialog);
+      return dialog;
     })() : null;
     coverageRadarOptions = { allowHeightEstimate: true };
     coverageEstimateLabel = integration?.coverageEstimate ?? copy.coverage_estimate ?? copy.height_note;
@@ -9280,7 +9401,8 @@ var init_floor_planner2 = __esm({
         return;
       }
       roomHandleFeedback.textContent = "";
-      const handle = event.target.closest("[data-room-handle], [data-room-midpoint]");
+      const doorHit = tool === "edit" ? doorAt(plan, eventPoint(event), 0.16) : null;
+      const handle = doorHit ? null : event.target.closest("[data-room-handle], [data-room-midpoint]");
       if (handle) {
         const room = selectedRoomForHandles();
         if (!room) return;
@@ -9305,7 +9427,7 @@ var init_floor_planner2 = __esm({
         board.focus({ preventScroll: true });
         return;
       }
-      const target = event.target.closest("[data-item]")?.dataset.item;
+      const target = doorHit?.id ?? event.target.closest("[data-item]")?.dataset.item;
       if (event.pointerType === "touch" && tool === "edit") {
         interaction = { pointer: event.pointerId, tapSelection: target ?? null, originX: event.clientX, originY: event.clientY, camera: { ...camera2 } };
         canvas.setPointerCapture(event.pointerId);
@@ -9710,6 +9832,10 @@ var init_floor_planner2 = __esm({
       fit,
       zoom_in: () => zoom(0.8),
       zoom_out: () => zoom(1.25),
+      // The zoom bar on the map: the same in 2D and in 3D.
+      map_zoom_in: () => view === "3d" ? actions.space_zoom_in() : actions.zoom_in(),
+      map_zoom_out: () => view === "3d" ? actions.space_zoom_out() : actions.zoom_out(),
+      map_fit: () => view === "3d" ? actions.reset_view() : fit(),
       view_2d() {
         stopStairWalk();
         setView("2d");
@@ -9994,17 +10120,8 @@ var init_floor_planner2 = __esm({
       delete() {
         const { type, item } = selectedItem();
         if (!item) return;
-        remember();
-        plan[type] = plan[type].filter((entry) => entry.id !== item.id);
-        if (type === "rooms") {
-          clearRoomMounts(item.id);
-          for (const key of ["windows", "mirrors", "zones"]) if (plan[key]) plan[key] = plan[key].filter((entry) => entry.roomId !== item.id);
-          plan.doors = plan.doors.map((door) => door.roomId === item.id ? { ...door, roomId: void 0 } : door);
-        }
-        if (type === "sensors" && plan.zones) plan.zones = removeZonesOwnedBySensor(plan.zones, item.id);
-        selected = null;
-        recentUndo = copy.undo_removed;
-        finish();
+        if (type === "rooms" && roomRemoval) askRoomRemoval(item);
+        else removeSelected();
       }
     };
     root.addEventListener("click", (event) => {
@@ -10356,6 +10473,14 @@ var init_floor_planner2 = __esm({
     root.addEventListener("keydown", (event) => {
       if (liveMode) return;
       if (event.target.closest("dialog")) return;
+      if (["Delete", "Backspace"].includes(event.key) && !event.repeat && roomRemoval && tool === "edit" && !simulation && !event.ctrlKey && !event.metaKey && !event.altKey && !event.target.closest("input, textarea, select, [contenteditable]")) {
+        const { type, item } = selectedItem();
+        if (type === "rooms") {
+          event.preventDefault();
+          askRoomRemoval(item);
+          return;
+        }
+      }
       if (event.key === "Enter" && !event.isComposing && ["fp-floor-name", "fp-name"].includes(event.target.id)) {
         event.preventDefault();
         const trigger = event.target.id === "fp-floor-name" ? floorTrigger : projectTrigger;

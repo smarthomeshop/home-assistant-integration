@@ -56,6 +56,8 @@ function paintFaces(faces, project, towardCamera, { sun: [sunX, sunY, sunZ], dim
 // the camera, 'up' shows every wall at full height and 'down' keeps only a low
 // edge so the whole floor is visible.
 export const wallModes = ['cutaway', 'up', 'down'];
+// How tall a door is drawn at least, in metres, where the walls around it are cut low.
+const doorStub = .9;
 
 // A draft keeps the walls exact but draws furniture as plain blocks and leaves
 // out textures and shadows. It is meant for frames drawn while the camera moves,
@@ -216,18 +218,29 @@ export function paintMaquette(plan, project, depthOf, towardCamera, selected, fl
             `fp-space-opening ${type}${item.id === selected ? ' selected' : ''}`, `data-item="${item.id}"`);
     }
     const zones = (plan.zones ?? []).map(item => paintZone(item, point => project(point, .025), item.id === selected)).join('');
-    // A closed door fills its opening, as high as the wall around it is drawn.
+    // Every door stands in the model: across its opening when it is closed,
+    // swung open on its hinge otherwise. Where the walls are cut low the door
+    // stays tall enough to be found.
+    const swings = [];
     doors.forEach(([a, b], index) => {
         const door = plan.doors[index];
-        if (!door.closed) return;
-        const normal = inward(a, b);
-        const { height } = wallGeometry(a, b, plan.rooms.find(room => room.id === door.roomId) ?? null, normal);
-        const leaf = [shift(a, normal, -.025), shift(b, normal, -.025), shift(b, normal, .025), shift(a, normal, .025)];
-        objects.push(...blockFaces(leaf, 0, Math.min(doorHeight, height),
-            `class="fp-space-wall fp-space-door-leaf${door.id === selected ? ' selected' : ''}" data-item="${door.id}"`));
+        const pick = `${door.id === selected ? ' selected' : ''}" data-item="${door.id}"`;
+        const { height } = wallGeometry(a, b, plan.rooms.find(room => room.id === door.roomId) ?? null, inward(a, b));
+        const turn = door.angle * Math.PI / 180;
+        // The side the door swings to, as in the floor plan.
+        const swung = share => [a[0] + door.width * (Math.cos(turn) * Math.sin(share) + Math.sin(turn) * Math.cos(share)),
+            a[1] + door.width * (Math.sin(turn) * Math.sin(share) - Math.cos(turn) * Math.cos(share))];
+        const end = door.closed ? b : swung(0);
+        const side = inward(a, end);
+        const leaf = [shift(a, side, -.025), shift(end, side, -.025), shift(end, side, .025), shift(a, side, .025)];
+        objects.push(...blockFaces(leaf, 0, Math.min(doorHeight, Math.max(height, doorStub)), `class="fp-space-wall fp-space-door-leaf${pick}`));
+        if (!door.closed) {
+            swings.push(spacePolygon('polyline', Array.from({ length: 13 }, (_, step) => project(swung(step / 12 * Math.PI / 2))),
+                `class="fp-space-door fp-space-door-swing${pick}`));
+        }
     });
-    const openings = doors.map((door, index) => spacePolygon('polyline', door.map(point => project(point)),
-        `class="fp-space-door${plan.doors[index].id === selected ? ' selected' : ''}" data-item="${plan.doors[index].id}"`));
+    const openings = [...swings, ...doors.map((door, index) => spacePolygon('polyline', door.map(point => project(point)),
+        `class="fp-space-door${plan.doors[index].id === selected ? ' selected' : ''}" data-item="${plan.doors[index].id}"`))];
     const shadowId = `fp-floor-clip-${sceneId}`;
     const interiorShadows = floorClip.length && !draft ? `<defs><clipPath id="${shadowId}">${floorClip.join('')}</clipPath></defs>
         <g class="fp-interior-shadow" clip-path="url(#${shadowId})">

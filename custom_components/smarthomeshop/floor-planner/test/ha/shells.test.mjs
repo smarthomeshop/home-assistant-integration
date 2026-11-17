@@ -79,6 +79,19 @@ test('every planner shell can open and close a door and says what that does', ()
     }
 });
 
+test('every planner shell can zoom on the map and asks before a room is removed', () => {
+    for (const { language, copy } of shells) {
+        // The zoom bar on the map takes its names from the texts of the view menu.
+        for (const key of ['zoom_in', 'zoom_out', 'fit', 'zoom_controls', 'cancel_place']) assert.ok(copy[key]?.trim(), `${language}.${key}`);
+        for (const key of ['room_delete_title', 'room_delete_text', 'room_delete_confirm']) {
+            assert.ok(copy[key]?.trim(), `${language}.${key}`);
+            assert.doesNotMatch(copy[key], typographic, `${language}.${key}`);
+        }
+        assert.match(copy.room_delete_text, /^:name /, language);
+        assert.match(copy.room_delete_title, /\?$/, language);
+    }
+});
+
 test('every planner shell has the same text keys', () => {
     const keys = shell => Object.keys(shell.copy).sort();
     for (const shell of shells) assert.deepEqual(keys(shell), keys(shells[0]), shell.language);

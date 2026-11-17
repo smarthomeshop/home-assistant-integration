@@ -136,6 +136,83 @@ const recognition = recogniseRooms && copy.recognise_action ? (() => {
     return { button, note, meter, bar, share, scan, frame, percentage, timer: 0, state: 'idle', image: null, pending: null };
 })() : null;
 
+// Zoom in the corner of the map, where it is seen: out, how far the map is
+// zoomed, in, and back to the whole plan. It works in 2D and in 3D. The same
+// actions stay in the view menu.
+const zoomBar = copy.zoom_in && copy.zoom_out && copy.fit ? (() => {
+    const bar = document.createElement('div');
+    bar.className = 'fp-zoom-bar';
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', copy.zoom_controls ?? copy.zoom_in);
+    const button = (action, label, drawing) => {
+        const control = document.createElement('button');
+        control.type = 'button';
+        control.dataset.action = action;
+        control.title = label;
+        control.setAttribute('aria-label', label);
+        control.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true"><path d="${drawing}"/></svg>`;
+        return control;
+    };
+    const zoomIn = button('map_zoom_in', copy.zoom_in, 'M4 10h12m-6-6v12');
+    const level = document.createElement('output');
+    level.className = 'fp-zoom-level';
+    const zoomOut = button('map_zoom_out', copy.zoom_out, 'M4 10h12');
+    const whole = button('map_fit', copy.fit, 'M7 3H3v4m10-4h4v4m0 6v4h-4m-6 0H3v-4');
+    bar.append(zoomIn, level, zoomOut, whole);
+    document.getElementById('fp-walk-stage').append(bar);
+    return { zoomIn, zoomOut, level, share: new Intl.NumberFormat(root.dataset.locale, { style: 'percent', maximumFractionDigits: 0 }) };
+})() : null;
+
+// What can be done with the selected door, on the map itself: the panel with
+// its settings is often closed, and a door is opened and closed all the time.
+const doorActions = copy.door_close && copy.door_open ? (() => {
+    const bar = document.createElement('div');
+    bar.className = 'fp-place-actions fp-door-actions';
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', copy.door);
+    bar.hidden = true;
+    const name = document.createElement('span');
+    name.textContent = copy.door;
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.dataset.action = 'toggle_door';
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.dataset.action = 'delete';
+    remove.textContent = copy.remove;
+    bar.append(name, toggle, remove);
+    document.getElementById('fp-walk-stage').append(bar);
+    return { bar, toggle };
+})() : null;
+
+function showDoorActions() {
+    if (!doorActions) return;
+    const { type, item } = selectedItem();
+    const shown = type === 'doors' && tool === 'edit' && !simulation && !liveMode;
+    doorActions.bar.hidden = !shown;
+    if (shown) doorActions.toggle.textContent = item.closed ? copy.door_open : copy.door_close;
+}
+
+// Removing a room takes what hangs on its walls with it, so it asks first.
+const roomRemoval = copy.room_delete_title && copy.room_delete_confirm ? (() => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'fp-furniture-dialog fp-sensor-edit';
+    dialog.id = 'fp-room-delete';
+    dialog.setAttribute('aria-labelledby', 'fp-room-delete-title');
+    dialog.setAttribute('aria-describedby', 'fp-room-delete-text');
+    dialog.innerHTML = `<div class="fp-furniture-heading"><div><h2 id="fp-room-delete-title"></h2><p id="fp-room-delete-text"></p></div></div>
+        <form method="dialog"><div class="fp-sensor-edit-footer">
+            <button type="submit" value="" autofocus></button>
+            <button type="submit" class="fp-primary fp-danger" value="delete"></button>
+        </div></form>`;
+    dialog.querySelector('h2').textContent = copy.room_delete_title;
+    const [keep, remove] = dialog.querySelectorAll('button');
+    keep.textContent = copy.cancel_place;
+    remove.textContent = copy.room_delete_confirm;
+    pdfPages.after(dialog);
+    return dialog;
+})() : null;
+
 // Adds the rooms of an answer to the plan, on the image as it lies now.
 function addRecognisedRooms(answer, keepScale) {
     const draft = draftFromRecognition(answer?.recognition, plan.underlay, { roomName: copy.room, keepScale });
@@ -456,6 +533,7 @@ function updateTools() {
     // Doors, windows, mirrors and zones have a bar with a button to stop.
     // The wall tool has none, so it gets its own.
     element('fp-tool-stop').hidden = tool !== 'wall';
+    showDoorActions();
     canvas.dataset.tool = tool;
     renderRoomHandles();
     root.querySelectorAll('[data-sensor-marker]').forEach(marker => {
@@ -1301,6 +1379,7 @@ function homeAssistantRoomLink(room) {
 }
 
 function renderInspector() {
+    showDoorActions();
     const { type, item } = selectedItem();
     const inspector = element('fp-inspector');
     const title = element('fp-inspector-title');
@@ -1384,8 +1463,9 @@ function renderInspector() {
         <div>${type === 'rooms' ? ceilingTypeField(item.ceiling) : ''}${roomFloor}${positionFields}<div class="fp-inspector-actions">
             <button type="button" data-action="edit_outline">${copy.room_edit_outline}</button>
             <button type="button" data-action="rotate_room">${copy.rotate}</button>
-            <button type="button" data-action="delete">${copy.remove}</button>
-        </div></div></details>`;
+            ${copy.room_delete_confirm ? '' : `<button type="button" data-action="delete">${copy.remove}</button>`}
+        </div></div></details>
+        ${copy.room_delete_confirm ? `<div class="fp-inspector-actions"><button type="button" class="fp-room-remove" data-action="delete">${copy.room_delete_confirm}</button></div>` : ''}`;
     inspector.innerHTML = `
         ${isSensor ? '<div id="fp-sensor-config"></div>' : ''}
         ${isSensor ? '<div class="fp-range-key" id="fp-range-key"></div>' : ''}
@@ -2086,6 +2166,7 @@ function updateSpaceControls() {
     follow.setAttribute('aria-pressed', String(spaceFollow));
     root.querySelector('[data-action="space_zoom_out"]').disabled = spaceZoom <= 1;
     root.querySelector('[data-action="space_zoom_in"]').disabled = spaceZoom >= 3.2;
+    showZoom();
 }
 
 function zoomSpace(factor) {
@@ -3071,6 +3152,7 @@ function setView(next) {
     renderUnderlay();
     renderFloors();
     if (!spatial) updateView();
+    showZoom();
 }
 
 function stopOrbit() {
@@ -3224,15 +3306,16 @@ function updateView() {
     const metres = pixelsPerMetre > 110 ? .5 : pixelsPerMetre > 34 ? 1 : pixelsPerMetre > 15 ? 2 : 5;
     scale.style.setProperty('--metre', `${metres * pixelsPerMetre}px`);
     scale.lastChild.textContent = `${number.format(metres)} m`;
+    showZoom();
     refreshSensorTip();
 }
 
-function fit() {
+// The camera that shows the whole plan.
+function fittedCamera() {
     const items = [...plan.rooms, ...plan.walls, ...plan.doors, ...plan.sensors];
     if (plan.underlay) items.push({ ...plan.underlay, depth: plan.underlay.width / plan.underlay.ratio });
-    if (!items.length) {
-        camera = { x: 5, y: 3.5, height: 10 };
-    } else {
+    if (!items.length) return { x: 5, y: 3.5, height: 10 };
+    {
         const xs = items.flatMap(item => [item.x, item.endX ?? item.x + (item.depth ? item.width : 0)]);
         const ys = items.flatMap(item => [item.y, item.endY ?? item.y + (item.depth ?? 0)]);
         for (const [x, y] of plan.furniture.flatMap(furnitureFootprint)) {
@@ -3252,12 +3335,25 @@ function fit() {
         const ratio = clientWidth / usableHeight || 1;
         const height = Math.max(4, bottom - top + 1.12, (right - left + 1.35) / ratio)
             * Math.max(1, clientHeight) / usableHeight;
-        camera = {
+        return {
             x: (left + right) / 2, y: (top + bottom) / 2 + (bottomGap - topGap) * height / (2 * Math.max(1, clientHeight)),
             height,
         };
     }
+}
+
+function fit() {
+    camera = fittedCamera();
     updateView();
+}
+
+// How far the map is zoomed: 100% shows the whole plan in 2D, and the room as it opens in 3D.
+function showZoom() {
+    if (!zoomBar) return;
+    const flat = view !== '3d';
+    zoomBar.level.textContent = zoomBar.share.format(flat ? fittedCamera().height / camera.height : spaceZoom);
+    zoomBar.zoomIn.disabled = flat ? camera.height <= 2 : spaceZoom >= 3.2;
+    zoomBar.zoomOut.disabled = flat ? camera.height >= 280 : spaceZoom <= 1;
 }
 
 function zoom(factor, anchor = null) {
@@ -3782,7 +3878,9 @@ canvas.addEventListener('pointerdown', event => {
         return;
     }
     roomHandleFeedback.textContent = '';
-    const handle = event.target.closest('[data-room-handle], [data-room-midpoint]');
+    // A door wins from the edge and the handles of the room it sits in: it is small and lies on the wall.
+    const doorHit = tool === 'edit' ? doorAt(plan, eventPoint(event), .16) : null;
+    const handle = doorHit ? null : event.target.closest('[data-room-handle], [data-room-midpoint]');
     if (handle) {
         const room = selectedRoomForHandles();
         if (!room) return;
@@ -3799,7 +3897,7 @@ canvas.addEventListener('pointerdown', event => {
         board.focus({ preventScroll: true });
         return;
     }
-    const target = event.target.closest('[data-item]')?.dataset.item;
+    const target = doorHit?.id ?? event.target.closest('[data-item]')?.dataset.item;
     if (event.pointerType === 'touch' && tool === 'edit') {
         interaction = { pointer: event.pointerId, tapSelection: target ?? null, originX: event.clientX, originY: event.clientY, camera: { ...camera } };
         canvas.setPointerCapture(event.pointerId);
@@ -4350,6 +4448,10 @@ const actions = {
     fit,
     zoom_in: () => zoom(.8),
     zoom_out: () => zoom(1.25),
+    // The zoom bar on the map: the same in 2D and in 3D.
+    map_zoom_in: () => view === '3d' ? actions.space_zoom_in() : actions.zoom_in(),
+    map_zoom_out: () => view === '3d' ? actions.space_zoom_out() : actions.zoom_out(),
+    map_fit: () => view === '3d' ? actions.reset_view() : fit(),
     view_2d() { stopStairWalk(); setView('2d'); },
     view_3d() { stopStairWalk(); setView('3d'); },
     turn_view() {
@@ -4595,6 +4697,28 @@ const actions = {
     delete() {
         const { type, item } = selectedItem();
         if (!item) return;
+        if (type === 'rooms' && roomRemoval) askRoomRemoval(item);
+        else removeSelected();
+    },
+};
+
+// Asks whether the room may go, and removes it on a yes.
+function askRoomRemoval(room) {
+    if (roomRemoval.open) return;
+    element('fp-room-delete-text').textContent = copy.room_delete_text.replaceAll(':name', room.name);
+    roomRemoval.returnValue = '';
+    roomRemoval.onclose = () => {
+        roomRemoval.onclose = null;
+        if (roomRemoval.returnValue === 'delete' && selectedItem().item?.id === room.id) removeSelected();
+        if (view === '2d') board.focus({ preventScroll: true });
+    };
+    roomRemoval.showModal();
+}
+
+function removeSelected() {
+    {
+        const { type, item } = selectedItem();
+        if (!item) return;
         remember();
         plan[type] = plan[type].filter(entry => entry.id !== item.id);
         if (type === 'rooms') {
@@ -4606,8 +4730,8 @@ const actions = {
         selected = null;
         recentUndo = copy.undo_removed;
         finish();
-    },
-};
+    }
+}
 
 root.addEventListener('click', event => {
     const button = event.target.closest('button');
@@ -5075,6 +5199,17 @@ root.addEventListener('change', async ({ target }) => {
 root.addEventListener('keydown', event => {
     if (liveMode) return;
     if (event.target.closest('dialog')) return;
+    // Delete or Backspace removes the selected room, after a question. Not while typing or drawing.
+    if (['Delete', 'Backspace'].includes(event.key) && !event.repeat && roomRemoval && tool === 'edit' && !simulation
+        && !event.ctrlKey && !event.metaKey && !event.altKey
+        && !event.target.closest('input, textarea, select, [contenteditable]')) {
+        const { type, item } = selectedItem();
+        if (type === 'rooms') {
+            event.preventDefault();
+            askRoomRemoval(item);
+            return;
+        }
+    }
     if (event.key === 'Enter' && !event.isComposing && ['fp-floor-name', 'fp-name'].includes(event.target.id)) {
         event.preventDefault();
         const trigger = event.target.id === 'fp-floor-name' ? floorTrigger : projectTrigger;
