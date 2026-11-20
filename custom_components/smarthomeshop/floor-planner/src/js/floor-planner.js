@@ -1,7 +1,10 @@
 import '../css/floor-planner.css';
 import { formatPlannerLink, parsePlannerLink } from './ceilsense-planner';
 import { ceilingDirections, ceilingHeightAt, ceilingHeightLimits, ceilingPitch, ceilingPosition, ceilingProfile, ceilingTypes } from './floor-planner-ceiling.mjs';
-import { blankPlan, ceilingCoverageStatus, ceilingReferenceRange, contains, demoPlan, devices, floorFinishes, guidePlanForRoom, installationFor, installationsFor, newId, radarNames, radarsFor, readDemo, roomForDevice, sameSensorPlacement, snap, validPlan, wallColors, zoneTypes } from './floor-planner-model.mjs';
+import {
+    blankPlan, canAimSensor, ceilingCoverageStatus, ceilingReferenceRange, contains, demoPlan, devices, floorFinishes, guidePlanForRoom, hasMotionSensor, installationFor, installationsFor,
+    newId, radarNames, radarsFor, readDemo, roomForDevice, sameSensorPlacement, sensorPan, sensorTilt, snap, validPlan, wallColors, zoneTypes,
+} from './floor-planner-model.mjs';
 import { escapeText, paintFurniture, paintPlacementPreview, paintPlan } from './floor-planner-drawing.mjs';
 import { defaultWindowSill, edgePosition, maxRoomCorners, outlineBounds, polygonEdges, roomArea, roomCorners, roomInteriorPoint, roomWallEdges } from './floor-planner-geometry.mjs';
 import { furnitureAt, furnitureCatalog, furnitureFootprint, furnitureMaterials, maxFurniture, withFurniture } from './floor-planner-furniture.mjs';
@@ -10,7 +13,8 @@ import { buildingFormat, floorLabel, localizeSampleRooms, maxFloors, moveRoomToF
 import { floorStackHeight, insideStairwell, paintStairPlan, stairGait, stairGaitDuration, stairHeading, stairOcclusionId, stairPoint,
     stairSafeStart, stairTrip, stairWalls } from './floor-planner-stairs.mjs';
 import { paintBeam, paintFloorCoverage, paintWallCoverage } from './floor-planner-beam.mjs';
-import { ceilingProfiles, radarFields, radarProfileFor } from './floor-planner-radar.mjs';
+import { ceilingProfiles, motionField, radarFields, radarProfileFor } from './floor-planner-radar.mjs';
+import { aimSideView, aimTopView, directionTo, heightTo, motionReach, onDevice, reachText, tiltText, tiltTo, turnText, turnTo } from './floor-planner-aim.mjs';
 import { emptyRoute, movePerson, paintPerson, paintWalkLines, personAt, personSignals, preparePersonSensors, recordWalk, routeCoverage, solidWalls } from './floor-planner-person.mjs';
 import { createWalkControls } from './floor-planner-person-input.mjs';
 import { fadeLabelsNear, liveFloorFigures, screenOffset } from './floor-planner-live.mjs';
@@ -163,6 +167,60 @@ const zoomBar = copy.zoom_in && copy.zoom_out && copy.fit ? (() => {
     return { zoomIn, zoomOut, level, share: new Intl.NumberFormat(root.dataset.locale, { style: 'percent', maximumFractionDigits: 0 }) };
 })() : null;
 
+// Where a wall sensor looks. Two drawings in the sensor dialog show it from
+// above and from the side. Dragging in them, or the slider under each, turns
+// and tilts the sensor; the number beside the slider sets it exactly. Made
+// here so every page that shows the planner has them.
+const sensorAim = ['aim_top', 'aim_side', 'aim_turn', 'aim_tilt', 'aim_reach'].every(key => copy[key]) ? (() => {
+    const box = document.createElement('div');
+    box.className = 'fp-aim';
+    box.hidden = true;
+    const views = document.createElement('div');
+    views.className = 'fp-aim-views';
+    const part = (view, caption, name, title) => {
+        const figure = document.createElement('figure');
+        figure.className = 'fp-aim-view';
+        figure.dataset.view = view;
+        const heading = document.createElement('figcaption');
+        heading.textContent = caption;
+        const drawing = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        drawing.setAttribute('aria-hidden', 'true');
+        const row = document.createElement('div');
+        row.className = 'fp-aim-row';
+        const label = document.createElement('label');
+        const text = document.createElement('span');
+        text.textContent = title;
+        const words = document.createElement('output');
+        const slider = document.createElement('input');
+        Object.assign(slider, { type: 'range', step: 1, id: `fp-aim-${name}`, disabled: true });
+        label.htmlFor = slider.id;
+        label.append(text, words);
+        const input = document.createElement('input');
+        Object.assign(input, { name, type: 'number', step: 1, required: true, disabled: true });
+        input.setAttribute('aria-label', title);
+        row.append(label, slider, input);
+        figure.append(heading, drawing, row);
+        views.append(figure);
+        return { drawing, slider, input, words };
+    };
+    const turn = part('top', copy.aim_top, 'aim', copy.aim_turn), tilt = part('side', copy.aim_side, 'tilt', copy.aim_tilt);
+    for (const control of [tilt.input, tilt.slider]) Object.assign(control, { min: sensorTilt.min, max: sensorTilt.max });
+    const hint = document.createElement('p');
+    hint.className = 'fp-note';
+    hint.textContent = copy.aim_hint ?? '';
+    hint.hidden = !hint.textContent;
+    const note = document.createElement('p');
+    note.className = 'fp-note fp-aim-seen';
+    note.setAttribute('role', 'status');
+    // What the PIR of the device adds, and what it does not see.
+    const lens = document.createElement('p');
+    lens.className = 'fp-note fp-aim-lens';
+    lens.hidden = true;
+    box.append(views, hint, note, lens);
+    document.getElementById('fp-sensor-edit-height').after(box);
+    return { box, turn, tilt, note, lens, preview: null };
+})() : null;
+
 // What can be done with the selected door, on the map itself: the panel with
 // its settings is often closed, and a door is opened and closed all the time.
 const doorActions = copy.door_close && copy.door_open ? (() => {
@@ -265,6 +323,17 @@ if (coverageEstimateLegend) {
     coverageEstimateLegend.append(symbol, coverageEstimateLabel);
     element('fp-legend').append(coverageEstimateLegend);
 }
+// The PIR of a sensor has its own line on the map; the legend says what it is.
+const motionLegend = copy.legend_motion ? (() => {
+    const entry = document.createElement('span');
+    const symbol = document.createElement('i');
+    symbol.className = 'fp-legend-motion';
+    symbol.setAttribute('aria-hidden', 'true');
+    entry.hidden = true;
+    entry.append(symbol, copy.legend_motion);
+    element('fp-legend').append(entry);
+    return entry;
+})() : null;
 let liveMode = false;
 let livePeople = [];
 const openingWidth = element('fp-opening-width');
@@ -853,6 +922,7 @@ function sensorOptions(item) {
     ];
     if (item.model === 'ceilsense-pro') rows.push([copy.sensor_smoke_label, copy.sensor_smoke_optical]);
     if (['ceilsense-pro', 'ultimatesensor-v2'].includes(item.model)) rows.push([copy.sensor_audio_label, copy.sensor_audio_voice]);
+    if (hasMotionSensor(item.model) && copy.sensor_pir_range) rows.push(['PIR', copy.sensor_pir_range]);
     return `<dl class="fp-sensor-options">${rows.map(([label, value]) =>
         `<div><dt>${escapeText(label)}</dt><dd>${escapeText(value)}</dd></div>`).join('')}</dl>`;
 }
@@ -867,13 +937,21 @@ function sensorEditValues(model, previous) {
         climate: previous.climate ?? false,
         mountHeight: previous.mountHeight ?? 1.4,
         level: previous.level ?? false,
+        // The direction of a sensor that stands free, and how far one on a bracket is turned from the wall.
+        angle: previous.angle ?? 0,
+        pan: previous.pan ?? 0,
+        tilt: previous.tilt ?? 0,
     };
 }
 
 function readSensorEdit(model = sensorEditForm.elements.model.value) {
-    const { radar, installation, climate, mountHeight, level } = sensorEditForm.elements;
-    return { model, radar: integration ? editingSensor.radar : radar.value, installation: installation.value, climate: climate.checked,
-        mountHeight: mountHeight.valueAsNumber, level: level.checked };
+    const { radar, installation, climate, mountHeight, level, aim, tilt } = sensorEditForm.elements;
+    const values = { model, radar: integration ? editingSensor.radar : radar.value, installation: installation.value, climate: climate.checked,
+        mountHeight: mountHeight.valueAsNumber, level: level.checked, ...editingSensor.aim };
+    // The one field for the direction is the turn on the bracket, or the direction of a sensor that stands free.
+    if (aim && !aim.disabled && Number.isFinite(aim.valueAsNumber)) values[editingSensor.aimed] = aim.valueAsNumber;
+    if (tilt && !tilt.disabled && Number.isFinite(tilt.valueAsNumber)) values.tilt = tilt.valueAsNumber;
+    return values;
 }
 
 function updateSensorEditNote(item, values, error = '') {
@@ -897,6 +975,18 @@ function renderSensorEdit(item, values) {
     const wall = device.mount === 'wall';
     const room = roomForDevice(plan.rooms, item);
     element('fp-sensor-edit-height').hidden = fields.mountHeight.disabled = !wall;
+    if (sensorAim) {
+        const aims = canAimSensor(values);
+        const onBracket = isWallMounted(values);
+        editingSensor.aim = { angle: values.angle, pan: values.pan, tilt: values.tilt };
+        editingSensor.aimed = onBracket ? 'pan' : 'angle';
+        sensorAim.box.hidden = !aims;
+        sensorEdit.classList.toggle('fp-sensor-edit-aims', aims);
+        const limits = onBracket ? { min: -sensorPan, max: sensorPan } : { min: 0, max: 359 };
+        for (const control of [sensorAim.turn.input, sensorAim.turn.slider]) Object.assign(control, limits, { value: Math.round(onBracket ? values.pan : values.angle) });
+        for (const control of [sensorAim.tilt.input, sensorAim.tilt.slider]) control.value = values.tilt;
+        for (const { input, slider } of [sensorAim.turn, sensorAim.tilt]) input.disabled = slider.disabled = !aims;
+    }
     element('fp-sensor-edit-scd41').hidden = fields.climate.disabled = Boolean(integration) || values.model !== 'ceilsense-v2';
     element('fp-sensor-edit-level').hidden = fields.level.disabled = wall || !room?.ceiling;
     const image = element('fp-sensor-edit-image');
@@ -911,6 +1001,88 @@ function renderSensorEdit(item, values) {
     ].filter(Boolean).join(' · ');
     features.hidden = !features.textContent;
     updateSensorEditNote(item, values);
+    paintSensorAim();
+}
+
+// The drawings and words of the aim tool, for what the dialog holds now.
+function paintSensorAim() {
+    const item = plan.sensors.find(item => item.id === editingSensor?.id);
+    if (!sensorAim) return;
+    sensorAim.preview = null;
+    if (sensorAim.box.hidden || !item) return;
+    const values = readSensorEdit();
+    // A height that is still being typed is not a height yet.
+    if (!(values.mountHeight >= .15 && values.mountHeight <= 6)) values.mountHeight = item.mountHeight ?? 1.4;
+    const room = roomForDevice(plan.rooms, item);
+    const preview = replacementSensor(item, values, room) ?? { ...item, model: values.model, radar: values.radar, mountHeight: values.mountHeight, tilt: values.tilt };
+    const home = roomForDevice(plan.rooms, preview) ?? room;
+    const radars = home ? radarFields(home, preview) : [];
+    const motion = home && copy.pir_note ? motionField(preview) : null;
+    const fields = motion ? [...radars, motion] : radars;
+    const onBracket = isWallMounted(preview);
+    const side = aimSideView({ room: home, item: preview, fields, onWall: onBracket });
+    for (const [{ drawing }, view] of [[sensorAim.turn, aimTopView({ room: home, item: preview, fields })], [sensorAim.tilt, side]]) {
+        drawing.setAttribute('viewBox', view.viewBox);
+        drawing.innerHTML = view.markup;
+    }
+    sensorAim.turn.words.textContent = turnText(copy, onBracket ? preview.pan ?? 0 : preview.angle, onBracket);
+    sensorAim.tilt.words.textContent = tiltText(copy, preview.tilt ?? 0);
+    const metres = value => number.format(Number(value.toFixed(1)));
+    sensorAim.note.textContent = radars.length ? reachText(copy, side.reach, metres) : '';
+    sensorAim.note.hidden = !sensorAim.note.textContent;
+    sensorAim.lens.textContent = motion ? [copy.aim_motion?.replace(':to', metres(motionReach(home, preview, motion))), copy.pir_note].filter(Boolean).join(' ') : '';
+    sensorAim.lens.hidden = !sensorAim.lens.textContent;
+    sensorAim.preview = { item: preview, room: home, onBracket };
+}
+
+if (sensorAim) {
+    const set = (part, value) => {
+        part.input.value = part.slider.value = value;
+        paintSensorAim();
+    };
+    for (const part of [sensorAim.turn, sensorAim.tilt]) {
+        part.slider.addEventListener('input', () => set(part, part.slider.value));
+        part.input.addEventListener('input', () => {
+            if (part.input.validity.valid && part.input.value !== '') part.slider.value = part.input.value;
+            paintSensorAim();
+        });
+    }
+    sensorEditForm.elements.mountHeight.addEventListener('input', paintSensorAim);
+    // A press in a drawing aims the sensor there, and keeps aiming while the pointer is held.
+    const follow = (drawing, begin, move) => drawing.addEventListener('pointerdown', event => {
+        if (event.button !== 0 || !sensorAim.preview) return;
+        event.preventDefault();
+        const at = pointer => {
+            const point = new DOMPoint(pointer.clientX, pointer.clientY).matrixTransform(drawing.getScreenCTM().inverse());
+            return { x: point.x, y: point.y };
+        };
+        const held = begin(at(event));
+        const moved = pointer => move(at(pointer), held);
+        const stop = () => {
+            drawing.removeEventListener('pointermove', moved);
+            drawing.removeEventListener('pointerup', stop);
+            drawing.removeEventListener('pointercancel', stop);
+        };
+        drawing.setPointerCapture(event.pointerId);
+        drawing.addEventListener('pointermove', moved);
+        drawing.addEventListener('pointerup', stop);
+        drawing.addEventListener('pointercancel', stop);
+        moved(event);
+    });
+    follow(sensorAim.turn.drawing, () => null, point => {
+        const { item, onBracket } = sensorAim.preview;
+        // Right on the sensor there is no direction to read.
+        if (Math.hypot(point.x - item.x, point.y - item.y) < .12) return;
+        set(sensorAim.turn, onBracket ? turnTo(item, point, sensorPan) : directionTo(item, point));
+    });
+    const mounted = () => sensorAim.preview.item.mountHeight ?? 1.4;
+    follow(sensorAim.tilt.drawing, point => onDevice(mounted(), { ahead: point.x, height: -point.y }) ? 'height' : 'tilt', (point, held) => {
+        const spot = { ahead: point.x, height: -point.y };
+        if (held === 'height') {
+            sensorEditForm.elements.mountHeight.value = heightTo(spot.height, sensorAim.preview.room?.height);
+            paintSensorAim();
+        } else set(sensorAim.tilt, tiltTo(mounted(), spot));
+    });
 }
 
 function openSensorEdit(id) {
@@ -962,6 +1134,11 @@ sensorEditForm.addEventListener('change', event => {
         const model = event.target.value;
         editingSensor.model = model;
         renderSensorEdit(item, editingSensor.drafts.get(model) ?? sensorEditValues(model, previous));
+    } else if (event.target.name === 'installation' && sensorAim) {
+        // Taken off its bracket the sensor keeps looking where it looked.
+        const values = readSensorEdit();
+        if (sensorAim.preview) values.angle = sensorAim.preview.item.angle;
+        renderSensorEdit(item, values);
     } else updateSensorEditNote(item, readSensorEdit());
 });
 
@@ -977,7 +1154,20 @@ function replacementSensor(item, values, room) {
     } else delete next.mountHeight;
     if (devices[next.model].mount === 'ceiling' && values.level && room?.ceiling) next.levelMountRoom = room.id;
     else if (item.levelMountRoom !== null) delete next.levelMountRoom;
-    if (isWallMounted(next) && installationFor(next) !== installationFor(item)) {
+    // Where it looks: tilted, and turned on its bracket or pointed freely.
+    const turnedBefore = item.pan ?? 0;
+    delete next.tilt;
+    delete next.pan;
+    if (sensorAim && canAimSensor(next)) {
+        if (values.tilt) next.tilt = values.tilt;
+        if (isWallMounted(next)) {
+            if (values.pan) next.pan = values.pan;
+        } else if (Number.isFinite(values.angle)) next.angle = ((values.angle % 360) + 360) % 360;
+    } else if (!sensorAim) {
+        if (item.tilt !== undefined) next.tilt = item.tilt;
+        if (item.pan !== undefined) next.pan = item.pan;
+    }
+    if (isWallMounted(next) && (installationFor(next) !== installationFor(item) || (next.pan ?? 0) !== turnedBefore)) {
         if (!room) return null;
         next = alignSensorToWall(next, room);
     }
@@ -1449,6 +1639,10 @@ function renderInspector() {
         if (devices[item.model].mount === 'wall') {
             settings += field({ ...item, mountHeight: item.mountHeight ?? 1.4 }, 'mountHeight', copy.wall_sensor_height, .15, 6, 'any');
         }
+        if (sensorAim && canAimSensor(item)) {
+            if (isWallMounted(item)) settings += field({ ...item, pan: item.pan ?? 0 }, 'pan', copy.wall_sensor_pan, -sensorPan, sensorPan, 1);
+            settings += field({ ...item, tilt: item.tilt ?? 0 }, 'tilt', copy.wall_sensor_tilt, sensorTilt.min, sensorTilt.max, 1);
+        }
         if (!integration && item.model === 'ceilsense-v2') {
             settings += `<label class="fp-climate-field"><input type="checkbox" data-field="climate" ${item.climate ? 'checked' : ''}> ${copy.plan_scd41}</label>`;
         }
@@ -1666,7 +1860,8 @@ function updateRangeKey(item) {
     key.hidden = !two;
     key.innerHTML = two ? `
         <span><i></i> ${copy.tracking_line} · ${item.radar === 'combined' ? 'LD6002B' : item.radar.toUpperCase()}</span>
-        <span><i></i> ${copy.presence_line} · LD2412</span>` : '';
+        <span><i></i> ${copy.presence_line} · LD2412</span>
+        ${hasMotionSensor(item.model) && copy.sim_motion ? `<span class="fp-range-key-motion"><i></i> ${copy.sim_motion} · PIR</span>` : ''}` : '';
 }
 
 function renderHandoff() {
@@ -1989,7 +2184,8 @@ function renderDrawing() {
     beamChoices = showCoverage ? visibleSensors(plan).flatMap((item, index) => {
         const room = roomForDevice(plan.rooms, item);
         const marker = String(index + 1).padStart(2, '0');
-        return radarFields(room, item, coverageRadarOptions).reverse().map(field => {
+        const motion = room && copy.sim_motion ? motionField(item) : null;
+        return [...radarFields(room, item, coverageRadarOptions).reverse(), ...(motion ? [motion] : [])].map(field => {
             const radar = field.radar.toUpperCase();
             return {
                 item, room, field, sight, key: `${item.id}:${field.radar}`,
@@ -1999,6 +2195,7 @@ function renderDrawing() {
         });
     }) : [];
     if (showCoverage && beamChoice && !beamChoices.some(choice => choice.key === beamChoice)) beamChoice = '';
+    if (motionLegend) motionLegend.hidden = !beamChoices.some(choice => choice.field.mode === 'motion');
     beamPanelKey = null;
     if (view === '3d') {
         renderSpatialDrawing();
@@ -2218,7 +2415,7 @@ function renderBeam() {
         const stair = currentStairTrip();
         replaceMapMarkup(drawing, paintPlan(planForDrawing(plan), showCoverage, selected, number,
             focus && { ...focus, profile }, { measures: showMeasures, interactiveSensors: true, radarOptions: coverageRadarOptions,
-                casing: Boolean(plan.underlay) })
+                casing: Boolean(plan.underlay), motion: Boolean(copy.sim_motion) })
             + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : '')
             + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ''));
     }
@@ -2394,10 +2591,11 @@ function renderPerson() {
     });
     const profile = radarProfileFor(person);
     const key = person.pose + ':' + profile + ':' + readings.map(reading => reading.signals.map(signal =>
-        signal.obstacle ? signal.obstacle.id + signal.obstacle.status : signal.exclusion?.id ?? Number(signal.seen)).join(',')).join('/');
+        signal.obstacle ? signal.obstacle.id + signal.obstacle.status : signal.exclusion?.id ?? Number(signal.seen)).join(',')
+        + (reading.motion ? `,${Number(reading.motion.seen)}${Number(reading.motion.still)}` : '')).join('/');
     if (readingKey === key) return;
     readingKey = key;
-    element('fp-sim-sensors').innerHTML = readings.map(({ item, index, signals, seen, obstacle }) => `<li>
+    element('fp-sim-sensors').innerHTML = readings.map(({ item, index, signals, motion, seen, obstacle }) => `<li>
         <div class="fp-sim-device"><span class="fp-index ${devices[item.model].mount}">${String(index + 1).padStart(2, '0')}</span>
             <strong>${devices[item.model].name}</strong><span class="fp-sim-light" data-seen="${seen}" aria-hidden="true"></span></div>
         ${signals.length ? signals.map(signal => `<div class="fp-sim-signal">
@@ -2405,6 +2603,8 @@ function renderPerson() {
             <span data-seen="${signal.seen}" data-status="${signal.obstacle?.status ?? ''}">${signal.obstacle ? copy['sim_' + signal.obstacle.status] : signal.exclusion ? copy.sim_excluded : signal.seen ? copy.sim_seen : copy.sim_missed}</span>
         </div>${signal.height === null ? '' : `<p class="fp-sim-height">Z · ${copy['sim_' + person.pose]} · ${copy.sim_height.replace(':height', number.format(signal.height))}</p>`}`).join('')
             : `<p class="fp-note">${copy.sim_no_profile}</p>`}
+        ${motion && copy.sim_motion ? `<div class="fp-sim-signal fp-sim-motion"><span>PIR · ${copy.sim_motion}</span>
+            <span data-seen="${motion.seen}">${motion.seen ? copy.sim_seen : motion.still ? copy.sim_still : copy.sim_missed}</span></div>` : ''}
         ${obstacle ? `<p class="fp-obstacle-name" data-status="${obstacle.status}">${escapeText(obstacle.name)}</p>` : ''}
     </li>`).join('') || `<li class="fp-note">${copy.sim_empty}</li>`;
 }
@@ -3643,12 +3843,19 @@ const isWallMounted = item => ['wall-bracket', 'wall-recessed'].includes(install
 function alignSensorToWall(item, room = plan.rooms.find(room => contains(room, item))) {
     if (!isWallMounted(item)) return item;
     const edge = nearestEdge(item, true, Infinity, room);
-    return edge ? { ...item, x: edge.x, y: edge.y, angle: edge.facing } : item;
+    // On its bracket the sensor can be turned away from straight out of the wall.
+    const turned = canAimSensor(item) ? item.pan ?? 0 : 0;
+    return edge ? { ...item, x: edge.x, y: edge.y, angle: (((edge.facing + turned) % 360) + 360) % 360 } : item;
 }
 
 function sensorPlacement(point) {
-    return alignSensorToWall({ ...point, angle: 0, model: choice, radar: placementDevice?.radar ?? devices[choice].defaultRadar ?? 'none',
-        installation: placementInstallation, ...(placementDevice ? { haDevice: placementDevice.id, mountHeight: placementDevice.mountHeight } : {}) });
+    // A sensor that is put down looks into its room, not at the wall it stands against.
+    const room = devices[choice].mount === 'wall' ? plan.rooms.find(room => contains(room, point)) : null;
+    const middle = room && roomInteriorPoint(room);
+    const angle = middle && Math.hypot(middle.x - point.x, middle.y - point.y) > .3 ? directionTo(point, middle, 45) : 0;
+    return alignSensorToWall({ ...point, angle, model: choice, radar: placementDevice?.radar ?? devices[choice].defaultRadar ?? 'none',
+        installation: placementInstallation, ...(placementDevice ? { haDevice: placementDevice.id, mountHeight: placementDevice.mountHeight,
+            ...(placementDevice.tilt ? { tilt: placementDevice.tilt } : {}) } : {}) });
 }
 
 function doorWall(door, room = null) {
@@ -4910,6 +5117,7 @@ function readField(item, key) {
     if (key === 'ceilingHigh') return item.ceiling?.high;
     if (key === 'ceilingDirection') return item.ceiling?.direction;
     if (key === 'mountHeight') return item.mountHeight ?? 1.4;
+    if (key === 'tilt' || key === 'pan') return item[key] ?? 0;
     if (key === 'sensorId') return item.sensorId ?? '';
     return item[key];
 }
@@ -4949,7 +5157,7 @@ function updateField(input) {
         item.ceiling = { ...item.ceiling, [key === 'ceilingHigh' ? 'high' : 'direction']: value };
     } else if (group) {
         for (const entry of group) Object.assign(entry, translatedItem(entry, key === 'x' ? value - original : 0, key === 'y' ? value - original : 0));
-    } else if (type === 'sensors' && (key === 'installation' || ['x', 'y'].includes(key) && isWallMounted(item))) {
+    } else if (type === 'sensors' && (key === 'installation' || key === 'pan' || ['x', 'y'].includes(key) && isWallMounted(item))) {
         Object.assign(item, alignSensorToWall({ ...item, [key]: value }, roomForDevice(plan.rooms, item)));
     } else if (key === 'width' && ['windows', 'mirrors'].includes(type)) {
         Object.assign(item, roomOpening(currentRoom(), item, value));
@@ -4963,6 +5171,11 @@ function updateField(input) {
         input.value = item.width;
     } else {
         item[key] = key === 'sensorId' ? value || null : value;
+    }
+    // A sensor that looks level, or straight out of its wall, carries no tilt or turn.
+    if (type === 'sensors') {
+        if (!item.tilt) delete item.tilt;
+        if (!item.pan || !isWallMounted(item)) delete item.pan;
     }
     const validationPlan = key === 'ceilingType' && value === 'flat'
         ? { ...plan, sensors: plan.sensors.map(sensor => sensor.levelMountRoom === item.id ? { ...sensor, levelMountRoom: null } : sensor) }

@@ -77,6 +77,68 @@ test('a closed door is kept with the room and comes back closed', () => {
     assert.equal(saveChanges(reloaded, reloaded, [stored]).changes.length, 0);
 });
 
+test('the tilt of a wall sensor is kept with the room and comes back', () => {
+    const saved = projectFromRooms([living], []);
+    assert.equal(saved.floors[0].plan.sensors[0].tilt, undefined);
+    const tilted = structuredClone(saved);
+    tilted.floors[0].plan.sensors[0].tilt = 30;
+    const [change] = saveChanges(tilted, saved, [living]).changes;
+    assert.equal(change.sensors[0].tilt_deg, 30);
+    assert.equal(change.sensors[0].heightMm, 1800);
+    const stored = { ...living, sensors: change.sensors };
+    const reloaded = projectFromRooms([stored], []);
+    assert.equal(reloaded.floors[0].plan.sensors[0].tilt, 30);
+    assert.equal(saveChanges(reloaded, reloaded, [stored]).changes.length, 0);
+    // Level again, the record no longer carries a tilt.
+    const level = structuredClone(reloaded);
+    delete level.floors[0].plan.sensors[0].tilt;
+    const [levelled] = saveChanges(level, reloaded, [stored]).changes;
+    assert.equal(Object.hasOwn(levelled.sensors[0], 'tilt_deg'), false);
+    // A tilt nobody could have set is left out instead of trusted.
+    for (const tilt_deg of [400, 'steep', null]) {
+        const odd = projectFromRooms([{ ...living, sensors: [{ ...living.sensors[0], tilt_deg }] }], []);
+        assert.equal(odd.floors[0].plan.sensors[0].tilt, undefined);
+    }
+});
+
+test('a sensor on its wall bracket comes back on it, turned as it was', () => {
+    const device = { id: 'radar', name: 'UltimateSensor', model: 'UltimateSensor V2', product_type: 'ultimatesensor' };
+    const profiles = [{ device_id: 'radar', profile: { mounting_mode: 'wall', radar_model: 'ld2450', detected_product: 'ultimatesensor-v2' } }];
+    const devices = plannerDevices(profiles, [device]);
+    // On the left wall, looking into the room.
+    const room = { ...living, sensors: [{ ...living.sensors[0], x: 0, rotation: 90 }] };
+    const saved = projectFromRooms([room], profiles, devices);
+    assert.equal(saved.floors[0].plan.sensors[0].installation, undefined);
+    const hung = structuredClone(saved);
+    Object.assign(hung.floors[0].plan.sensors[0], { installation: 'wall-bracket', pan: -45, angle: 45, tilt: 30 });
+    const [change] = saveChanges(hung, saved, [room]).changes;
+    assert.deepEqual([change.sensors[0].installation, change.sensors[0].pan_deg, change.sensors[0].tilt_deg, change.sensors[0].rotation], ['wall-bracket', -45, 30, 45]);
+    const stored = { ...room, sensors: change.sensors };
+    const [sensor] = projectFromRooms([stored], profiles, devices).floors[0].plan.sensors;
+    assert.deepEqual([sensor.installation, sensor.pan, sensor.tilt, sensor.angle], ['wall-bracket', -45, 30, 45]);
+    // Standing free again, the record forgets the bracket and the turn.
+    const free = structuredClone(hung);
+    delete free.floors[0].plan.sensors[0].installation;
+    delete free.floors[0].plan.sensors[0].pan;
+    const [freed] = saveChanges(free, hung, [stored]).changes;
+    assert.equal(Object.hasOwn(freed.sensors[0], 'installation'), false);
+    assert.equal(Object.hasOwn(freed.sensors[0], 'pan_deg'), false);
+    // A device without a bracket does not get one from an old record.
+    const [plain] = projectFromRooms([stored], [], []).floors[0].plan.sensors;
+    assert.equal(plain.installation, undefined);
+    assert.equal(plain.pan, undefined);
+});
+
+test('a new placement starts with the height and the angle the radar was set up with', () => {
+    const device = { id: 'radar', name: 'UltimateSensor', model: 'UltimateSensor V2', product_type: 'ultimatesensor' };
+    const profile = angle => ({ device_id: 'radar', profile: { mounting_mode: 'wall', installation_height_m: 2.4, installation_angle_deg: angle } });
+    const [placed] = plannerDevices([profile(30)], [device]);
+    assert.equal(placed.mountHeight, 2.4);
+    assert.equal(placed.tilt, 30);
+    assert.equal(plannerDevices([profile(0)], [device])[0].tilt, undefined);
+    assert.equal(plannerDevices([profile(120)], [device])[0].tilt, undefined);
+});
+
 test('a door that left its wall is named in the save error, in every language', () => {
     const saved = projectFromRooms([living], []);
     const project = structuredClone(saved);

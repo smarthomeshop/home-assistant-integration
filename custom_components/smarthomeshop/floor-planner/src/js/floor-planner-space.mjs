@@ -1,6 +1,8 @@
 import { ceilingHeightAt, ceilingPitch, ceilingPosition } from './floor-planner-ceiling.mjs';
 import { escapeText, sensorMarkerAttributes } from './floor-planner-drawing.mjs';
-import { devices, roomForDevice, wallVector } from './floor-planner-model.mjs';
+import { daylightFor } from './floor-planner-daylight.mjs';
+import { paintDevice } from './floor-planner-device-mesh.mjs';
+import { devices, installationFor, roomForDevice, wallVector } from './floor-planner-model.mjs';
 import { convexHull, polygonEdges, roomCorners, roomInteriorPoint, roomLineSpans } from './floor-planner-geometry.mjs';
 import { cutawayWallHeight, floorSlabDepth, paintMaquette, spacePolygon as poly } from './floor-planner-maquette.mjs';
 import { sensorMountHeight } from './floor-planner-radar.mjs';
@@ -68,19 +70,14 @@ function paintCeilingSensor(item, room, height, project, towardViewer) {
         + poly('polygon', visibleFace, 'class="fp-space-puck face"');
 }
 
-function paintWallSense(item, height, project, cutawayHeight) {
+// The piece of wall behind a recessed sensor, for where the wall in front of
+// the camera is cut low and the sensor would hang in the air.
+function paintWallSupport(item, height, project, wallTop) {
+    const top = .23, bottom = wallTop - height;
+    if (bottom >= top) return '';
     const { x, y } = wallVector(item.angle);
-    const facePoint = (side, up, inset = .025) => project([item.x + x * inset - y * side, item.y + y * inset + x * side], height + up);
-    const plate = [[-.15, -.15], [.15, -.15], [.15, .15], [-.15, .15]].map(point => facePoint(...point));
-    const [cx, cy] = facePoint(0, 0);
-    const supportTop = .23;
-    const supportBottom = cutawayHeight - height;
-    const support = supportBottom < supportTop
-        ? poly('polygon', [[-.32, supportBottom], [.32, supportBottom], [.32, supportTop], [-.32, supportTop]]
-            .map(([side, z]) => facePoint(side, z, 0)), 'class="fp-wall-mount-support" fill="#bdb9ac"')
-        : '';
-    return support + poly('polygon', plate, 'class="fp-space-puck wall"')
-        + `<ellipse cx="${cx}" cy="${cy}" rx=".035" ry=".045" fill="#6d8496"/>`;
+    return poly('polygon', [[-.32, bottom], [.32, bottom], [.32, top], [-.32, top]]
+        .map(([side, up]) => project([item.x - y * side, item.y + x * side], height + up)), 'class="fp-wall-mount-support" fill="#bdb9ac"');
 }
 
 export function paintSpace(plan, camera, selected, {
@@ -102,6 +99,7 @@ export function paintSpace(plan, camera, selected, {
     const selectedRoom = plan.rooms.find(room => room.id === selected);
     const floorOverlay = coverage?.floorOverlay ?? (decorations ? '<g id="fp-wall-coverage-space" pointer-events="none"></g>' : '');
     const direction = towardCamera(camera);
+    const light = daylightFor(daylight);
     const model = paintMaquette(plan, project, normal => projectSpace(normal, 0, { ...camera, tilt: baseTilt })[1],
         direction, selected, floorOverlay, sceneId, { draft, wallMode, daylight });
 
@@ -142,16 +140,18 @@ export function paintSpace(plan, camera, selected, {
         const height = sensorHeight(item, room);
         const [, top] = project(position, height);
         const badgeX = height ? x + .48 : x;
-        const facing = showWallMount && item.model === 'wallsense' ? wallVector(item.angle) : null;
-        const wallTop = facing && room
-            ? cutawayWallHeight(room, projectSpace([facing.x, facing.y], 0, { ...camera, tilt: baseTilt })[1])
-            : Infinity;
         if (height) include([badgeX, top]);
+        // A wall device is drawn as the device itself, on its bracket or standing on what is below it.
+        const device = mount === 'wall' && height
+            ? paintDevice(item, height, { project, towardCamera: direction, sun: light.sun, dim: light.dim, furniture: plan.furniture ?? [], fine: !draft }) : '';
+        const standsFree = device && installationFor(item) === 'freestanding';
+        // A page that shows one recessed sensor can ask for the wall it sits in.
+        const facing = showWallMount && item.model === 'wallsense' && room ? wallVector(item.angle) : null;
+        const support = facing ? paintWallSupport(item, height, project,
+            cutawayWallHeight(room, projectSpace([facing.x, facing.y], 0, { ...camera, tilt: baseTilt })[1])) : '';
         return `<g class="fp-space-marker ${mount}${item.id === selected ? ' selected' : ''}" data-item="${item.id}" ${interactiveSensors ? sensorMarkerAttributes(item, index) : ''}>
-            ${height ? `${facing ? '' : `<line x1="${x}" x2="${x}" y1="${y}" y2="${top}"/><ellipse class="fp-space-anchor" cx="${x}" cy="${y}" rx=".13" ry=".075"/>`}
-                ${mount === 'ceiling' ? paintCeilingSensor(item, room, height, project, direction)
-                : item.model === 'wallsense' ? paintWallSense(item, height, project, wallTop) :
-                `<rect class="fp-space-puck wall" x="${x - .18}" y="${top - .12}" width=".36" height=".24" rx=".045"/>`}` : ''}
+            ${height ? `${standsFree || facing ? '' : `<line x1="${x}" x2="${x}" y1="${y}" y2="${top}"/><ellipse class="fp-space-anchor" cx="${x}" cy="${y}" rx=".13" ry=".075"/>`}
+                ${mount === 'ceiling' ? paintCeilingSensor(item, room, height, project, direction) : support + device}` : ''}
             <circle cx="${badgeX}" cy="${top}" r=".29"/><text x="${badgeX}" y="${top}">${String(index + 1).padStart(2, '0')}</text>
             ${interactiveSensors ? `<circle class="fp-sensor-focus" cx="${badgeX}" cy="${top}" r=".37"/>` : ''}
         </g>`;

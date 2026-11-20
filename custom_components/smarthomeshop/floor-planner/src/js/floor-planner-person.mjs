@@ -1,6 +1,6 @@
 import { doorsOnPlan, pointInOutline, polygonEdges, roomCorners, roomInteriorPoint, wallSegments } from './floor-planner-geometry.mjs';
 import { contains, roomForDevice } from './floor-planner-model.mjs';
-import { fieldCoversPoint, radarFields, radarOrigin, radarProfileFor, sensorMountHeight } from './floor-planner-radar.mjs';
+import { fieldCoversPoint, motionField, radarFields, radarOrigin, radarProfileFor, sensorMountHeight } from './floor-planner-radar.mjs';
 import { prepareSight, sightBlocked } from './floor-planner-sight.mjs';
 import { furnitureOcclusion, prepareFurnitureOcclusion } from './floor-planner-obstruction.mjs';
 import { projectSpace } from './floor-planner-space.mjs';
@@ -56,7 +56,7 @@ export function preparePersonSensors(plan) {
         const room = roomForDevice(plan.rooms, item);
         const exclusions = (plan.zones ?? []).filter(zone => zone.type === 'exclusion' && zone.roomId === room?.id
             && (!zone.sensorId || zone.sensorId === item.id));
-        return { item, index, room, fields: radarFields(room, item), exclusions };
+        return { item, index, room, fields: radarFields(room, item), motion: room ? motionField(item) : null, exclusions };
     });
 }
 
@@ -69,12 +69,19 @@ export function personSignals(plan, person, sensors = preparePersonSensors(plan)
     const room = plan.rooms.find(room => contains(room, person));
     const height = personTargetHeight(person);
     const profile = radarProfileFor(person);
-    return sensors.map(({ item, index, room: sensorRoom, fields, exclusions = [] }) => {
+    return sensors.map(({ item, index, room: sensorRoom, fields, motion = null, exclusions = [] }) => {
         const mount = sensorMountHeight(item, sensorRoom);
-        const reached = room && sensorRoom ? fields.filter(field => fieldCoversPoint(field, item, person, profile)) : [];
-        const hidden = reached.length > 0 && sightBlocked(sight, { ...radarOrigin(item), z: mount }, { x: person.x, y: person.y, z: height });
+        const reached = room && sensorRoom ? fields.filter(field => fieldCoversPoint(field, item, person, profile, height)) : [];
+        const blocked = () => sightBlocked(sight, { ...radarOrigin(item), z: mount }, { x: person.x, y: person.y, z: height });
+        const hidden = reached.length > 0 && blocked();
         const possible = hidden ? [] : reached;
     const obstacle = possible.length ? furnitureOcclusion({ ...item, z: mount }, person, height, furniture) : null;
+        // The PIR needs a clear view like the radars, and then answers only to
+        // someone who moves: `still` is a person it looks at who does not.
+        const lensed = Boolean(motion && room && sensorRoom) && fieldCoversPoint(motion, item, person, profile, height);
+        const inView = lensed && !(reached.length ? hidden : blocked())
+            && !(possible.length ? obstacle : furnitureOcclusion({ ...item, z: mount }, person, height, furniture));
+        const pir = motion ? { ...motion, seen: inView && Boolean(person.moving), still: inView && !person.moving } : null;
         const exclusion = possible.some(field => field.mode !== 'presence') && exclusions.find(zone =>
             zone.parts.some(part => pointInOutline(part, person)));
         const signals = fields.map(field => {
@@ -85,7 +92,7 @@ export function personSignals(plan, person, sensors = preparePersonSensors(plan)
                 height: seen && field.mode === 'xyz' ? height : null };
         });
         // `walled`: in range, but a wall or a closed door is in the way.
-        return { item, index, room: sensorRoom, signals, obstacle, mount, walled: hidden, seen: signals.some(signal => signal.seen) };
+        return { item, index, room: sensorRoom, signals, motion: pir, obstacle, mount, walled: hidden, seen: signals.some(signal => signal.seen) };
     });
 }
 

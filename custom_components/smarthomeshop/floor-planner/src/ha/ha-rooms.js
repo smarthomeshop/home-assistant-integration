@@ -8,7 +8,9 @@
 // (haRoom, haIndex, haRecord, haSource) to write changes back.
 import { outlineBounds } from '../js/floor-planner-geometry.mjs';
 import { furnitureCatalog } from '../js/floor-planner-furniture.mjs';
-import { blankPlan, contains, devices as plannerModels, radarsFor, roomForDevice, zoneTypes } from '../js/floor-planner-model.mjs';
+import {
+    blankPlan, contains, devices as plannerModels, installationsFor, radarsFor, roomForDevice, sensorPan, sensorTilt, zoneTypes,
+} from '../js/floor-planner-model.mjs';
 import { buildingFormat, roomContents, validProject } from '../js/floor-planner-building.mjs';
 import { zoneOwnerIsAvailable } from './safety.js';
 import {
@@ -158,6 +160,8 @@ export function roomViews(rooms, profiles = []) {
                 angle: degrees((source.orientation_deg ?? source.rotation ?? 0) + room.house.rotationDeg),
                 radar: 'none',
                 savedHeight: finite(source.height_m) ? source.height_m : finite(source.heightMm) ? metres(source.heightMm) : null,
+                ...(mount === 'wall' && finite(source.tilt_deg) && source.tilt_deg >= sensorTilt.min && source.tilt_deg <= sensorTilt.max
+                    && source.tilt_deg !== 0 ? { tilt: source.tilt_deg } : {}),
                 sourceId: source.id, deviceId, source,
             }];
         });
@@ -237,6 +241,9 @@ export function plannerDevices(profiles, haDevices, areas = []) {
             areaId,
             floorId: areaById.get(areaId)?.floorId ?? null,
             mountHeight: mount === 'wall' && height >= .15 && height <= 6 ? height : undefined,
+            // The downward angle the LD2460 firmware was given is where a new placement starts.
+            tilt: mount === 'wall' && profile?.installation_angle_deg > 0 && profile.installation_angle_deg <= sensorTilt.max
+                ? profile.installation_angle_deg : undefined,
             online: device?.online,
             aliases: [entry?.entity_prefix, ...(entry?.aliases ?? [])].filter(Boolean),
         }];
@@ -303,7 +310,10 @@ export function projectFromRooms(rooms, profiles, devices = []) {
                 const model = sameMount ? device.model : sensor.model;
                 const radar = sameMount ? device.radar : 'none';
                 const { savedHeight, sourceId, deviceId, source, ...item } = sensor;
-                plan.sensors.push({ ...item, model,
+                // A sensor that hung on its bracket hangs there again, turned as it was.
+                const bracket = source.installation === 'wall-bracket' && installationsFor(model).includes('wall-bracket');
+                const pan = bracket && finite(source.pan_deg) && source.pan_deg !== 0 && Math.abs(source.pan_deg) <= sensorPan ? { pan: source.pan_deg } : {};
+                plan.sensors.push({ ...item, model, ...(bracket ? { installation: 'wall-bracket', ...pan } : {}),
                     radar: deviceId || radarsFor(model).includes(radar) ? radar : radarsFor(model)[0],
                     haSource: sourceId, haRoom: room.id, haDevice: deviceId,
                     ...(plannerModels[sensor.model].mount === 'wall' && savedHeight >= .15 && savedHeight <= 6

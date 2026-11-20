@@ -253,6 +253,8 @@ var devices = {
   "ultimatesensor-mini-v2": { name: "UltimateSensor Mini V2", image: "/assets/ultimatesensor-mini-v2-white-hero.webp", mount: "wall", defaultRadar: "ld2450" },
   wallsense: { name: "WallSense", image: "/images/wallsense/hero-2026-09-22-512.webp", mount: "wall", defaultRadar: "ld2450", coming: true }
 };
+var sensorTilt = { min: -30, max: 75 };
+var sensorPan = 85;
 function installationsFor(model) {
   if (model === "wallsense") return ["wall-recessed"];
   if (devices[model]?.mount === "ceiling") return ["ceilsense-mini", "ceilsense-pro"].includes(model) ? ["ceiling-recessed", "ceiling-surface"] : ["ceiling-recessed"];
@@ -295,7 +297,7 @@ function validPlan(plan) {
   if (!list(plan.rooms, (item) => point(item) && validName(item.name) && validRoomDimensions(item) && validFinish(item) && (item.useSampleName === void 0 || typeof item.useSampleName === "boolean") && (item.outline === void 0 || plan.version >= 2 && validRoomOutline(item)) && (item.obstacles === void 0 || typeof item.obstacles === "boolean") && (item.priority == null || numberBetween(item.priority.x, 0.05, 0.95) && numberBetween(item.priority.y, 0.05, 0.95)))) return false;
   if (!list(plan.walls, (item) => point(item) && point({ x: item.endX, y: item.endY }) && (item.x !== item.endX || item.y !== item.endY))) return false;
   if (!list(plan.doors, (item) => point(item) && angle(item.angle) && numberBetween(item.width, 0.5, 2) && (item.closed === void 0 || typeof item.closed === "boolean"))) return false;
-  if (!list(plan.sensors, (item) => point(item) && angle(item.angle) && Object.hasOwn(devices, item.model) && validSensorRadar(item) && (item.installation === void 0 || installationsFor(item.model).includes(item.installation)) && (item.climate === void 0 || item.model === "ceilsense-v2" && typeof item.climate === "boolean") && (item.mountHeight === void 0 || devices[item.model].mount === "wall" && numberBetween(item.mountHeight, 0.15, 6)) && (item.levelMountRoom == null || plan.rooms.some((room) => room.id === item.levelMountRoom && room.ceiling)))) return false;
+  if (!list(plan.sensors, (item) => point(item) && angle(item.angle) && Object.hasOwn(devices, item.model) && validSensorRadar(item) && (item.installation === void 0 || installationsFor(item.model).includes(item.installation)) && (item.climate === void 0 || item.model === "ceilsense-v2" && typeof item.climate === "boolean") && (item.mountHeight === void 0 || devices[item.model].mount === "wall" && numberBetween(item.mountHeight, 0.15, 6)) && (item.tilt === void 0 || devices[item.model].mount === "wall" && numberBetween(item.tilt, sensorTilt.min, sensorTilt.max)) && (item.pan === void 0 || devices[item.model].mount === "wall" && numberBetween(item.pan, -sensorPan, sensorPan)) && (item.levelMountRoom == null || plan.rooms.some((room) => room.id === item.levelMountRoom && room.ceiling)))) return false;
   if (plan.furniture !== void 0 && !list(plan.furniture, (item) => point(item) && angle(item.angle) && validName(item.name) && Object.hasOwn(furnitureCatalog, item.kind) && furnitureMaterials.includes(item.material) && numberBetween(item.width, 0.02, 12) && numberBetween(item.depth, 0.02, 12) && numberBetween(item.height, 0.01, 6) && numberBetween(item.base, 0, 6), maxFurniture)) return false;
   const roomIds = new Set(plan.rooms.map((room) => room.id));
   for (const key of ["windows", "mirrors"]) {
@@ -825,6 +827,7 @@ function roomViews(rooms, profiles = []) {
         angle: degrees((source.orientation_deg ?? source.rotation ?? 0) + room.house.rotationDeg),
         radar: "none",
         savedHeight: finite2(source.height_m) ? source.height_m : finite2(source.heightMm) ? metres(source.heightMm) : null,
+        ...mount === "wall" && finite2(source.tilt_deg) && source.tilt_deg >= sensorTilt.min && source.tilt_deg <= sensorTilt.max && source.tilt_deg !== 0 ? { tilt: source.tilt_deg } : {},
         sourceId: source.id,
         deviceId,
         source
@@ -901,6 +904,8 @@ function plannerDevices(profiles, haDevices, areas = []) {
       areaId,
       floorId: areaById.get(areaId)?.floorId ?? null,
       mountHeight: mount === "wall" && height >= 0.15 && height <= 6 ? height : void 0,
+      // The downward angle the LD2460 firmware was given is where a new placement starts.
+      tilt: mount === "wall" && profile?.installation_angle_deg > 0 && profile.installation_angle_deg <= sensorTilt.max ? profile.installation_angle_deg : void 0,
       online: device?.online,
       aliases: [entry?.entity_prefix, ...entry?.aliases ?? []].filter(Boolean)
     }];
@@ -970,9 +975,12 @@ function projectFromRooms(rooms, profiles, devices2 = []) {
         const model = sameMount ? device.model : sensor.model;
         const radar = sameMount ? device.radar : "none";
         const { savedHeight, sourceId: sourceId2, deviceId, source, ...item } = sensor;
+        const bracket = source.installation === "wall-bracket" && installationsFor(model).includes("wall-bracket");
+        const pan = bracket && finite2(source.pan_deg) && source.pan_deg !== 0 && Math.abs(source.pan_deg) <= sensorPan ? { pan: source.pan_deg } : {};
         plan.sensors.push({
           ...item,
           model,
+          ...bracket ? { installation: "wall-bracket", ...pan } : {},
           radar: deviceId || radarsFor(model).includes(radar) ? radar : radarsFor(model)[0],
           haSource: sourceId2,
           haRoom: room.id,
@@ -1057,15 +1065,18 @@ import { FloorPlanValidationError, zoneOwnerIsAvailable as zoneOwnerIsAvailable2
 
 // src/js/wall-radar-profiles.mjs
 var derate = 0.8;
-var wallPresence = { half: 75, range: 9 * derate };
+var wallPresence = { half: 75, pitch: 75, range: 9 * derate };
+var wallMotion = { half: 51, pitch: 46, range: 12 * derate };
 var wallTrackers = {
-  ld2450: { half: 60, range: 6 * derate, still: 6 * derate, max: 3, maxStill: 3 },
-  ld2460: { half: 60, range: 6 * derate, still: 5 * derate, max: 5, maxStill: 3 }
+  ld2450: { half: 60, pitch: 35, range: 6 * derate, still: 6 * derate, max: 3, maxStill: 3 },
+  ld2460: { half: 60, pitch: 45, range: 6 * derate, still: 5 * derate, max: 5, maxStill: 3 }
 };
 
 // src/js/floor-planner-radar.mjs
+var degree = Math.PI / 180;
+var wallMountHeight = 1.4;
 function sensorMountHeight(item, room) {
-  return devices[item.model].mount === "wall" ? item.mountHeight ?? 1.4 : room ? ceilingHeightAt(room, item) : 0;
+  return devices[item.model].mount === "wall" ? item.mountHeight ?? wallMountHeight : room ? ceilingHeightAt(room, item) : 0;
 }
 
 // src/ha/ha-save.js
@@ -1227,7 +1238,7 @@ function roomChange({ id, room, level, items }, previous, stored) {
       const rotation = degrees2(sensor.angle - house.rotationDeg);
       const mount = devices[sensor.model].mount;
       const height = sensor.mountHeight ?? (mount === "ceiling" && previous?.room.height === room.height ? source?.height_m : null) ?? sensorMountHeight(sensor, room);
-      const { device_id: _legacyDevice, ...rest } = source ?? {};
+      const { device_id: _legacyDevice, tilt_deg: _tilt, installation: _installation, pan_deg: _pan, ...rest } = source ?? {};
       return {
         ...rest,
         id: sourceId(sensor),
@@ -1240,7 +1251,11 @@ function roomChange({ id, room, level, items }, previous, stored) {
         y_m: metres2(y),
         orientation_deg: rotation,
         heightMm: millimetres(height),
-        height_m: height
+        height_m: height,
+        // How far a wall sensor is tilted down, when it is.
+        ...mount === "wall" && sensor.tilt ? { tilt_deg: sensor.tilt } : {},
+        // On its wall bracket, and how far it is turned on it from straight out of the wall.
+        ...mount === "wall" && sensor.installation === "wall-bracket" ? { installation: "wall-bracket", ...sensor.pan ? { pan_deg: sensor.pan } : {} } : {}
       };
     })];
     if (record?.calibration?.enabled && record.calibration.sensorId && !change.sensors.some((source) => source.id === record.calibration.sensorId)) {

@@ -16,6 +16,15 @@ export const devices = {
     wallsense: { name: 'WallSense', image: '/images/wallsense/hero-2026-09-22-512.webp', mount: 'wall', defaultRadar: 'ld2450', coming: true },
 };
 
+// How far a wall sensor can be tilted, in degrees down from level (up is
+// negative), and turned to each side on its wall bracket.
+export const sensorTilt = { min: -30, max: 75 };
+export const sensorPan = 85;
+// The devices with a PIR next to their radars: it answers to a warm body that moves.
+export const hasMotionSensor = model => model === 'ultimatesensor-v2';
+// WallSense sits flat in the wall and looks straight out of it.
+export const canAimSensor = item => devices[item.model]?.mount === 'wall' && item.model !== 'wallsense';
+
 export function installationsFor(model) {
     if (model === 'wallsense') return ['wall-recessed'];
     if (devices[model]?.mount === 'ceiling') return ['ceilsense-mini', 'ceilsense-pro'].includes(model)
@@ -29,6 +38,7 @@ export function sameSensorPlacement(a, b) {
     return a.model === b.model && a.radar === b.radar && a.angle === b.angle
         && installationFor(a) === installationFor(b) && (a.levelMountRoom ?? null) === (b.levelMountRoom ?? null)
         && Math.abs((a.mountHeight ?? 1.4) - (b.mountHeight ?? 1.4)) < .02
+        && (a.tilt ?? 0) === (b.tilt ?? 0)
         && Math.hypot(a.x - b.x, a.y - b.y) < .08;
 }
 
@@ -135,6 +145,9 @@ export function validPlan(plan) {
         && (item.installation === undefined || installationsFor(item.model).includes(item.installation))
         && (item.climate === undefined || (item.model === 'ceilsense-v2' && typeof item.climate === 'boolean'))
         && (item.mountHeight === undefined || (devices[item.model].mount === 'wall' && numberBetween(item.mountHeight, .15, 6)))
+        // A wall sensor can be tilted, down from level, and turned on its bracket, away from straight out of the wall.
+        && (item.tilt === undefined || (devices[item.model].mount === 'wall' && numberBetween(item.tilt, sensorTilt.min, sensorTilt.max)))
+        && (item.pan === undefined || (devices[item.model].mount === 'wall' && numberBetween(item.pan, -sensorPan, sensorPan)))
         && (item.levelMountRoom == null || plan.rooms.some(room => room.id === item.levelMountRoom && room.ceiling)))) return false;
     if (plan.furniture !== undefined && !list(plan.furniture, item => point(item) && angle(item.angle)
         && validName(item.name) && Object.hasOwn(furnitureCatalog, item.kind) && furnitureMaterials.includes(item.material)

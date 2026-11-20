@@ -634,7 +634,7 @@ function installationsFor(model) {
   return ["ultimatesensor-v2", "ultimatesensor-mini-v2"].includes(model) ? ["freestanding", "wall-bracket"] : ["freestanding"];
 }
 function sameSensorPlacement(a, b) {
-  return a.model === b.model && a.radar === b.radar && a.angle === b.angle && installationFor(a) === installationFor(b) && (a.levelMountRoom ?? null) === (b.levelMountRoom ?? null) && Math.abs((a.mountHeight ?? 1.4) - (b.mountHeight ?? 1.4)) < 0.02 && Math.hypot(a.x - b.x, a.y - b.y) < 0.08;
+  return a.model === b.model && a.radar === b.radar && a.angle === b.angle && installationFor(a) === installationFor(b) && (a.levelMountRoom ?? null) === (b.levelMountRoom ?? null) && Math.abs((a.mountHeight ?? 1.4) - (b.mountHeight ?? 1.4)) < 0.02 && (a.tilt ?? 0) === (b.tilt ?? 0) && Math.hypot(a.x - b.x, a.y - b.y) < 0.08;
 }
 function radarsFor(model) {
   const device = devices[model];
@@ -674,7 +674,7 @@ function validPlan(plan2) {
   if (!list(plan2.rooms, (item) => point(item) && validName(item.name) && validRoomDimensions(item) && validFinish(item) && (item.useSampleName === void 0 || typeof item.useSampleName === "boolean") && (item.outline === void 0 || plan2.version >= 2 && validRoomOutline(item)) && (item.obstacles === void 0 || typeof item.obstacles === "boolean") && (item.priority == null || numberBetween(item.priority.x, 0.05, 0.95) && numberBetween(item.priority.y, 0.05, 0.95)))) return false;
   if (!list(plan2.walls, (item) => point(item) && point({ x: item.endX, y: item.endY }) && (item.x !== item.endX || item.y !== item.endY))) return false;
   if (!list(plan2.doors, (item) => point(item) && angle(item.angle) && numberBetween(item.width, 0.5, 2) && (item.closed === void 0 || typeof item.closed === "boolean"))) return false;
-  if (!list(plan2.sensors, (item) => point(item) && angle(item.angle) && Object.hasOwn(devices, item.model) && validSensorRadar(item) && (item.installation === void 0 || installationsFor(item.model).includes(item.installation)) && (item.climate === void 0 || item.model === "ceilsense-v2" && typeof item.climate === "boolean") && (item.mountHeight === void 0 || devices[item.model].mount === "wall" && numberBetween(item.mountHeight, 0.15, 6)) && (item.levelMountRoom == null || plan2.rooms.some((room) => room.id === item.levelMountRoom && room.ceiling)))) return false;
+  if (!list(plan2.sensors, (item) => point(item) && angle(item.angle) && Object.hasOwn(devices, item.model) && validSensorRadar(item) && (item.installation === void 0 || installationsFor(item.model).includes(item.installation)) && (item.climate === void 0 || item.model === "ceilsense-v2" && typeof item.climate === "boolean") && (item.mountHeight === void 0 || devices[item.model].mount === "wall" && numberBetween(item.mountHeight, 0.15, 6)) && (item.tilt === void 0 || devices[item.model].mount === "wall" && numberBetween(item.tilt, sensorTilt.min, sensorTilt.max)) && (item.pan === void 0 || devices[item.model].mount === "wall" && numberBetween(item.pan, -sensorPan, sensorPan)) && (item.levelMountRoom == null || plan2.rooms.some((room) => room.id === item.levelMountRoom && room.ceiling)))) return false;
   if (plan2.furniture !== void 0 && !list(plan2.furniture, (item) => point(item) && angle(item.angle) && validName(item.name) && Object.hasOwn(furnitureCatalog, item.kind) && furnitureMaterials.includes(item.material) && numberBetween(item.width, 0.02, 12) && numberBetween(item.depth, 0.02, 12) && numberBetween(item.height, 0.01, 6) && numberBetween(item.base, 0, 6), maxFurniture)) return false;
   const roomIds = new Set(plan2.rooms.map((room) => room.id));
   for (const key of ["windows", "mirrors"]) {
@@ -787,7 +787,7 @@ function guidePlanForRoom(plan2, room, limit = 3) {
     }))
   };
 }
-var devices, installationFor, radarNames, newId, snap, contains, ceilingReferenceRange, numberBetween, validRoomDimensions, point, angle, validName, validMirrorProtection, list, floorFinishes, wallColors, validFinish, zoneTypes, sampleRoomLayout, upperRoomLayout, sampleRoomIds, sampleRooms, sampleDoors;
+var devices, sensorTilt, sensorPan, hasMotionSensor, canAimSensor, installationFor, radarNames, newId, snap, contains, ceilingReferenceRange, numberBetween, validRoomDimensions, point, angle, validName, validMirrorProtection, list, floorFinishes, wallColors, validFinish, zoneTypes, sampleRoomLayout, upperRoomLayout, sampleRoomIds, sampleRooms, sampleDoors;
 var init_floor_planner_model = __esm({
   "src/js/floor-planner-model.mjs"() {
     init_ceilsense_room_model();
@@ -806,6 +806,10 @@ var init_floor_planner_model = __esm({
       "ultimatesensor-mini-v2": { name: "UltimateSensor Mini V2", image: "/assets/ultimatesensor-mini-v2-white-hero.webp", mount: "wall", defaultRadar: "ld2450" },
       wallsense: { name: "WallSense", image: "/images/wallsense/hero-2026-09-22-512.webp", mount: "wall", defaultRadar: "ld2450", coming: true }
     };
+    sensorTilt = { min: -30, max: 75 };
+    sensorPan = 85;
+    hasMotionSensor = (model) => model === "ultimatesensor-v2";
+    canAimSensor = (item) => devices[item.model]?.mount === "wall" && item.model !== "wallsense";
     installationFor = (item) => item.installation ?? installationsFor(item.model)[0];
     radarNames = {
       none: "-",
@@ -869,24 +873,85 @@ var init_floor_planner_model = __esm({
 });
 
 // src/js/wall-radar-profiles.mjs
-var derate, wallPresence, wallTrackers;
+var derate, wallPresence, wallMotion, wallTrackers;
 var init_wall_radar_profiles = __esm({
   "src/js/wall-radar-profiles.mjs"() {
     derate = 0.8;
-    wallPresence = { half: 75, range: 9 * derate };
+    wallPresence = { half: 75, pitch: 75, range: 9 * derate };
+    wallMotion = { half: 51, pitch: 46, range: 12 * derate };
     wallTrackers = {
-      ld2450: { half: 60, range: 6 * derate, still: 6 * derate, max: 3, maxStill: 3 },
-      ld2460: { half: 60, range: 6 * derate, still: 5 * derate, max: 5, maxStill: 3 }
+      ld2450: { half: 60, pitch: 35, range: 6 * derate, still: 6 * derate, max: 3, maxStill: 3 },
+      ld2460: { half: 60, pitch: 45, range: 6 * derate, still: 5 * derate, max: 5, maxStill: 3 }
     };
   }
 });
 
 // src/js/floor-planner-radar.mjs
-function wallSector({ half, range }) {
-  const radians = half * Math.PI / 180;
+function beamSector({ half, range }) {
+  const radians = half * degree;
   const x = range * Math.sin(radians);
   const y = -range * Math.cos(radians);
   return `M0 0 ${-x} ${y} A${range} ${range} 0 0 1 ${x} ${y}Z`;
+}
+function wallSector(field2) {
+  if (field2.pitch === void 0) return beamSector(field2);
+  const key = [field2.half, field2.pitch, field2.range, field2.mount, field2.tilt].join(" ");
+  if (!footprints.has(key)) {
+    if (footprints.size > 200) footprints.clear();
+    footprints.set(key, footprint(field2));
+  }
+  return footprints.get(key);
+}
+function stretch(field2, angle2) {
+  const spot = { x: 0, y: 0, angle: 0 };
+  const step2 = 0.05;
+  const covered = (distance4) => fieldCoversPoint(
+    field2,
+    spot,
+    { x: distance4 * Math.sin(angle2), y: -distance4 * Math.cos(angle2) },
+    "seated",
+    standingHeight
+  );
+  let first = null, last = null;
+  for (let distance4 = step2; distance4 <= field2.range + 1e-9; distance4 += step2) {
+    if (!covered(distance4)) continue;
+    first ??= distance4;
+    last = distance4;
+  }
+  if (first === null) return null;
+  const edge = (inside, outside) => {
+    for (let round = 0; round < 8; round++) {
+      const middle = (inside + outside) / 2;
+      if (covered(middle)) inside = middle;
+      else outside = middle;
+    }
+    return inside;
+  };
+  return [first <= step2 * 2 ? 0 : edge(first, first - step2), edge(last, Math.min(field2.range, last + step2))];
+}
+function wallReach(field2) {
+  if (field2.pitch === void 0) return { from: 0, to: field2.range };
+  const reach2 = stretch(field2, 0);
+  return reach2 && { from: reach2[0], to: reach2[1] };
+}
+function footprint(field2) {
+  const turns = 40;
+  const near = [], far = [];
+  for (let turn = 0; turn <= turns; turn++) {
+    const angle2 = (-field2.half + turn * 2 * field2.half / turns) * degree;
+    const reach2 = stretch(field2, angle2);
+    if (!reach2) continue;
+    const at = (distance4) => [distance4 * Math.sin(angle2), -distance4 * Math.cos(angle2)];
+    near.push(at(reach2[0]));
+    far.push(at(reach2[1]));
+  }
+  if (!far.length) return "";
+  const points = [...far, ...near.reverse()].map((point3) => point3.map((value) => Number(value.toFixed(3))).join(" ")).filter((point3, index, all) => point3 !== all[index - 1]);
+  return `M${points.join("L")}Z`;
+}
+function motionField(item) {
+  if (!hasMotionSensor(item.model)) return null;
+  return { ...wallMotion, mount: item.mountHeight ?? wallMountHeight, tilt: item.tilt ?? 0, radar: "pir", mode: "motion", secondary: true };
 }
 function radarOrigin(item) {
   if (devices[item.model].mount === "ceiling") return item;
@@ -894,14 +959,15 @@ function radarOrigin(item) {
   return { x: item.x + facing.x * 0.08, y: item.y + facing.y * 0.08 };
 }
 function sensorMountHeight(item, room) {
-  return devices[item.model].mount === "wall" ? item.mountHeight ?? 1.4 : room ? ceilingHeightAt(room, item) : 0;
+  return devices[item.model].mount === "wall" ? item.mountHeight ?? wallMountHeight : room ? ceilingHeightAt(room, item) : 0;
 }
 function radarFields(room, item, { allowHeightEstimate = false } = {}) {
   if (!room || item.radar === "none") return [];
   if (devices[item.model].mount === "wall") {
+    const aim = { mount: item.mountHeight ?? wallMountHeight, tilt: item.tilt ?? 0 };
     return [
-      { ...wallPresence, radar: "ld2412", mode: "presence", secondary: true },
-      { ...wallTrackers[item.radar], radar: item.radar, mode: "xy" }
+      { ...wallPresence, ...aim, radar: "ld2412", mode: "presence", secondary: true },
+      { ...wallTrackers[item.radar], ...aim, radar: item.radar, mode: "xy" }
     ];
   }
   if (!plannerRadars.includes(item.radar)) return [];
@@ -912,10 +978,10 @@ function radarFields(room, item, { allowHeightEstimate = false } = {}) {
   if (status !== "reference" && !estimatedHeight) return [];
   const radars = item.radar === "combined" ? ["ld6002b", "ld2412"] : [item.radar];
   return radars.map((radar, index) => {
-    const footprint = radarFootprint(radar, height);
+    const footprint2 = radarFootprint(radar, height);
     return {
-      radii: footprint.seated,
-      profiles: radar === "ld2412" ? footprint : null,
+      radii: footprint2.seated,
+      profiles: radar === "ld2412" ? footprint2 : null,
       radar,
       mode: { ld2412: "presence", ld2460: "xy", ld6002b: "xyz" }[radar],
       secondary: index > 0,
@@ -923,7 +989,7 @@ function radarFields(room, item, { allowHeightEstimate = false } = {}) {
     };
   });
 }
-function fieldCoversPoint(field2, item, point3, profile2 = "seated") {
+function fieldCoversPoint(field2, item, point3, profile2 = "seated", target = null) {
   const angle2 = item.angle * Math.PI / 180;
   const dx = point3.x - item.x;
   const dy = point3.y - item.y;
@@ -934,9 +1000,16 @@ function fieldCoversPoint(field2, item, point3, profile2 = "seated") {
     return (x / rx) ** 2 + (y / ry) ** 2 <= 1;
   }
   const distance4 = Math.hypot(x, y);
-  return distance4 <= field2.range && (distance4 === 0 || Math.abs(Math.atan2(x, -y)) <= field2.half * Math.PI / 180);
+  if (target === null || field2.pitch === void 0) {
+    return distance4 <= field2.range && (distance4 === 0 || Math.abs(Math.atan2(x, -y)) <= field2.half * degree);
+  }
+  const drop = (field2.mount ?? wallMountHeight) - target;
+  const tilt = (field2.tilt ?? 0) * degree;
+  const ahead = -y * Math.cos(tilt) + drop * Math.sin(tilt);
+  const above = -y * Math.sin(tilt) - drop * Math.cos(tilt);
+  return ahead > 0 && Math.hypot(distance4, drop) <= field2.range && Math.abs(Math.atan2(x, ahead)) <= field2.half * degree && Math.abs(Math.atan2(above, ahead)) <= field2.pitch * degree;
 }
-var ceilingProfiles, radarProfileFor, radarHasLineOfSight;
+var ceilingProfiles, radarProfileFor, degree, wallMountHeight, standingHeight, footprints, radarHasLineOfSight;
 var init_floor_planner_radar = __esm({
   "src/js/floor-planner-radar.mjs"() {
     init_ceilsense_room_model();
@@ -946,6 +1019,10 @@ var init_floor_planner_radar = __esm({
     init_wall_radar_profiles();
     ceilingProfiles = ["seated", "standing", "moving"];
     radarProfileFor = (person) => person?.moving ? "moving" : person?.pose === "standing" ? "standing" : "seated";
+    degree = Math.PI / 180;
+    wallMountHeight = 1.4;
+    standingHeight = 1.35;
+    footprints = /* @__PURE__ */ new Map();
     radarHasLineOfSight = (room, item, point3) => !room.outline || roomContainsLine(room, radarOrigin(item), point3);
   }
 });
@@ -1013,7 +1090,7 @@ function sightPolygon(sight, origin, { height = 0, target = standingTarget, rang
   const angles2 = /* @__PURE__ */ new Set();
   const add2 = (angle2) => angles2.add((angle2 % fullTurn + fullTurn) % fullTurn);
   for (let step2 = 0; step2 < 120; step2++) add2(step2 * fullTurn / 120);
-  for (const stretch of [...sight.walls, ...sight.doors]) for (const [x, y] of stretch) {
+  for (const stretch2 of [...sight.walls, ...sight.doors]) for (const [x, y] of stretch2) {
     const angle2 = Math.atan2(y - origin.y, x - origin.x);
     add2(angle2 - 1e-4);
     add2(angle2);
@@ -1079,9 +1156,10 @@ function paintFurniture(item, selected2 = false, interactive = true) {
         transform="translate(${item.x} ${item.y}) rotate(${item.angle})">
         <rect class="fp-furniture-hit" x="${-item.width / 2}" y="${-item.depth / 2}" width="${item.width}" height="${item.depth}"/>${shape}</g>`;
 }
-function coverage(item, room, isSelected, focus, radarOptions, sight) {
+function coverage(item, room, isSelected, focus, radarOptions, sight, motion = false) {
   const fields = radarFields(room, item, radarOptions);
   if (!fields.length) return "";
+  const lens = motion && room ? motionField(item) : null;
   const ceiling = devices[item.model].mount === "ceiling";
   const shape = fields.map((field2) => {
     const style = field2.secondary ? ' class="fp-secondary-range"' : "";
@@ -1102,7 +1180,7 @@ function coverage(item, room, isSelected, focus, radarOptions, sight) {
     </clipPath></defs>`;
   return `${clip}<g class="fp-range ${ceiling ? "ceiling" : "wall"} ${isSelected ? "selected" : ""}"
         ${fields.some((field2) => field2.estimatedHeight) ? "data-height-estimate" : ""} clip-path="url(#${clipId})">
-        <g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">${shape}</g></g>`;
+        <g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">${shape}${lens ? `<path class="fp-motion-range" d="${wallSector(lens)}"/>` : ""}</g></g>`;
 }
 function paintPlacementPreview(plan2, item, radarOptions) {
   const room = roomForDevice(plan2.rooms, item);
@@ -1115,7 +1193,7 @@ function paintPlacementPreview(plan2, item, radarOptions) {
         </g>
     </g>`;
 }
-function ceilingMarks(room, number2, active) {
+function ceilingMarks(room, number3, active) {
   if (!room.ceiling) return "";
   const { direction: direction2, type, high } = room.ceiling;
   const alongX = direction2.startsWith("x");
@@ -1132,7 +1210,7 @@ function ceilingMarks(room, number2, active) {
         ${active ? sideMarks.map(([x, y], index) => `<text x="${x}" y="${y}" text-anchor="middle">${index ? "B" : "A"}</text>`).join("") : ""}
         ${ridge ? `<path d="${ridge}"/>` : ""}
         <path class="fp-slope-arrow" d="${path2}" marker-end="url(#fp-slope-tip)"/>
-        ${labels.map(([x, y], index) => `<text x="${x}" y="${y}" text-anchor="middle">${number2.format(index === 0 ? room.height : high)} m</text>`).join("")}
+        ${labels.map(([x, y], index) => `<text x="${x}" y="${y}" text-anchor="middle">${number3.format(index === 0 ? room.height : high)} m</text>`).join("")}
     </g>`;
 }
 function ceilingMask(rooms, sensors, heightTagSensor) {
@@ -1156,7 +1234,7 @@ function ceilingMask(rooms, sensors, heightTagSensor) {
         <rect x="${x}" y="${y}" width="${width}" height="${height}" fill="white"/>${sensorsCutout}${labelsCutout}
     </mask>`;
 }
-function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false } = {}) {
+function paintPlan(plan2, showCoverage2, selected2, number3, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false, motion = false } = {}) {
   const selectedClass = (item) => selected2 === item.id ? " selected" : "";
   const activeSensor = plan2.sensors.find((item) => item.id === selected2);
   const activeRoom = plan2.rooms.find((room) => room.id === selected2) ?? (activeSensor && roomForDevice(plan2.rooms, activeSensor));
@@ -1166,7 +1244,7 @@ function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { mea
         ${plan2.windows?.some((window2) => window2.roomId === room.id) ? "" : paintWindows(room)}
     </g>`).join("");
   const roomLabels = plan2.rooms.map((room) => {
-    const measures2 = room.outline ? `${number2.format(roomArea(room))} m²` : `${number2.format(room.width)} × ${number2.format(room.depth)} m`;
+    const measures2 = room.outline ? `${number3.format(roomArea(room))} m²` : `${number3.format(room.width)} × ${number3.format(room.depth)} m`;
     const label = room.outline ? roomLabelPosition(room) : null;
     const name = room.name.length > 24 && label ? room.name.slice(0, 23) + "..." : room.name;
     return `<g pointer-events="none" transform="translate(${room.x} ${room.y})">
@@ -1182,12 +1260,12 @@ function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { mea
   const heightTagSensor = activeRoom?.ceiling && activeSensor && devices[activeSensor.model].mount === "ceiling" ? activeSensor : null;
   const slopeMask = ceilingRooms.length && (plan2.sensors.length || ceilingRooms.some((room) => room.outline)) ? ceilingMask(ceilingRooms, plan2.sensors, heightTagSensor) : "";
   const marks = ceilingRooms.map((room) => `<g${room.outline ? ` clip-path="url(#clip-${room.id})"` : ""}>
-        <g transform="translate(${room.x} ${room.y})">${ceilingMarks(room, number2, room.id === activeRoom?.id)}</g>
+        <g transform="translate(${room.x} ${room.y})">${ceilingMarks(room, number3, room.id === activeRoom?.id)}</g>
     </g>`).join("");
   const ceilingLayer = marks ? `<g${slopeMask ? ' mask="url(#fp-slope-clearance)"' : ""}>${marks}</g>` : "";
   const clips = plan2.rooms.map((room) => `<clipPath id="clip-${room.id}">${paintRoomSurface(room)}</clipPath>`).join("");
   const sight = showCoverage2 ? prepareSight(plan2) : null;
-  const ranges = showCoverage2 ? plan2.sensors.map((item) => coverage(item, roomForDevice(plan2.rooms, item), selected2 === item.id, focus, radarOptions, sight)).join("") : "";
+  const ranges = showCoverage2 ? plan2.sensors.map((item) => coverage(item, roomForDevice(plan2.rooms, item), selected2 === item.id, focus, radarOptions, sight, motion)).join("") : "";
   const outline = activeRoom && activeRoom.id === selected2 ? paintRoomSurface(activeRoom, 'class="fp-room-outline"') : "";
   const walls = plan2.walls.map((wall) => `<g class="fp-wall${selectedClass(wall)}" data-item="${wall.id}">
         <line class="fp-wall-hit" x1="${wall.x}" y1="${wall.y}" x2="${wall.endX}" y2="${wall.endY}"/>
@@ -1203,7 +1281,7 @@ function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { mea
     const icon = mount === "ceiling" ? '<circle r=".2"/><circle class="fp-sensor-eye" r=".072"/>' : '<rect x="-.2" y="-.16" width=".4" height=".32" rx=".06"/><path d="M-.07 .025 0-.06.07 .025" fill="none"/>';
     const mountHeight = item === heightTagSensor ? `<g class="fp-sensor-height" transform="translate(${heightTag.x} ${heightTag.y})">
                 <rect x="0" y="0" width="${heightTag.width}" height="${heightTag.height}" rx=".05"/>
-                <text x=".4" y=".18" text-anchor="middle">${number2.format(ceilingHeightAt(activeRoom, item))} m</text>
+                <text x=".4" y=".18" text-anchor="middle">${number3.format(ceilingHeightAt(activeRoom, item))} m</text>
             </g>` : "";
     return `<g data-item="${item.id}" class="fp-sensor ${mount}${selectedClass(item)}" transform="translate(${item.x} ${item.y})" ${interactiveSensors ? sensorMarkerAttributes(item, index) : ""}>
             <circle r=".34" class="fp-sensor-halo"/><g transform="rotate(${item.angle})">${icon}</g>
@@ -1220,7 +1298,7 @@ function paintPlan(plan2, showCoverage2, selected2, number2, focus = null, { mea
     const x = (ax + bx) / 2 - dy / length * 0.2, y = (ay + by) / 2 + dx / length * 0.2;
     const angle2 = Math.atan2(dy, dx) * 180 / Math.PI;
     const rotation = angle2 > 90 || angle2 < -90 ? angle2 + 180 : angle2;
-    return length < 0.35 ? "" : `<text class="fp-wall-measure" x="${x}" y="${y}" transform="rotate(${rotation} ${x} ${y})">${number2.format(length)} m</text>`;
+    return length < 0.35 ? "" : `<text class="fp-wall-measure" x="${x}" y="${y}" transform="rotate(${rotation} ${x} ${y})">${number3.format(length)} m</text>`;
   }).join("")).join("") : "";
   const zones = (plan2.zones ?? []).map((item) => paintZone(item, (point3) => point3, selected2 === item.id)).join("");
   return `<defs>${clips}${slopeMask}<marker id="fp-slope-tip" markerWidth="4" markerHeight="4" refX="3" refY="2" orient="auto"><path d="M0 0L4 2 0 4Z" fill="#b4baff"/></marker></defs>${rooms}${furniture}${ranges}${zones}${ceilingLayer}${walls}${outline}${doors}${openings}${dimensions2}${roomLabels}${sensors}`;
@@ -1248,6 +1326,185 @@ var init_floor_planner_drawing = __esm({
   }
 });
 
+// src/js/floor-planner-daylight.mjs
+var presets, daylights, daylightFor;
+var init_floor_planner_daylight = __esm({
+  "src/js/floor-planner-daylight.mjs"() {
+    presets = {
+      studio: { sun: [-0.42, -0.43, 0.8], cast: [1, 0.83], dim: 0 },
+      morning: { sun: [0.82, 0.2, 0.5], cast: [-1.55, -0.35], dim: 0.05 },
+      midday: { sun: [0.12, 0.46, 0.88], cast: [-0.22, -0.6], dim: 0 },
+      evening: { sun: [-0.8, 0.28, 0.46], cast: [1.6, -0.45], dim: 0.12 },
+      night: { sun: [-0.3, -0.35, 0.89], cast: [0.45, 0.4], dim: 0.6 }
+    };
+    daylights = Object.keys(presets);
+    daylightFor = (name) => presets[name] ?? presets.studio;
+  }
+});
+
+// src/js/floor-planner-device-mesh.mjs
+function axes(angle2, tilt) {
+  const { x, y } = wallVector(angle2);
+  const cos = Math.cos(tilt * degree2), sin = Math.sin(tilt * degree2);
+  return { side: [-y, x, 0], ahead: [x * cos, y * cos, -sin], up: [x * sin, y * sin, cos] };
+}
+function housingFaces(width, height, depth) {
+  const w = width / 2, d = depth / 2, h = height / 2, radius = Math.min(width, depth) * rounding2;
+  const ring2 = [[1, -1, -90], [1, 1, 0], [-1, 1, 90], [-1, -1, 180]].flatMap(([s, f, from]) => [0, 1, 2, 3].map((step2) => {
+    const turn = (from + step2 * 30) * degree2;
+    return [s * (w - radius) + Math.cos(turn) * radius, f * (d - radius) + Math.sin(turn) * radius];
+  }));
+  const sides = ring2.map(([s, f], index) => {
+    const [nextS, nextF] = ring2[(index + 1) % ring2.length];
+    return { normal: [nextF - f, s - nextS, 0], corners: [[s, f, -h], [nextS, nextF, -h], [nextS, nextF, h], [s, f, h]] };
+  });
+  return [
+    ...sides,
+    { normal: [0, 0, 1], corners: ring2.map(([s, f]) => [s, f, h]), lid: true },
+    { normal: [0, 0, -1], corners: ring2.map(([s, f]) => [s, f, -h]).reverse(), lid: true }
+  ];
+}
+function frontShapes({ width: w, height: h, depth, front }, fine) {
+  const flat = w / 2 - Math.min(w, depth) * rounding2;
+  if (front === "plate") {
+    const plate = 0.055 * deviceScale / 2;
+    return [
+      [band(-plate, plate, -plate, plate), [250, 250, 251]],
+      [disc(0, -plate * 0.12, plate * 0.46), [236, 239, 242]],
+      [band(-plate * 0.2, plate * 0.2, plate * 0.62, plate * 0.74), [92, 62, 66]]
+    ];
+  }
+  const low = -h / 2;
+  const grille = [low + h * 0.03, low + h * 0.25];
+  const holes = fine ? [0.25, 0.5, 0.75].flatMap((row) => [-0.72, -0.48, -0.24, 0, 0.24, 0.48, 0.72].map((column) => {
+    const s = column * flat, u = grille[0] + (grille[1] - grille[0]) * row, size = w * 0.028;
+    return [band(s - size, s + size, u - size, u + size), [150, 160, 170]];
+  })) : [];
+  const eye = front === "dome" ? [
+    [disc(-w * 0.03, h * 0.31, w * 0.235), [213, 219, 225]],
+    [disc(-w * 0.03, h * 0.31, w * 0.2), [252, 252, 253]],
+    [disc(w * 0.29, h * 0.31, w * 0.05, 8), [140, 148, 157]]
+  ] : [[disc(w * 0.26, h * 0.2, w * 0.07, 10), [176, 184, 192]], [disc(w * 0.26, h * 0.2, w * 0.04, 8), [96, 104, 113]]];
+  return [
+    [band(-flat, flat, ...grille), [226, 230, 234]],
+    ...holes,
+    [band(-flat, flat, low + h * 0.265, low + h * 0.32), [214, 221, 227], "light"],
+    ...eye
+  ];
+}
+function devicePose(item, height, furniture = []) {
+  const housing = deviceHousing(item.model);
+  if (!housing) return null;
+  const size = { width: housing.width * deviceScale, height: housing.height * deviceScale, depth: housing.depth * deviceScale };
+  const mounting = installationFor(item);
+  const frame = axes(item.angle, housing.front === "plate" ? 0 : item.tilt ?? 0);
+  if (mounting === "wall-recessed") {
+    const centre2 = [item.x + frame.ahead[0] * size.depth / 2, item.y + frame.ahead[1] * size.depth / 2, height];
+    return { housing, size, frame, centre: centre2, mounting };
+  }
+  if (mounting === "wall-bracket") {
+    const out = wallVector(item.angle - (item.pan ?? 0));
+    const wall = [item.x, item.y, height];
+    const joint = [item.x + out.x * 0.028 * deviceScale, item.y + out.y * 0.028 * deviceScale, height];
+    const reach2 = size.depth / 2 + 4e-3 * deviceScale;
+    return { housing, size, frame, centre: joint.map((value, index) => value + frame.ahead[index] * reach2), mounting, bracket: { wall, joint, out } };
+  }
+  const foot = height - housing.height / 2;
+  const below = furniture.filter((piece) => pointInOutline(furnitureFootprint(piece), item)).map((piece) => piece.base + piece.height).filter((top) => top <= foot + 0.03);
+  const rest = Math.max(0, ...below);
+  return {
+    housing,
+    size,
+    frame,
+    centre: [item.x, item.y, foot + size.height / 2],
+    mounting,
+    stand: foot - rest > 0.03 ? { low: rest, high: foot } : null
+  };
+}
+function paintDevice(item, height, { project, towardCamera: towardCamera2, sun = [-0.42, -0.43, 0.8], dim = 0, furniture = [], fine = true } = {}) {
+  const pose = devicePose(item, height, furniture);
+  if (!pose) return "";
+  const { housing, size, frame, centre: centre2, bracket, stand } = pose;
+  const drawn = (corner) => project([corner[0], corner[1]], corner[2]).map(number);
+  const point3 = (corner) => drawn(corner).join(",");
+  const polygon2 = (corners, fill3, more = "") => `<polygon points="${corners.map(point3).join(" ")}" fill="${fill3}" ${more}/>`;
+  const shade = (colour, normal) => {
+    const light = Math.max(0.76, Math.min(1, 0.87 + 0.13 * dot(normal, sun))) * (1 - 0.45 * dim);
+    return `rgb(${colour.map((value) => Math.round(value * light)).join(" ")})`;
+  };
+  const line = 'stroke-linejoin="round" vector-effect="non-scaling-stroke"';
+  const local = placed(centre2, frame);
+  const turned = ([s, f, u]) => [0, 1, 2].map((index) => s * frame.side[index] + f * frame.ahead[index] + u * frame.up[index]);
+  const faces = housingFaces(size.width, size.height, size.depth).map((face) => ({ ...face, normal: turned(face.normal), corners: face.corners.map(local) }));
+  const outline = `<polygon points="${convexHull(faces.flatMap((face) => face.corners.map(drawn))).map((corner) => corner.join(",")).join(" ")}"
+        fill="none" stroke="#5f6d7a" stroke-width="1.6" ${line}/>`;
+  const body = faces.filter((face) => dot(face.normal, towardCamera2) > 0).map((face) => {
+    const length = Math.hypot(...face.normal);
+    const fill3 = shade(plastic, face.normal.map((value) => value / length));
+    return polygon2(face.corners, fill3, `stroke="${face.lid ? "#aab4bd" : fill3}" stroke-width=".6" ${line}`);
+  }).join("");
+  const facesCamera = dot(frame.ahead, towardCamera2) > 0;
+  const front = facesCamera ? frontShapes({ ...size, front: housing.front }, fine).map(([shape, colour, part]) => {
+    const corners = shape.map(([s, u]) => local([s, size.depth / 2 + 2e-3, u]));
+    return polygon2(corners, shade(colour, frame.ahead), 'stroke="none"') + (part === "light" ? polygon2(corners, "currentColor", 'class="fp-device-light" fill-opacity=".62" stroke="none"') : "");
+  }).join("") : "";
+  let holder = "";
+  if (bracket) {
+    const { wall, joint, out } = bracket;
+    const across = [-out.y, out.x, 0];
+    const unit3 = deviceScale / 1e3;
+    const plate = [[-18, -25], [18, -25], [18, 25], [-18, 25]].map(([side, up]) => [wall[0] + across[0] * side * unit3 + out.x * 6e-3, wall[1] + across[1] * side * unit3 + out.y * 6e-3, wall[2] + up * unit3]);
+    const back = local([0, -size.depth / 2, 0]);
+    holder = `<g class="fp-device-bracket">${polygon2(plate, shade([224, 228, 232], [out.x, out.y, 0]), `stroke="#75838f" stroke-width=".7" ${line}`)}
+            <path d="M${point3(wall)}L${point3(joint)}L${point3(back)}" fill="none" stroke="#9aa5af" stroke-width="${number(11 * unit3)}" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M${point3(joint)}h0" fill="none" stroke="#6f7c88" stroke-width="${number(19 * unit3)}" stroke-linecap="round"/></g>`;
+  } else if (stand) {
+    const upright = axes(item.angle, 0);
+    const corner = (s, f, z) => [item.x + s * upright.side[0] + f * upright.ahead[0], item.y + s * upright.side[1] + f * upright.ahead[1], z];
+    const w = size.width / 2 + 0.04, d = size.depth / 2 + 0.04;
+    const foot = [[-w, -d], [w, -d], [w, d], [-w, d]];
+    const sides = foot.map(([s, f], index) => {
+      const [nextS, nextF] = foot[(index + 1) % foot.length];
+      const normal = [0, 1].map((axis) => (nextF - f) * upright.side[axis] + (s - nextS) * upright.ahead[axis]);
+      return { normal: [...normal, 0], corners: [corner(s, f, stand.low), corner(nextS, nextF, stand.low), corner(nextS, nextF, stand.high), corner(s, f, stand.high)] };
+    }).filter((face) => dot(face.normal, towardCamera2) > 0);
+    holder = `<g class="fp-device-stand">${[...sides, { normal: [0, 0, 1], corners: foot.map(([s, f]) => corner(s, f, stand.high)) }].map((face) => polygon2(face.corners, shade([226, 231, 236], face.normal), `fill-opacity=".62" stroke="#8a97a3" stroke-opacity=".8" stroke-width=".8" ${line}`)).join("")}</g>`;
+  }
+  const parts = bracket && !facesCamera ? outline + body + front + holder : holder + outline + body + front;
+  return `<g class="fp-device fp-space-puck wall" data-device="${item.model}" data-mounting="${pose.mounting}">${parts}</g>`;
+}
+var deviceScale, tall, short, housings, deviceHousing, degree2, plastic, dot, number, placed, rounding2, disc, band;
+var init_floor_planner_device_mesh = __esm({
+  "src/js/floor-planner-device-mesh.mjs"() {
+    init_floor_planner_furniture();
+    init_floor_planner_geometry();
+    init_floor_planner_model();
+    deviceScale = 4;
+    tall = { width: 0.056, height: 0.107, depth: 0.041, front: "dome" };
+    short = { width: 0.056, height: 0.087, depth: 0.038, front: "eye" };
+    housings = {
+      ultimatesensor: tall,
+      "ultimatesensor-v2": tall,
+      "ultimatesensor-mini": short,
+      "ultimatesensor-mini-v2": short,
+      // The cover frame of a wall box, with the square sensor plate in it.
+      wallsense: { width: 0.081, height: 0.081, depth: 0.011, front: "plate" }
+    };
+    deviceHousing = (model) => housings[model] ?? null;
+    degree2 = Math.PI / 180;
+    plastic = [246, 247, 249];
+    dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    number = (value) => Number(value.toFixed(3));
+    placed = (centre2, { side, ahead, up }) => ([s, f, u]) => centre2.map((value, index) => value + s * side[index] + f * ahead[index] + u * up[index]);
+    rounding2 = 0.24;
+    disc = (s, u, radius, points = 14) => Array.from({ length: points }, (_, index) => {
+      const turn = index * 2 * Math.PI / points;
+      return [s + Math.cos(turn) * radius, u + Math.sin(turn) * radius];
+    });
+    band = (left, right, low, high) => [[left, low], [right, low], [right, high], [left, high]];
+  }
+});
+
 // src/js/floor-planner-depth.mjs
 function planeFor([a, b, c]) {
   const [x, y, z] = b.map((value, axis) => value - a[axis]);
@@ -1256,7 +1513,7 @@ function planeFor([a, b, c]) {
   const length = Math.hypot(...normal);
   if (length <= epsilon2) return null;
   const unit3 = normal.map((value) => value / length);
-  return { normal: unit3, offset: dot(unit3, a) };
+  return { normal: unit3, offset: dot2(unit3, a) };
 }
 function sideOf(face, plane) {
   const { normal: [x, y, z], offset: offset2 } = plane;
@@ -1319,10 +1576,10 @@ function splitVerticesAtHeight(vertices, height) {
 function depthOrder(faces, towardCamera2) {
   const visible = faces.flatMap((face) => {
     const plane = planeFor(face.vertices);
-    return plane && dot(plane.normal, towardCamera2) > epsilon2 ? [{ ...face, plane }] : [];
+    return plane && dot2(plane.normal, towardCamera2) > epsilon2 ? [{ ...face, plane }] : [];
   });
   const ordered = [];
-  const depth = (face) => face.vertices.reduce((sum, point3) => sum + dot(point3, towardCamera2), 0) / face.vertices.length;
+  const depth = (face) => face.vertices.reduce((sum, point3) => sum + dot2(point3, towardCamera2), 0) / face.vertices.length;
   function visit(group, level = 0) {
     if (!group.length) return;
     if (group.length === 1) {
@@ -1353,7 +1610,7 @@ function depthOrder(faces, towardCamera2) {
         }
       }
     }
-    const frontFirst = dot(plane.normal, towardCamera2) < 0;
+    const frontFirst = dot2(plane.normal, towardCamera2) < 0;
     visit(frontFirst ? front : back, level + 1);
     for (const face of aligned) ordered.push(face);
     visit(frontFirst ? back : front, level + 1);
@@ -1364,15 +1621,15 @@ function depthOrder(faces, towardCamera2) {
 function onFaceEdge(point3, a, b) {
   const edge = b.map((value, axis) => value - a[axis]);
   const offset2 = point3.map((value, axis) => value - a[axis]);
-  const fraction = dot(offset2, edge) / dot(edge, edge);
+  const fraction = dot2(offset2, edge) / dot2(edge, edge);
   return fraction >= -epsilon2 && fraction <= 1 + epsilon2 && offset2.every((value, axis) => Math.abs(value - fraction * edge[axis]) < epsilon2);
 }
-var epsilon2, dot, planeDistance;
+var epsilon2, dot2, planeDistance;
 var init_floor_planner_depth = __esm({
   "src/js/floor-planner-depth.mjs"() {
     epsilon2 = 1e-5;
-    dot = ([x, y, z], [a, b, c]) => x * a + y * b + z * c;
-    planeDistance = (plane, point3) => dot(plane.normal, point3) - plane.offset;
+    dot2 = ([x, y, z], [a, b, c]) => x * a + y * b + z * c;
+    planeDistance = (plane, point3) => dot2(plane.normal, point3) - plane.offset;
   }
 });
 
@@ -1629,22 +1886,6 @@ var init_floor_planner_furniture_mesh = __esm({
       const angle2 = index * 2 * Math.PI / 14;
       return [x + Math.cos(angle2) * rx, y, z - Math.sin(angle2) * rz];
     });
-  }
-});
-
-// src/js/floor-planner-daylight.mjs
-var presets, daylights, daylightFor;
-var init_floor_planner_daylight = __esm({
-  "src/js/floor-planner-daylight.mjs"() {
-    presets = {
-      studio: { sun: [-0.42, -0.43, 0.8], cast: [1, 0.83], dim: 0 },
-      morning: { sun: [0.82, 0.2, 0.5], cast: [-1.55, -0.35], dim: 0.05 },
-      midday: { sun: [0.12, 0.46, 0.88], cast: [-0.22, -0.6], dim: 0 },
-      evening: { sun: [-0.8, 0.28, 0.46], cast: [1.6, -0.45], dim: 0.12 },
-      night: { sun: [-0.3, -0.35, 0.89], cast: [0.45, 0.4], dim: 0.6 }
-    };
-    daylights = Object.keys(presets);
-    daylightFor = (name) => presets[name] ?? presets.studio;
   }
 });
 
@@ -1962,10 +2203,10 @@ function stairGait(stair, progress, rise, up, lane = 0) {
   const time = step2 - index;
   const run = Math.hypot(stair.top.x - stair.bottom.x, stair.top.y - stair.bottom.y);
   const station = (order) => {
-    const number2 = up ? order : steps + 3 - order;
-    if (number2 < 2) return { fraction: 0, height: 0 };
-    if (number2 > steps + 1) return { fraction: 1, height: rise };
-    return { fraction: onTread(number2 - 1.5), height: rise * (number2 - 1) / steps };
+    const number3 = up ? order : steps + 3 - order;
+    if (number3 < 2) return { fraction: 0, height: 0 };
+    if (number3 > steps + 1) return { fraction: 1, height: rise };
+    return { fraction: onTread(number3 - 1.5), height: rise * (number3 - 1) / steps };
   };
   const from = station(index), support = station(index + 1), to = station(index + 2);
   const rootFraction = (support.fraction + mix(from.fraction, to.fraction, time)) / 2;
@@ -2010,7 +2251,7 @@ function paintStairPlan(stair, label, up) {
     const { x: x2, y: y2 } = stairPoint(stair, fraction, side * stair.width / 2);
     return [x2, y2];
   };
-  const footprint = [edge(start, -1), edge(start, 1), edge(end, 1), edge(end, -1)];
+  const footprint2 = [edge(start, -1), edge(start, 1), edge(end, 1), edge(end, -1)];
   const treads = Array.from({ length: steps - 1 }, (_, index) => {
     const [x1, y1] = edge(onTread(index + 1), -1), [x2, y2] = edge(onTread(index + 1), 1);
     return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
@@ -2019,7 +2260,7 @@ function paintStairPlan(stair, label, up) {
   const wing = (side) => stairPoint(stair, up ? 0.59 : 0.41, side * 0.2);
   const [left, right] = [-1, 1].map(wing);
   const [x, y] = edge(up ? 0.98 : 0.025, 0);
-  return `<g class="fp-stair-plan" data-staircase pointer-events="none">${polygon(footprint, "fp-stairwell")}${treads}
+  return `<g class="fp-stair-plan" data-staircase pointer-events="none">${polygon(footprint2, "fp-stairwell")}${treads}
         <path d="M${a.join(" ")}L${b.join(" ")} M${left.x} ${left.y}L${b.join(" ")}L${right.x} ${right.y}"/>
         <text x="${x}" y="${y}" text-anchor="middle">${label}</text></g>`;
 }
@@ -2157,15 +2398,11 @@ function paintCeilingSensor(item, room, height, project, towardViewer) {
   const visibleFace = -vx * slopeX - vy * slopeY + vz * cosine >= 0 ? back : front;
   return spacePolygon("polygon", convexHull([...back, ...front]), 'class="fp-space-puck side"') + spacePolygon("polygon", visibleFace, 'class="fp-space-puck face"');
 }
-function paintWallSense(item, height, project, cutawayHeight) {
+function paintWallSupport(item, height, project, wallTop) {
+  const top = 0.23, bottom = wallTop - height;
+  if (bottom >= top) return "";
   const { x, y } = wallVector(item.angle);
-  const facePoint = (side, up, inset = 0.025) => project([item.x + x * inset - y * side, item.y + y * inset + x * side], height + up);
-  const plate = [[-0.15, -0.15], [0.15, -0.15], [0.15, 0.15], [-0.15, 0.15]].map((point3) => facePoint(...point3));
-  const [cx, cy] = facePoint(0, 0);
-  const supportTop = 0.23;
-  const supportBottom = cutawayHeight - height;
-  const support = supportBottom < supportTop ? spacePolygon("polygon", [[-0.32, supportBottom], [0.32, supportBottom], [0.32, supportTop], [-0.32, supportTop]].map(([side, z]) => facePoint(side, z, 0)), 'class="fp-wall-mount-support" fill="#bdb9ac"') : "";
-  return support + spacePolygon("polygon", plate, 'class="fp-space-puck wall"') + `<ellipse cx="${cx}" cy="${cy}" rx=".035" ry=".045" fill="#6d8496"/>`;
+  return spacePolygon("polygon", [[-0.32, bottom], [0.32, bottom], [0.32, top], [-0.32, top]].map(([side, up]) => project([item.x - y * side, item.y + x * side], height + up)), 'class="fp-wall-mount-support" fill="#bdb9ac"');
 }
 function paintSpace(plan2, camera3, selected2, {
   sensorHeight = sensorMountHeight,
@@ -2195,6 +2432,7 @@ function paintSpace(plan2, camera3, selected2, {
   const selectedRoom = plan2.rooms.find((room) => room.id === selected2);
   const floorOverlay = coverage2?.floorOverlay ?? (decorations ? '<g id="fp-wall-coverage-space" pointer-events="none"></g>' : "");
   const direction2 = towardCamera(camera3);
+  const light = daylightFor(daylight2);
   const model = paintMaquette(
     plan2,
     project,
@@ -2238,12 +2476,19 @@ function paintSpace(plan2, camera3, selected2, {
     const height2 = sensorHeight(item, room);
     const [, top2] = project(position, height2);
     const badgeX = height2 ? x + 0.48 : x;
-    const facing = showWallMount && item.model === "wallsense" ? wallVector(item.angle) : null;
-    const wallTop = facing && room ? cutawayWallHeight(room, projectSpace([facing.x, facing.y], 0, { ...camera3, tilt: baseTilt })[1]) : Infinity;
     if (height2) include([badgeX, top2]);
+    const device = mount === "wall" && height2 ? paintDevice(item, height2, { project, towardCamera: direction2, sun: light.sun, dim: light.dim, furniture: plan2.furniture ?? [], fine: !draft }) : "";
+    const standsFree = device && installationFor(item) === "freestanding";
+    const facing = showWallMount && item.model === "wallsense" && room ? wallVector(item.angle) : null;
+    const support = facing ? paintWallSupport(
+      item,
+      height2,
+      project,
+      cutawayWallHeight(room, projectSpace([facing.x, facing.y], 0, { ...camera3, tilt: baseTilt })[1])
+    ) : "";
     return `<g class="fp-space-marker ${mount}${item.id === selected2 ? " selected" : ""}" data-item="${item.id}" ${interactiveSensors ? sensorMarkerAttributes(item, index) : ""}>
-            ${height2 ? `${facing ? "" : `<line x1="${x}" x2="${x}" y1="${y}" y2="${top2}"/><ellipse class="fp-space-anchor" cx="${x}" cy="${y}" rx=".13" ry=".075"/>`}
-                ${mount === "ceiling" ? paintCeilingSensor(item, room, height2, project, direction2) : item.model === "wallsense" ? paintWallSense(item, height2, project, wallTop) : `<rect class="fp-space-puck wall" x="${x - 0.18}" y="${top2 - 0.12}" width=".36" height=".24" rx=".045"/>`}` : ""}
+            ${height2 ? `${standsFree || facing ? "" : `<line x1="${x}" x2="${x}" y1="${y}" y2="${top2}"/><ellipse class="fp-space-anchor" cx="${x}" cy="${y}" rx=".13" ry=".075"/>`}
+                ${mount === "ceiling" ? paintCeilingSensor(item, room, height2, project, direction2) : support + device}` : ""}
             <circle cx="${badgeX}" cy="${top2}" r=".29"/><text x="${badgeX}" y="${top2}">${String(index + 1).padStart(2, "0")}</text>
             ${interactiveSensors ? `<circle class="fp-sensor-focus" cx="${badgeX}" cy="${top2}" r=".37"/>` : ""}
         </g>`;
@@ -2343,6 +2588,8 @@ var init_floor_planner_space = __esm({
   "src/js/floor-planner-space.mjs"() {
     init_floor_planner_ceiling();
     init_floor_planner_drawing();
+    init_floor_planner_daylight();
+    init_floor_planner_device_mesh();
     init_floor_planner_model();
     init_floor_planner_geometry();
     init_floor_planner_maquette();
@@ -2518,14 +2765,14 @@ function snapRoomOffset(room, rooms, dx, dy, tolerance = 0.14) {
   };
   const movingEdges = edges(room);
   const adjustment = [null, null];
-  for (const fixed2 of rooms.filter((other) => other.id !== room.id).flatMap(edges)) {
-    const offset2 = fixed2.axis === 0 ? dx : dy;
-    const along = fixed2.axis === 0 ? dy : dx;
+  for (const fixed3 of rooms.filter((other) => other.id !== room.id).flatMap(edges)) {
+    const offset2 = fixed3.axis === 0 ? dx : dy;
+    const along = fixed3.axis === 0 ? dy : dx;
     for (const moving of movingEdges) {
-      if (moving.axis !== fixed2.axis || moving.end + along < fixed2.start - tolerance || moving.start + along > fixed2.end + tolerance) continue;
-      const gap = fixed2.position - moving.position - offset2;
-      if (Math.abs(gap) <= tolerance && (adjustment[fixed2.axis] === null || Math.abs(gap) < Math.abs(adjustment[fixed2.axis]))) {
-        adjustment[fixed2.axis] = gap;
+      if (moving.axis !== fixed3.axis || moving.end + along < fixed3.start - tolerance || moving.start + along > fixed3.end + tolerance) continue;
+      const gap = fixed3.position - moving.position - offset2;
+      if (Math.abs(gap) <= tolerance && (adjustment[fixed3.axis] === null || Math.abs(gap) < Math.abs(adjustment[fixed3.axis]))) {
+        adjustment[fixed3.axis] = gap;
       }
     }
   }
@@ -2576,6 +2823,14 @@ function coneOutline(foot, apex) {
   const sameWay = (points) => turning(points) < 0 ? [...points].reverse() : points;
   return [foot, ...foot.map((point3, index) => [apex, point3, foot[(index + 1) % foot.length]])].filter((points) => Math.abs(turning(points)) > 1e-6).map((points) => path(sameWay(points))).join("");
 }
+function cutPolygon(points, keep) {
+  return points.flatMap((point3, index) => {
+    const next = points[(index + 1) % points.length];
+    const a = keep(point3), b = keep(next);
+    const crossing2 = a < 0 !== b < 0 ? [[point3[0] + (next[0] - point3[0]) * a / (a - b), point3[1] + (next[1] - point3[1]) * a / (a - b)]] : [];
+    return a >= 0 ? [point3, ...crossing2] : crossing2;
+  });
+}
 function paintWallFan({ room, item, fields, sight = null }, camera3, height, plane, floorId = "") {
   const clip = `fp-wall-${plane}-${floorId ? floorId + "_" : ""}${item.id}`;
   const points = sight ? sightPolygon(sight, radarOrigin(item), { height: sensorMountHeight(item, room) }).map((point3) => point3.map((value) => Number(value.toFixed(3)))) : room.outline ? roomVisibility(room, radarOrigin(item)) : roomCorners(room);
@@ -2584,10 +2839,33 @@ function paintWallFan({ room, item, fields, sight = null }, camera3, height, pla
     ...projectSpace([0, 1], 0, camera3, false),
     ...projectSpace([0, 0], height, camera3, false)
   ];
+  const tilt = (item.tilt ?? 0) * Math.PI / 180;
+  if (plane === "height" && tilt) {
+    const turn = item.angle * Math.PI / 180;
+    const [ax, ay, bx, by] = matrix2;
+    const [, rise] = projectSpace([0, 0], 1, camera3, false);
+    const flat = (x, y) => [ax * x + bx * y, ay * x + by * y];
+    const side = flat(Math.cos(turn), Math.sin(turn));
+    const ahead = flat(-Math.sin(turn) * Math.cos(tilt), Math.cos(turn) * Math.cos(tilt));
+    const start3 = flat(item.x, item.y);
+    const laid = [...side, ahead[0], ahead[1] + rise * Math.sin(tilt), start3[0], start3[1] + rise * height];
+    const reach2 = Math.max(0, tilt > 0 ? height : room.height - height) / Math.sin(Math.abs(tilt));
+    const local = cutPolygon(points.map(([x, y]) => {
+      const dx = x - item.x, dy = y - item.y;
+      return [dx * Math.cos(turn) + dy * Math.sin(turn), (-dx * Math.sin(turn) + dy * Math.cos(turn)) / Math.cos(tilt)];
+    }), ([, ahead2]) => ahead2 + reach2).map((point3) => point3.map((value) => Number(value.toFixed(3))));
+    return `<g class="fp-wall-fan" data-plane="${plane}" data-sensor="${item.id}" data-tilted transform="matrix(${laid.map((value) => Number(value.toFixed(4))).join(" ")})">
+            <defs><clipPath id="${clip}"><polygon points="${local.map((point3) => point3.join(",")).join(" ")}"/></clipPath></defs>
+            <g clip-path="url(#${clip})">
+                ${fields.map((field2) => `<path class="fp-wall-sector" data-radar="${field2.radar}" data-secondary="${Boolean(field2.secondary)}" d="${beamSector(field2)}"/>`).join("")}
+            </g>
+        </g>`;
+  }
+  const shape = plane === "height" ? beamSector : wallSector;
   return `<g class="fp-wall-fan" data-plane="${plane}" data-sensor="${item.id}" transform="matrix(${matrix2.join(" ")})">
         <defs><clipPath id="${clip}"><polygon points="${points.map((point3) => point3.join(",")).join(" ")}"/></clipPath></defs>
         <g clip-path="url(#${clip})"><g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">
-            ${fields.map((field2) => `<path class="fp-wall-sector" data-radar="${field2.radar}" data-secondary="${Boolean(field2.secondary)}" d="${wallSector(field2)}"/>`).join("")}
+            ${fields.map((field2) => `<path class="fp-wall-sector" data-radar="${field2.radar}" data-secondary="${Boolean(field2.secondary)}" d="${shape(field2)}"/>`).join("")}
         </g></g>
     </g>`;
 }
@@ -2653,6 +2931,143 @@ var init_floor_planner_beam = __esm({
       const [nextX, nextY] = points[(index + 1) % points.length];
       return sum + x * nextY - nextX * y;
     }, 0);
+  }
+});
+
+// src/js/floor-planner-aim.mjs
+function wallAhead(room, item) {
+  if (!room) return Infinity;
+  const { x, y } = wallVector(item.angle);
+  const [endX, endY] = roomRayEnd(room, item, { x: item.x + x * 80, y: item.y + y * 80 });
+  const distance4 = Math.hypot(endX - item.x, endY - item.y);
+  return distance4 > 0.01 ? distance4 : Infinity;
+}
+function directionTo(item, point3, step2 = turnStep) {
+  return wrapDegrees(snapped(Math.atan2(point3.x - item.x, item.y - point3.y) / degree3, step2));
+}
+function turnTo(item, point3, limit, step2 = turnStep) {
+  const straight = item.angle - (item.pan ?? 0);
+  return clamped(snapped(signedDegrees(directionTo(item, point3, 0) - straight), step2), -limit, limit);
+}
+function tiltTo(mount, { ahead, height }, step2 = turnStep) {
+  return clamped(snapped(Math.atan2(mount - height, Math.max(ahead, 0.05)) / degree3, step2), sensorTilt.min, sensorTilt.max);
+}
+function heightTo(height, ceiling = 6) {
+  return fixed(clamped(snapped(height, heightStep), 0.15, Math.min(6, ceiling - 0.1)));
+}
+function glyph(model) {
+  const housing = deviceHousing(model) ?? deviceHousing("ultimatesensor-v2");
+  return { width: housing.width * deviceScale, height: housing.height * deviceScale, depth: housing.depth * deviceScale, lens: housing.front === "dome" };
+}
+function aimTopView({ room, item, fields }) {
+  const corners = room ? roomCorners(room) : [[item.x - 3, item.y - 3], [item.x + 3, item.y - 3], [item.x + 3, item.y + 3], [item.x - 3, item.y + 3]];
+  const xs = corners.map(([x]) => x), ys = corners.map(([, y]) => y);
+  const left = Math.min(...xs), top = Math.min(...ys);
+  const width = Math.max(...xs) - left, depth = Math.max(...ys) - top;
+  const edge = Math.max(width, depth) * 0.07 + 0.3;
+  const span = Math.max(width, depth);
+  const scale3 = clamped(span / 2.7, 1.5, 5);
+  const { width: side, depth: deep, lens } = glyph(item.model);
+  const reach2 = clamped(span * 0.3, 1, 3.5);
+  const outline = corners.map((corner) => corner.map(fixed).join(",")).join(" ");
+  return {
+    viewBox: [left - edge, top - edge, width + 2 * edge, depth + 2 * edge].map(fixed).join(" "),
+    markup: `<defs><clipPath id="fp-aim-top-room"><polygon points="${outline}"/></clipPath></defs>
+            ${room ? `<polygon class="fp-aim-room" points="${outline}"/>` : ""}
+            <g clip-path="url(#fp-aim-top-room)"><g transform="translate(${fixed(item.x)} ${fixed(item.y)}) rotate(${fixed(item.angle)})">
+                ${fields.map((field2) => `<path ${drawnField(field2)} d="${wallSector(field2)}"/>`).join("")}
+            </g></g>
+            <g transform="translate(${fixed(item.x)} ${fixed(item.y)}) rotate(${fixed(item.angle)})">
+                <path class="fp-aim-line" d="M0 0V${fixed(-reach2)}"/>
+                <g transform="scale(${fixed(scale3)})">
+                    <rect class="fp-aim-device" x="${fixed(-side / 2)}" y="${fixed(-deep / 2)}" width="${fixed(side)}" height="${fixed(deep)}" rx="${fixed(deep * 0.24)}"/>
+                    ${lens ? `<path class="fp-aim-device-lens" d="M${fixed(-side * 0.23)} ${fixed(-deep / 2)}a${fixed(side * 0.2)} ${fixed(side * 0.17)} 0 0 1 ${fixed(side * 0.4)} 0z"/>` : `<path class="fp-aim-device-light" d="M${fixed(-side * 0.3)} ${fixed(-deep / 2)}H${fixed(side * 0.3)}"/>`}
+                </g>
+                <circle class="fp-aim-handle" cy="${fixed(-reach2)}" r="${fixed(span * 0.028)}"/>
+            </g>`,
+    handle: { x: item.x + wallVector(item.angle).x * reach2, y: item.y + wallVector(item.angle).y * reach2 }
+  };
+}
+function aimSideView({ room, item, fields, onWall }) {
+  const mount = item.mountHeight ?? wallMountHeight, tilt = item.tilt ?? 0;
+  const ceiling = Math.max(room?.height ?? 2.6, mount + 0.25);
+  const wall = wallAhead(room, item);
+  const primary = fields.find((field2) => !field2.secondary) ?? fields[0] ?? null;
+  const end2 = Math.min(wall, Math.max(4.5, ...fields.map((field2) => field2.range)));
+  const { height: tall3, depth: deep, lens } = glyph(item.model);
+  const back = -(deep / 2 + 0.12);
+  const open = primary ? wallReach(primary) : null;
+  const reach2 = open && open.from < wall ? { from: open.from, to: Math.min(open.to, wall) } : null;
+  const person = Math.max(0.6, Math.min(2.5, end2 - 0.45));
+  const seen = Boolean(primary) && person <= wall && fieldCoversPoint(primary, { x: 0, y: 0, angle: 0 }, { x: 0, y: -person }, "standing", 1.35);
+  const beam = (field2) => {
+    const low = -tilt - field2.pitch, high = -tilt + field2.pitch;
+    const arc = Array.from({ length: 13 }, (_, index) => (low + (high - low) * index / 12) * degree3).map((angle2) => `${fixed(Math.cos(angle2) * field2.range)} ${fixed(-mount - Math.sin(angle2) * field2.range)}`);
+    return `<path ${drawnField(field2)} d="M0 ${fixed(-mount)}L${arc.join("L")}Z"/>`;
+  };
+  const aim = -tilt * degree3;
+  const handle = { ahead: Math.cos(aim) * handleReach, height: mount + Math.sin(aim) * handleReach };
+  const left = back - 0.5, right = end2 + 0.4, top = -(ceiling + 0.3), bottom = 0.32;
+  return {
+    viewBox: [left, top, right - left, bottom - top].map(fixed).join(" "),
+    reach: reach2,
+    seen,
+    frame: ({ x, y }) => ({ ahead: x, height: -y }),
+    markup: `<defs><clipPath id="fp-aim-side-room"><rect x="0" y="${fixed(-ceiling)}" width="${fixed(end2)}" height="${fixed(ceiling)}"/></clipPath></defs>
+            <path class="fp-aim-ceiling" d="M${fixed(onWall ? back : left)} ${fixed(-ceiling)}H${fixed(end2)}"/>
+            ${onWall ? `<rect class="fp-aim-wall" x="${fixed(back - 0.16)}" y="${fixed(-ceiling)}" width=".16" height="${fixed(ceiling)}"/>
+                <path class="fp-aim-arm" d="M${fixed(back)} ${fixed(-mount)}H0"/>` : mount - tall3 / 2 > 0.08 ? `<rect class="fp-aim-cabinet" x="-.42" y="${fixed(-(mount - tall3 / 2))}" width=".84" height="${fixed(mount - tall3 / 2)}" rx=".03"/>` : ""}
+            ${Number.isFinite(wall) && wall <= end2 + 1e-6 ? `<rect class="fp-aim-wall" x="${fixed(end2)}" y="${fixed(-ceiling)}" width=".16" height="${fixed(ceiling)}"/>` : ""}
+            <g clip-path="url(#fp-aim-side-room)">${[...fields].sort((a, b) => Boolean(b.secondary) - Boolean(a.secondary)).map(beam).join("")}</g>
+            <path class="fp-aim-floor" d="M${fixed(left)} 0H${fixed(right)}"/>
+            ${reach2 ? `<path class="fp-aim-reach" d="M${fixed(reach2.from)} 0H${fixed(reach2.to)}"/>` : ""}
+            <g class="fp-aim-person" ${seen ? "data-seen" : ""} transform="translate(${fixed(person)} 0)">
+                <circle cy="${fixed(-personHeight + 0.13)}" r=".13"/>
+                <path d="M-.2 ${fixed(-personHeight + 0.34)}q0 -.05 .05 -.05h.3q.05 0 .05 .05v.62q0 .04 -.06 .04v.7q0 .05 -.05 .05h-.18q-.05 0 -.05 -.05v-.7q-.06 0 -.06 -.04z"/>
+            </g>
+            <path class="fp-aim-line" d="M0 ${fixed(-mount)}L${fixed(handle.ahead)} ${fixed(-handle.height)}"/>
+            <g transform="translate(0 ${fixed(-mount)}) rotate(${fixed(tilt)})">
+                <rect class="fp-aim-device" x="${fixed(-deep / 2)}" y="${fixed(-tall3 / 2)}" width="${fixed(deep)}" height="${fixed(tall3)}" rx="${fixed(deep * 0.24)}"/>
+                <path class="fp-aim-device-light" d="M${fixed(deep / 2)} ${fixed(tall3 * 0.2)}V${fixed(tall3 * 0.34)}"/>
+                ${lens ? `<path class="fp-aim-device-lens" d="M${fixed(deep / 2)} ${fixed(-tall3 * 0.42)}a${fixed(tall3 * 0.075)} ${fixed(tall3 * 0.1)} 0 0 1 0 ${fixed(tall3 * 0.2)}z"/>` : ""}
+            </g>
+            <circle class="fp-aim-handle" cx="${fixed(handle.ahead)}" cy="${fixed(-handle.height)}" r=".13"/>`
+  };
+}
+function turnText(copy2, value, onBracket) {
+  if (!onBracket) return `${Math.round(wrapDegrees(value))}°`;
+  return value ? fill(value < 0 ? copy2.aim_left : copy2.aim_right, { value: String(Math.abs(Math.round(value))) }) : copy2.aim_straight;
+}
+function tiltText(copy2, value) {
+  return value ? fill(value < 0 ? copy2.aim_up : copy2.aim_down, { value: String(Math.abs(Math.round(value))) }) : copy2.aim_level;
+}
+function motionReach(room, item, field2) {
+  const reach2 = field2 && wallReach(field2);
+  return reach2 ? Math.min(reach2.to, wallAhead(room, item)) : null;
+}
+function reachText(copy2, reach2, number3 = String) {
+  return reach2 ? fill(copy2.aim_reach, { from: number3(reach2.from), to: number3(reach2.to) }) : copy2.aim_reach_none;
+}
+var degree3, fixed, turnStep, heightStep, handleReach, personHeight, snapped, clamped, wrapDegrees, signedDegrees, onDevice, drawnField, fill;
+var init_floor_planner_aim = __esm({
+  "src/js/floor-planner-aim.mjs"() {
+    init_floor_planner_device_mesh();
+    init_floor_planner_geometry();
+    init_floor_planner_model();
+    init_floor_planner_radar();
+    degree3 = Math.PI / 180;
+    fixed = (value) => Number(value.toFixed(3));
+    turnStep = 5;
+    heightStep = 0.05;
+    handleReach = 1.3;
+    personHeight = 1.75;
+    snapped = (value, step2) => step2 ? Math.round(value / step2) * step2 : value;
+    clamped = (value, low, high) => Math.max(low, Math.min(high, value));
+    wrapDegrees = (value) => (value % 360 + 360) % 360;
+    signedDegrees = (value) => wrapDegrees(value + 180) - 180;
+    onDevice = (mount, { ahead, height }) => Math.hypot(ahead, height - mount) < 0.34;
+    drawnField = (field2) => `class="fp-aim-field" data-radar="${field2.radar}" data-secondary="${Boolean(field2.secondary)}"`;
+    fill = (text, values) => Object.entries(values).reduce((line, [key, value]) => line.replaceAll(`:${key}`, value), text ?? "");
   }
 });
 
@@ -2738,7 +3153,7 @@ var init_floor_planner_obstruction = __esm({
 // src/js/floor-planner-avatar.mjs
 function crossSection(center, axis, width, depth, ring2) {
   const reference = Math.abs(axis[1]) < 0.93 ? [0, 1, 0] : [0, 0, 1];
-  const side = unit(subtract(reference, scale2(axis, dot2(reference, axis))));
+  const side = unit(subtract(reference, scale2(axis, dot3(reference, axis))));
   const front = cross2(axis, side);
   return ring2.map(([u, v]) => add(center, add(scale2(side, u * width), scale2(front, v * depth))));
 }
@@ -2930,7 +3345,7 @@ function skullAt(height) {
 }
 function buildHead(pose, model, addFace, detailed) {
   const up = unit(subtract(pose.crown, pose.chin));
-  const forward = unit(subtract(pose.face, scale2(up, dot2(up, pose.face))));
+  const forward = unit(subtract(pose.face, scale2(up, dot3(up, pose.face))));
   const side = cross2(up, forward);
   const headPoint = (height, lateral, depth) => add(
     mix2(pose.crown, pose.chin, (1 - height) * (model.headHeight ?? 1)),
@@ -2976,7 +3391,7 @@ function buildHead(pose, model, addFace, detailed) {
   const patch = (outline, tone) => {
     const vertices = outline.map(([lateral, height, lift = 3e-3]) => face(lateral, height, lift));
     const normal = cross2(subtract(vertices[1], vertices[0]), subtract(vertices[2], vertices[0]));
-    addFace(dot2(normal, forward) < 0 ? vertices.reverse() : vertices, tone);
+    addFace(dot3(normal, forward) < 0 ? vertices.reverse() : vertices, tone);
   };
   const tip = [0, 0.44, 0.032];
   patch([[0, 0.648, 4e-3], [-0.018, 0.458, 9e-3], tip], "skin");
@@ -3058,7 +3473,7 @@ function buildBody(pose, addFace, model, detailed) {
   buildHead(pose, model, addFace, detailed);
   if (detailed && model.hair !== "long") {
     const chest = unit(subtract(pose.shoulders, pose.hips));
-    const forward = unit(subtract(pose.face, scale2(chest, dot2(chest, pose.face))));
+    const forward = unit(subtract(pose.face, scale2(chest, dot3(chest, pose.face))));
     const lateral = cross2(chest, forward);
     const seam = (height, width, depth) => add(
       mix2(pose.hips, pose.shoulders, height),
@@ -3162,28 +3577,28 @@ function paintAvatar(person, camera3, animate, detailed = true, occlusion = null
     }
     return projected.get(vertex);
   };
-  const intensity = (normal) => 0.79 + Math.max(0, dot2(normal, light)) * 0.25 + 0.05 * Math.max(0, dot2(normal, view2));
-  const polygon2 = (vertices, fill2) => `<polygon points="${vertices.map((vertex) => point3(vertex).xy).join(" ")}" fill="${fill2}" stroke="${fill2}"/>`;
+  const intensity = (normal) => 0.79 + Math.max(0, dot3(normal, light)) * 0.25 + 0.05 * Math.max(0, dot3(normal, view2));
+  const polygon2 = (vertices, fill3) => `<polygon points="${vertices.map((vertex) => point3(vertex).xy).join(" ")}" fill="${fill3}" stroke="${fill3}"/>`;
   const addFace = (vertices, tone, normals) => {
     const normal = unit(cross2(subtract(vertices[1], vertices[0]), subtract(vertices[2], vertices[0])));
-    if (!(dot2(normal, view2) > 1e-3)) return;
+    if (!(dot3(normal, view2) > 1e-3)) return;
     const points = vertices.map(point3);
     const levels = normals?.map(intensity) ?? [intensity(normal)];
-    let fill2 = color(palette[tone], levels.reduce((sum, value) => sum + value, 0) / levels.length);
+    let fill3 = color(palette[tone], levels.reduce((sum, value) => sum + value, 0) / levels.length);
     if (detailed && levels.length > 1) {
       const lo = Math.min(...levels), hi = Math.max(...levels);
       const a = points[levels.indexOf(lo)], b = points[levels.indexOf(hi)];
       if (hi - lo >= 0.029 && Math.hypot(b.x - a.x, b.y - a.y) >= 0.016) {
         const id = prefix + gradients.length;
         gradients.push(`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"><stop stop-color="${color(palette[tone], lo)}"/><stop offset="1" stop-color="${color(palette[tone], hi)}"/></linearGradient>`);
-        fill2 = `url(#${id})`;
+        fill3 = `url(#${id})`;
       }
     }
     const [below, above] = occlusion ? splitVerticesAtHeight(vertices, floorHeight) : [[], vertices];
     faces.push({
-      depth: vertices.reduce((sum, vertex) => sum + dot2(vertex, view2), 0) / vertices.length,
-      below: below.length ? polygon2(below, fill2) : "",
-      above: above.length ? polygon2(above, fill2) : ""
+      depth: vertices.reduce((sum, vertex) => sum + dot3(vertex, view2), 0) / vertices.length,
+      below: below.length ? polygon2(below, fill3) : "",
+      above: above.length ? polygon2(above, fill3) : ""
     });
   };
   const phase = person.moving && animate ? (person.stride ?? 0) / 1.04 : null;
@@ -3221,7 +3636,7 @@ function paintPlumbob([x, y], status) {
         <polygon class="fp-plumbob-shade" points="${top} ${x + half},${y} ${bottom}"/>
         <path class="fp-plumbob-edge" d="M${x - half} ${y}H${x + half}"/></g></g>`;
 }
-var tones, womanTones, childTones, figures, mix2, add, subtract, scale2, dot2, cross2, unit, angles, limbRing, bodyRing, headRing, sitting, lying, offBalance, mirror, fallen, skull, color;
+var tones, womanTones, childTones, figures, mix2, add, subtract, scale2, dot3, cross2, unit, angles, limbRing, bodyRing, headRing, sitting, lying, offBalance, mirror, fallen, skull, color;
 var init_floor_planner_avatar = __esm({
   "src/js/floor-planner-avatar.mjs"() {
     init_floor_planner_space();
@@ -3287,7 +3702,7 @@ var init_floor_planner_avatar = __esm({
     add = ([x, y, z], [a, b, c]) => [x + a, y + b, z + c];
     subtract = ([x, y, z], [a, b, c]) => [x - a, y - b, z - c];
     scale2 = ([x, y, z], amount) => [x * amount, y * amount, z * amount];
-    dot2 = ([x, y, z], [a, b, c]) => x * a + y * b + z * c;
+    dot3 = ([x, y, z], [a, b, c]) => x * a + y * b + z * c;
     cross2 = ([x, y, z], [a, b, c]) => [y * c - z * b, z * a - x * c, x * b - y * a];
     unit = (vector) => scale2(vector, 1 / (Math.hypot(...vector) || 1));
     angles = (count) => Array.from({ length: count }, (_, index) => {
@@ -3398,19 +3813,23 @@ function preparePersonSensors(plan2) {
   return plan2.sensors.map((item, index) => {
     const room = roomForDevice(plan2.rooms, item);
     const exclusions = (plan2.zones ?? []).filter((zone) => zone.type === "exclusion" && zone.roomId === room?.id && (!zone.sensorId || zone.sensorId === item.id));
-    return { item, index, room, fields: radarFields(room, item), exclusions };
+    return { item, index, room, fields: radarFields(room, item), motion: room ? motionField(item) : null, exclusions };
   });
 }
 function personSignals(plan2, person, sensors = preparePersonSensors(plan2), furniture = prepareFurnitureOcclusion(plan2.furniture ?? []), sight = prepareSight(plan2)) {
   const room = plan2.rooms.find((room2) => contains(room2, person));
   const height = personTargetHeight(person);
   const profile2 = radarProfileFor(person);
-  return sensors.map(({ item, index, room: sensorRoom, fields, exclusions = [] }) => {
+  return sensors.map(({ item, index, room: sensorRoom, fields, motion = null, exclusions = [] }) => {
     const mount = sensorMountHeight(item, sensorRoom);
-    const reached = room && sensorRoom ? fields.filter((field2) => fieldCoversPoint(field2, item, person, profile2)) : [];
-    const hidden = reached.length > 0 && sightBlocked(sight, { ...radarOrigin(item), z: mount }, { x: person.x, y: person.y, z: height });
+    const reached = room && sensorRoom ? fields.filter((field2) => fieldCoversPoint(field2, item, person, profile2, height)) : [];
+    const blocked = () => sightBlocked(sight, { ...radarOrigin(item), z: mount }, { x: person.x, y: person.y, z: height });
+    const hidden = reached.length > 0 && blocked();
     const possible = hidden ? [] : reached;
     const obstacle = possible.length ? furnitureOcclusion({ ...item, z: mount }, person, height, furniture) : null;
+    const lensed = Boolean(motion && room && sensorRoom) && fieldCoversPoint(motion, item, person, profile2, height);
+    const inView = lensed && !(reached.length ? hidden : blocked()) && !(possible.length ? obstacle : furnitureOcclusion({ ...item, z: mount }, person, height, furniture));
+    const pir = motion ? { ...motion, seen: inView && Boolean(person.moving), still: inView && !person.moving } : null;
     const exclusion = possible.some((field2) => field2.mode !== "presence") && exclusions.find((zone) => zone.parts.some((part) => pointInOutline(part, person)));
     const signals = fields.map((field2) => {
       const inRange = possible.includes(field2);
@@ -3424,7 +3843,7 @@ function personSignals(plan2, person, sensors = preparePersonSensors(plan2), fur
         height: seen && field2.mode === "xyz" ? height : null
       };
     });
-    return { item, index, room: sensorRoom, signals, obstacle, mount, walled: hidden, seen: signals.some((signal) => signal.seen) };
+    return { item, index, room: sensorRoom, signals, motion: pir, obstacle, mount, walled: hidden, seen: signals.some((signal) => signal.seen) };
   });
 }
 function recordWalk(route, from, to, before, after) {
@@ -4199,7 +4618,7 @@ function draftFromRecognition(recognition2, underlay, { roomName = "Room", heigh
     rooms.push({ ...shape, id: newId(), name, height });
   }
   if (!rooms.length) return null;
-  const reach2 = wallReach * image.width;
+  const reach2 = wallReach2 * image.width;
   const openings = (list2, minimum, maximum, extra) => (Array.isArray(list2) ? list2 : []).slice(0, recognitionLimits.openings).flatMap((item) => {
     if (!imagePoint(item?.from) || !imagePoint(item?.to)) return [];
     const from = onPlan(across(item.from), down(item.from)), to = onPlan(across(item.to), down(item.to));
@@ -4246,10 +4665,10 @@ function planWithDraft(plan2, draft) {
   const bare = { ...base, version: outlined };
   return validPlan(bare) ? bare : null;
 }
-function recognitionNote(copy2, { rooms, quota }, number2 = String) {
-  const lines = [fill(copy2.recognise_done, { count: number2(rooms) })];
+function recognitionNote(copy2, { rooms, quota }, number3 = String) {
+  const lines = [fill2(copy2.recognise_done, { count: number3(rooms) })];
   if (Number.isFinite(quota?.used) && Number.isFinite(quota?.limit)) {
-    lines.push(fill(copy2.recognise_quota, { used: number2(quota.used), limit: number2(quota.limit) }));
+    lines.push(fill2(copy2.recognise_quota, { used: number3(quota.used), limit: number3(quota.limit) }));
   }
   return lines.filter(Boolean).join(" ");
 }
@@ -4262,7 +4681,7 @@ function recognitionProblem(copy2, error, locale) {
   if (code === "cancelled") return "";
   if (code === "quota_exceeded") {
     const date = new Date(error.quota?.resets_at ?? NaN);
-    return fill(copy2.recognise_error_quota, {
+    return fill2(copy2.recognise_error_quota, {
       limit: Number.isFinite(error.quota?.limit) ? String(error.quota.limit) : "",
       date: Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(locale, { day: "numeric", month: "long" })
     }).replace(/\s+/g, " ").trim();
@@ -4276,7 +4695,7 @@ function recognitionProblem(copy2, error, locale) {
     popup_blocked: "recognise_error_popup"
   }[code] ?? "recognise_error_failed"] ?? "";
 }
-var recognitionLimits, lineSnap, wallReach, unit2, imagePoint, millimetres, degrees, isRectangle, most, fill, usualPace, recognitionProgress, recognitionWaiting;
+var recognitionLimits, lineSnap, wallReach2, unit2, imagePoint, millimetres, degrees, isRectangle, most, fill2, usualPace, recognitionProgress, recognitionWaiting;
 var init_floor_planner_recognise = __esm({
   "src/js/floor-planner-recognise.mjs"() {
     init_floor_planner_geometry();
@@ -4284,17 +4703,17 @@ var init_floor_planner_recognise = __esm({
     init_floor_planner_underlay();
     recognitionLimits = { rooms: 40, corners: 24, openings: 80 };
     lineSnap = 0.012;
-    wallReach = 0.03;
+    wallReach2 = 0.03;
     unit2 = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
     imagePoint = (value) => Array.isArray(value) && value.length === 2 && unit2(value[0]) && unit2(value[1]);
     millimetres = (value) => Math.round(value * 1e3) / 1e3;
     degrees = (value) => (Math.round(value * 100) / 100 % 360 + 360) % 360;
     isRectangle = ({ width, depth, outline }) => outline.length === 4 && outline.every(([x, y]) => (Math.abs(x) < 1e-6 || Math.abs(x - width) < 1e-6) && (Math.abs(y) < 1e-6 || Math.abs(y - depth) < 1e-6));
     most = 80;
-    fill = (text, values) => Object.entries(values).reduce((line, [key, value]) => line.replaceAll(`:${key}`, value), text ?? "");
+    fill2 = (text, values) => Object.entries(values).reduce((line, [key, value]) => line.replaceAll(`:${key}`, value), text ?? "");
     usualPace = 11e3;
     recognitionProgress = (elapsed) => Math.min(97, Math.round(100 * (1 - Math.exp(-Math.max(0, Number(elapsed) || 0) / usualPace))));
-    recognitionWaiting = (copy2, rooms, number2 = String) => fill(copy2.recognise_needs_scale, { count: number2(rooms) });
+    recognitionWaiting = (copy2, rooms, number3 = String) => fill2(copy2.recognise_needs_scale, { count: number3(rooms) });
   }
 });
 
@@ -4368,7 +4787,7 @@ function candidatesFor(plan2, room, settings, family, surfaces2) {
   const planned = positions.flatMap(([px, py, angle2, surfaceHeight]) => (freestanding && surfaces2.length ? [0, 90, 180, 270] : ceiling && settings.goal !== "climate" ? [0, 90] : [angle2 ?? 0]).map((angle3) => {
     const candidate = { x: px, y: py, angle: angle3, model, radar, installation };
     if (ceiling && room.ceiling) candidate.levelMountRoom = room.id;
-    if (!ceiling) candidate.mountHeight = surfaceHeight === void 0 ? settings.wallHeight : fixed(surfaceHeight);
+    if (!ceiling) candidate.mountHeight = surfaceHeight === void 0 ? settings.wallHeight : fixed2(surfaceHeight);
     return candidate;
   }));
   return [...existing, ...planned].filter((item) => {
@@ -4387,7 +4806,7 @@ function cellsFor(room, furniture) {
       pose: "sitting"
     };
     if (room.outline && !contains(room, point3)) continue;
-    const unusable = furniture.some((object) => tall.has(object.kind) && object.parts.some((part) => {
+    const unusable = furniture.some((object) => tall2.has(object.kind) && object.parts.some((part) => {
       const [x, y] = object.local(point3);
       return part.low < 0.55 && part.high > 0.82 && x > part.x && x < part.x + part.w && y > part.y && y < part.y + part.d;
     }));
@@ -4483,7 +4902,7 @@ function adviseRoom(plan2, room, settings = defaultAdvice, obstacles = prepareAd
   }).sort((a, b) => Number(b.upgrade) - Number(a.upgrade) || Number(a.family === "recessed") - Number(b.family === "recessed") || Number(a.needsSurface) - Number(b.needsSurface) || Number(b.reachesGoal) - Number(a.reachesGoal) || (a.reachesGoal ? a.sensors.length - b.sensors.length : 0) || (settings.air || settings.goal === "climate" ? Number(a.needsScd41) - Number(b.needsScd41) : 0) || (b.percent ?? 0) - (a.percent ?? 0));
   return choices.length ? { choices } : { reason: settings.goal === "height" ? "height" : "no_fit", choices };
 }
-var fixed, slots2, minimumGain, tall, flatSurfaces, defaultAdvice, mountHeightLimit, adviceMountHeightLimit;
+var fixed2, slots2, minimumGain, tall2, flatSurfaces, defaultAdvice, mountHeightLimit, adviceMountHeightLimit;
 var init_floor_planner_advice = __esm({
   "src/js/floor-planner-advice.mjs"() {
     init_ceilsense_room_model();
@@ -4492,10 +4911,10 @@ var init_floor_planner_advice = __esm({
     init_floor_planner_geometry();
     init_floor_planner_radar();
     init_floor_planner_obstruction();
-    fixed = (value) => Number(value.toFixed(2));
+    fixed2 = (value) => Number(value.toFixed(2));
     slots2 = [0.2, 0.5, 0.8];
     minimumGain = 0.05;
-    tall = /* @__PURE__ */ new Set(["wardrobe", "cabinet", "shelves", "island", "fridge", "washer", "screen", "glass", "custom"]);
+    tall2 = /* @__PURE__ */ new Set(["wardrobe", "cabinet", "shelves", "island", "fridge", "washer", "screen", "glass", "custom"]);
     flatSurfaces = /* @__PURE__ */ new Set(["desk", "dining", "coffee", "cabinet", "nightstand", "island", "custom"]);
     defaultAdvice = { goal: "presence", mount: "either", air: false, level: false, wallHeight: 1.4 };
     mountHeightLimit = (ceiling) => Math.min(6, Math.floor((ceiling - 0.15) * 100 + 1e-8) / 100);
@@ -4511,7 +4930,7 @@ __export(floor_planner_advice_ui_exports, {
 function openAdvisor(plan2, current, copy2, locale, place) {
   const get = (suffix) => document.getElementById("fp-advisor-" + suffix);
   const dialog = document.getElementById("fp-advisor");
-  const number2 = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 });
+  const number3 = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 });
   const obstacles = prepareAdviceFurniture(plan2);
   const settings = new Map(plan2.rooms.map((room) => [
     room.id,
@@ -4573,18 +4992,18 @@ function openAdvisor(plan2, current, copy2, locale, place) {
     get("results").innerHTML = `${select}<article class="fp-advisor-result">
             <div><p class="fp-advisor-rank">${choice2 === result.choices[0] ? copy2.advisor_recommended : copy2.advisor_alternative}</p>
                 <h4>${title(choice2)}${choice2.sensors[0].model === "wallsense" ? ` <small>${copy2.planning_only}</small>` : ""}</h4>
-                <p>${choice2.upgrade ? copy2.advisor_upgrade_climate : choice2.percent === null ? copy2.advisor_climate : existingSensors.get(active.id).length && settings.get(active.id).strategy !== "replace" ? copy2.advisor_gain.replace(":before", number2.format(choice2.baselinePercent)).replace(":after", number2.format(choice2.percent)) : copy2.advisor_score.replace(":percent", number2.format(choice2.percent))}</p>
+                <p>${choice2.upgrade ? copy2.advisor_upgrade_climate : choice2.percent === null ? copy2.advisor_climate : existingSensors.get(active.id).length && settings.get(active.id).strategy !== "replace" ? copy2.advisor_gain.replace(":before", number3.format(choice2.baselinePercent)).replace(":after", number3.format(choice2.percent)) : copy2.advisor_score.replace(":percent", number3.format(choice2.percent))}</p>
                 <p class="fp-note">${[
       choice2.sensors[0].radar === "none" ? "" : radarNames[choice2.sensors[0].radar],
       choice2.needsScd41 ? copy2.advisor_scd41 : ""
     ].filter(Boolean).join(" · ")}</p>
                 <p class="fp-note">${copy2.installations[choice2.sensors[0].installation] ?? ""}</p>
-                ${choice2.unmodelled ? `<p class="fp-note">${copy2.advisor_unmodelled.replace(":count", number2.format(choice2.unmodelled))}</p>` : ""}
+                ${choice2.unmodelled ? `<p class="fp-note">${copy2.advisor_unmodelled.replace(":count", number3.format(choice2.unmodelled))}</p>` : ""}
                 ${choice2.needsSurface ? `<p class="fp-note">${copy2.advisor_needs_surface}</p>` : ""}
-                ${choice2.estimated && copy2.height_estimate ? `<p class="fp-note">${copy2.height_estimate.replaceAll(":low", number2.format(2)).replaceAll(":high", number2.format(3))}</p>` : ""}
+                ${choice2.estimated && copy2.height_estimate ? `<p class="fp-note">${copy2.height_estimate.replaceAll(":low", number3.format(2)).replaceAll(":high", number3.format(3))}</p>` : ""}
                 ${choice2.reachesGoal ? "" : `<p class="fp-note fp-warning">${copy2.advisor_partial}</p>`}
                 <details class="fp-advisor-positions"><summary>${copy2.advisor_positions}</summary>
-                    <p class="fp-note">${copy2.advisor_origin}<br>${choice2.sensors.map((item, index) => `${index + 1} · X ${number2.format(item.x - active.x)} m / Y ${number2.format(item.y - active.y)} m`).join("<br>")}</p>
+                    <p class="fp-note">${copy2.advisor_origin}<br>${choice2.sensors.map((item, index) => `${index + 1} · X ${number3.format(item.x - active.x)} m / Y ${number3.format(item.y - active.y)} m`).join("<br>")}</p>
                 </details>
             </div>${preview(active, choice2.sensors)}
         </article>`;
@@ -4626,7 +5045,7 @@ function openAdvisor(plan2, current, copy2, locale, place) {
     const valid = validHeight();
     get("place").disabled = !valid;
     if (!valid) get("place-all").disabled = true;
-    get("status").textContent = valid ? "" : copy2.advisor_height_invalid.replace(":max", number2.format(Number(get("wall").max)));
+    get("status").textContent = valid ? "" : copy2.advisor_height_invalid.replace(":max", number3.format(Number(get("wall").max)));
     return valid;
   }
   get("wall").addEventListener("input", checkHeight, options2);
@@ -5016,7 +5435,7 @@ function importRoomGeometry(data, copy2) {
     const walls = array(raw?.walls);
     if (walls.length < 3 || walls.some((wall) => !finite(wall?.x1) || !finite(wall?.y1))) throw new Error("Invalid room contour");
     const placement = raw.house;
-    const placed = placement && finite(placement.x) && finite(placement.y);
+    const placed2 = placement && finite(placement.x) && finite(placement.y);
     const level = Number.isInteger(placement?.floor) ? placement.floor : 0;
     const rotation = finite(placement?.rotationDeg) ? placement.rotationDeg : 0;
     if (!floors.has(level)) floors.set(level, {
@@ -5028,8 +5447,8 @@ function importRoomGeometry(data, copy2) {
     const plan2 = floors.get(level).plan;
     const radians = rotation * Math.PI / 180;
     const xs = walls.map((wall) => wall.x1), ys = walls.map((wall) => wall.y1);
-    const offsetX = placed ? placement.x : (plan2.rooms.length ? Math.max(...plan2.rooms.map((room2) => room2.x + room2.width)) * 1e3 + 750 : 0) - Math.min(...xs);
-    const offsetY = placed ? placement.y : -Math.min(...ys);
+    const offsetX = placed2 ? placement.x : (plan2.rooms.length ? Math.max(...plan2.rooms.map((room2) => room2.x + room2.width)) * 1e3 + 750 : 0) - Math.min(...xs);
+    const offsetY = placed2 ? placement.y : -Math.min(...ys);
     const convert = ({ x, y }) => [
       meters(offsetX + x * Math.cos(radians) - y * Math.sin(radians)),
       meters(offsetY + x * Math.sin(radians) + y * Math.cos(radians))
@@ -5449,7 +5868,7 @@ function addRecognisedRooms(answer, keepScale) {
   setTool("edit");
   finish();
   fit();
-  showRecognition("idle", recognitionNote(copy, { rooms: added, quota: answer.quota }, (value) => number.format(value)));
+  showRecognition("idle", recognitionNote(copy, { rooms: added, quota: answer.quota }, (value) => number2.format(value)));
 }
 function showRecognition(state, message = "") {
   if (!recognition) return;
@@ -5582,7 +6001,7 @@ function toolHint() {
   if (tool === "scale_underlay") return start2 ? copy.underlay_end : copy.underlay_start;
   if (tool === "outline_room") return copy[roomDraft.length ? "room_outline_more" : "room_outline_start"];
   if (tool === "zone") return copy[element("fp-zone-type").value === "entry" ? "zone_entry_hint" : roomDraft.length ? "zone_more" : "zone_start"];
-  if (tool === "edit_outline") return copy[selectedItem().type === "zones" ? "zone_edit_hint" : "room_edit_hint"] + (roomDraft.length ? " " + copy.room_corner_status.replace(":index", number.format(draftCorner + 1)).replace(":total", number.format(roomDraft.length)) : "");
+  if (tool === "edit_outline") return copy[selectedItem().type === "zones" ? "zone_edit_hint" : "room_edit_hint"] + (roomDraft.length ? " " + copy.room_corner_status.replace(":index", number2.format(draftCorner + 1)).replace(":total", number2.format(roomDraft.length)) : "");
   if (tool === "room" || tool === "wall") return copy[`${tool}_${start2 ? "end" : "start"}`];
   if (tool === "edit") return plan.rooms.length ? matchMedia("(any-pointer: fine)").matches ? copy.quick_place_hint : copy.select_hint : copy[roomFormOpen ? "room_form_map_hint" : "empty_hint"];
   return copy[`${tool}_hint`];
@@ -5706,9 +6125,9 @@ function visibleSensors(floorPlan) {
 function planForDrawing(floorPlan) {
   return floorPlan === plan ? planWithOpenDoors(visiblePlan(floorPlan), heldDoors) : visiblePlan(floorPlan);
 }
-function walkSightNow(placed = null) {
-  const people = walkersOnFloor().filter(([name]) => name !== placed?.name).map(([, walker]) => walker.person);
-  if (placed) people.push(placed.person);
+function walkSightNow(placed2 = null) {
+  const people = walkersOnFloor().filter(([name]) => name !== placed2?.name).map(([, walker]) => walker.person);
+  if (placed2) people.push(placed2.person);
   const held = simulation ? doorsHeldOpen(plan, people) : /* @__PURE__ */ new Set();
   const key = [...held].sort().join(" ");
   if (walkSight?.plan !== plan || walkSight.key !== key) {
@@ -5764,19 +6183,19 @@ function renderHaCatalog() {
         <span>${escapeText(picked.showingArea.replace("{area}", area))}</span>
         <button type="button" data-action="toggle_area_filter">${escapeText(catalogAreaOnly ? picked.showAll : picked.showAreaOnly)}</button>
     </div>` : "";
-  element("fp-catalog").innerHTML = areaFilter + [false, true].map((placed) => {
-    const group = matching.filter((device) => placements.has(device.id) === placed);
+  element("fp-catalog").innerHTML = areaFilter + [false, true].map((placed2) => {
+    const group = matching.filter((device) => placements.has(device.id) === placed2);
     if (!group.length) return "";
-    return `<div class="fp-device-group"><p>${placed ? picked.placed : picked.free}</p>${group.map((device) => {
+    return `<div class="fp-device-group"><p>${placed2 ? picked.placed : picked.free}</p>${group.map((device) => {
       const details = [
         device.product !== device.name ? device.product : "",
         !catalogAreaOnly && device.areaId ? homeAssistantAreaName(device.areaId) : "",
-        placed ? placements.get(device.id) : device.online === false ? picked.offline : ""
+        placed2 ? placements.get(device.id) : device.online === false ? picked.offline : ""
       ].filter(Boolean).join(" · ");
-      return `<button type="button" data-ha-device="${escapeText(device.id)}" ${placed ? "disabled" : ""}>
+      return `<button type="button" data-ha-device="${escapeText(device.id)}" ${placed2 ? "disabled" : ""}>
                 <span class="fp-device-icon ${device.mount}">${deviceIcon(device.mount)}</span>
                 <span>${escapeText(device.name)}${details ? `<small>${escapeText(details)}</small>` : ""}</span>
-                <span class="fp-add" aria-hidden="true">${placed ? "✓" : "+"}</span></button>`;
+                <span class="fp-add" aria-hidden="true">${placed2 ? "✓" : "+"}</span></button>`;
     }).join("")}</div>`;
   }).join("");
 }
@@ -5803,7 +6222,7 @@ function renderFurnitureCatalog() {
     const shape = furniturePartsForPreview(kind);
     return `<button type="button" data-furniture="${kind}">
             <svg viewBox="-1.6 -1.2 3.2 2.4" aria-hidden="true">${shape}</svg>
-            <span><strong>${copy.furniture_items[kind]}</strong><small>${[model.width, model.depth, model.height].map((value) => number.format(value)).join(" × ")} m</small></span>
+            <span><strong>${copy.furniture_items[kind]}</strong><small>${[model.width, model.depth, model.height].map((value) => number2.format(value)).join(" × ")} m</small></span>
         </button>`;
   }).join("") || `<p class="fp-note" role="status">${copy.furniture_no_match}</p>`;
 }
@@ -5860,6 +6279,7 @@ function sensorOptions(item) {
   ];
   if (item.model === "ceilsense-pro") rows.push([copy.sensor_smoke_label, copy.sensor_smoke_optical]);
   if (["ceilsense-pro", "ultimatesensor-v2"].includes(item.model)) rows.push([copy.sensor_audio_label, copy.sensor_audio_voice]);
+  if (hasMotionSensor(item.model) && copy.sensor_pir_range) rows.push(["PIR", copy.sensor_pir_range]);
   return `<dl class="fp-sensor-options">${rows.map(([label, value]) => `<div><dt>${escapeText(label)}</dt><dd>${escapeText(value)}</dd></div>`).join("")}</dl>`;
 }
 function sensorEditValues(model, previous) {
@@ -5871,19 +6291,27 @@ function sensorEditValues(model, previous) {
     installation: mounts.includes(previous.installation) ? previous.installation : mounts[0],
     climate: previous.climate ?? false,
     mountHeight: previous.mountHeight ?? 1.4,
-    level: previous.level ?? false
+    level: previous.level ?? false,
+    // The direction of a sensor that stands free, and how far one on a bracket is turned from the wall.
+    angle: previous.angle ?? 0,
+    pan: previous.pan ?? 0,
+    tilt: previous.tilt ?? 0
   };
 }
 function readSensorEdit(model = sensorEditForm.elements.model.value) {
-  const { radar, installation, climate, mountHeight, level } = sensorEditForm.elements;
-  return {
+  const { radar, installation, climate, mountHeight, level, aim, tilt } = sensorEditForm.elements;
+  const values = {
     model,
     radar: integration ? editingSensor.radar : radar.value,
     installation: installation.value,
     climate: climate.checked,
     mountHeight: mountHeight.valueAsNumber,
-    level: level.checked
+    level: level.checked,
+    ...editingSensor.aim
   };
+  if (aim && !aim.disabled && Number.isFinite(aim.valueAsNumber)) values[editingSensor.aimed] = aim.valueAsNumber;
+  if (tilt && !tilt.disabled && Number.isFinite(tilt.valueAsNumber)) values.tilt = tilt.valueAsNumber;
+  return values;
 }
 function updateSensorEditNote(item, values, error = "") {
   const note = element("fp-sensor-edit-placement");
@@ -5904,6 +6332,18 @@ function renderSensorEdit(item, values) {
   const wall = device.mount === "wall";
   const room = roomForDevice(plan.rooms, item);
   element("fp-sensor-edit-height").hidden = fields.mountHeight.disabled = !wall;
+  if (sensorAim) {
+    const aims = canAimSensor(values);
+    const onBracket = isWallMounted(values);
+    editingSensor.aim = { angle: values.angle, pan: values.pan, tilt: values.tilt };
+    editingSensor.aimed = onBracket ? "pan" : "angle";
+    sensorAim.box.hidden = !aims;
+    sensorEdit.classList.toggle("fp-sensor-edit-aims", aims);
+    const limits = onBracket ? { min: -sensorPan, max: sensorPan } : { min: 0, max: 359 };
+    for (const control of [sensorAim.turn.input, sensorAim.turn.slider]) Object.assign(control, limits, { value: Math.round(onBracket ? values.pan : values.angle) });
+    for (const control of [sensorAim.tilt.input, sensorAim.tilt.slider]) control.value = values.tilt;
+    for (const { input, slider } of [sensorAim.turn, sensorAim.tilt]) input.disabled = slider.disabled = !aims;
+  }
   element("fp-sensor-edit-scd41").hidden = fields.climate.disabled = Boolean(integration) || values.model !== "ceilsense-v2";
   element("fp-sensor-edit-level").hidden = fields.level.disabled = wall || !room?.ceiling;
   const image = element("fp-sensor-edit-image");
@@ -5918,6 +6358,35 @@ function renderSensorEdit(item, values) {
   ].filter(Boolean).join(" · ");
   features.hidden = !features.textContent;
   updateSensorEditNote(item, values);
+  paintSensorAim();
+}
+function paintSensorAim() {
+  const item = plan.sensors.find((item2) => item2.id === editingSensor?.id);
+  if (!sensorAim) return;
+  sensorAim.preview = null;
+  if (sensorAim.box.hidden || !item) return;
+  const values = readSensorEdit();
+  if (!(values.mountHeight >= 0.15 && values.mountHeight <= 6)) values.mountHeight = item.mountHeight ?? 1.4;
+  const room = roomForDevice(plan.rooms, item);
+  const preview = replacementSensor(item, values, room) ?? { ...item, model: values.model, radar: values.radar, mountHeight: values.mountHeight, tilt: values.tilt };
+  const home = roomForDevice(plan.rooms, preview) ?? room;
+  const radars = home ? radarFields(home, preview) : [];
+  const motion = home && copy.pir_note ? motionField(preview) : null;
+  const fields = motion ? [...radars, motion] : radars;
+  const onBracket = isWallMounted(preview);
+  const side = aimSideView({ room: home, item: preview, fields, onWall: onBracket });
+  for (const [{ drawing: drawing2 }, view2] of [[sensorAim.turn, aimTopView({ room: home, item: preview, fields })], [sensorAim.tilt, side]]) {
+    drawing2.setAttribute("viewBox", view2.viewBox);
+    drawing2.innerHTML = view2.markup;
+  }
+  sensorAim.turn.words.textContent = turnText(copy, onBracket ? preview.pan ?? 0 : preview.angle, onBracket);
+  sensorAim.tilt.words.textContent = tiltText(copy, preview.tilt ?? 0);
+  const metres = (value) => number2.format(Number(value.toFixed(1)));
+  sensorAim.note.textContent = radars.length ? reachText(copy, side.reach, metres) : "";
+  sensorAim.note.hidden = !sensorAim.note.textContent;
+  sensorAim.lens.textContent = motion ? [copy.aim_motion?.replace(":to", metres(motionReach(home, preview, motion))), copy.pir_note].filter(Boolean).join(" ") : "";
+  sensorAim.lens.hidden = !sensorAim.lens.textContent;
+  sensorAim.preview = { item: preview, room: home, onBracket };
 }
 function openSensorEdit(id) {
   const index = plan.sensors.findIndex((item2) => item2.id === id);
@@ -5940,8 +6409,8 @@ function openSensorEdit(id) {
   if (integration) {
     const select = sensorEditForm.elements.haDevice;
     const current = haDevice(item.haDevice);
-    const placed = haPlacements(item.id);
-    const choices = devicesForRoomArea(integration.devices(), room, Boolean(room?.haAreaId)).filter((device) => device.mount === devices[item.model].mount && device.id !== current?.id && !placed.has(device.id));
+    const placed2 = haPlacements(item.id);
+    const choices = devicesForRoomArea(integration.devices(), room, Boolean(room?.haAreaId)).filter((device) => device.mount === devices[item.model].mount && device.id !== current?.id && !placed2.has(device.id));
     select.replaceChildren(
       new Option(item.haDevice ? current?.name ?? integration.picker.missing : integration.picker.choose, item.haDevice ?? ""),
       ...choices.map((device) => new Option(device.name, device.id))
@@ -5965,7 +6434,19 @@ function replacementSensor(item, values, room) {
   } else delete next.mountHeight;
   if (devices[next.model].mount === "ceiling" && values.level && room?.ceiling) next.levelMountRoom = room.id;
   else if (item.levelMountRoom !== null) delete next.levelMountRoom;
-  if (isWallMounted(next) && installationFor(next) !== installationFor(item)) {
+  const turnedBefore = item.pan ?? 0;
+  delete next.tilt;
+  delete next.pan;
+  if (sensorAim && canAimSensor(next)) {
+    if (values.tilt) next.tilt = values.tilt;
+    if (isWallMounted(next)) {
+      if (values.pan) next.pan = values.pan;
+    } else if (Number.isFinite(values.angle)) next.angle = (values.angle % 360 + 360) % 360;
+  } else if (!sensorAim) {
+    if (item.tilt !== void 0) next.tilt = item.tilt;
+    if (item.pan !== void 0) next.pan = item.pan;
+  }
+  if (isWallMounted(next) && (installationFor(next) !== installationFor(item) || (next.pan ?? 0) !== turnedBefore)) {
     if (!room) return null;
     next = alignSensorToWall(next, room);
   }
@@ -6068,7 +6549,7 @@ function renderLists() {
   element("fp-objects").innerHTML = plan.rooms.map((room) => `
         <button type="button" class="fp-room-row" data-select="${room.id}" aria-pressed="${selected === room.id}">
             <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4" y="4" width="12" height="12" rx="1"/><path d="M9 4v5h7"/></svg>
-            <span>${escapeText(room.name)}</span><small>${number.format(roomArea(room))} m²</small>
+            <span>${escapeText(room.name)}</span><small>${number2.format(roomArea(room))} m²</small>
         </button>`).join("") || `<p class="fp-note">${copy.empty_rooms}</p>`;
   const structure = [
     ...plan.walls.map((item, index) => [item, `${copy.wall} ${index + 1}`]),
@@ -6087,7 +6568,7 @@ function renderFurnitureList() {
   element("fp-furniture-items").innerHTML = plan.furniture.map((item) => {
     const room = plan.rooms.find((room2) => contains(room2, item));
     return `<button type="button" class="fp-furniture-row" data-select="${item.id}" aria-pressed="${selected === item.id}">
-            <strong>${escapeText(item.name)}</strong><small>${room ? escapeText(room.name) + " · " : ""}${number.format(item.width)} × ${number.format(item.depth)} m</small>
+            <strong>${escapeText(item.name)}</strong><small>${room ? escapeText(room.name) + " · " : ""}${number2.format(item.width)} × ${number2.format(item.depth)} m</small>
         </button>`;
   }).join("") || `<p class="fp-note">${copy.furniture_empty}</p>`;
 }
@@ -6124,10 +6605,10 @@ function roomCeilingFields(room) {
         ${heightField("height", ceiling.type === "gable" ? copy.ceiling_eave : copy.ceiling_low, room.height)}
         ${heightField("ceilingHigh", ceiling.type === "gable" ? copy.ceiling_ridge : copy.ceiling_high, ceiling.high)}
     </div>` : heightField("height", copy.height, room.height);
-  const axes = ceiling?.type === "gable";
-  const directions2 = axes ? ["x+", "y+"] : ceilingDirections;
-  const direction2 = ceiling ? `<label>${axes ? copy.ceiling_axis : copy.ceiling_direction}
-        <select data-field="ceilingDirection">${options(directions2, ceiling.direction, (value) => axes ? copy["ceiling_axis_" + value[0]] : copy["ceiling_" + value[0] + (value.endsWith("+") ? "_plus" : "_minus")])}</select></label>` : "";
+  const axes2 = ceiling?.type === "gable";
+  const directions2 = axes2 ? ["x+", "y+"] : ceilingDirections;
+  const direction2 = ceiling ? `<label>${axes2 ? copy.ceiling_axis : copy.ceiling_direction}
+        <select data-field="ceilingDirection">${options(directions2, ceiling.direction, (value) => axes2 ? copy["ceiling_axis_" + value[0]] : copy["ceiling_" + value[0] + (value.endsWith("+") ? "_plus" : "_minus")])}</select></label>` : "";
   return `<fieldset class="fp-ceiling-settings"><legend>${copy.ceiling_section}</legend>
         ${height}${direction2}<div id="fp-ceiling-profile"></div>
         ${ceiling ? `<p class="fp-note fp-ceiling-note">${copy.ceiling_room_note}</p>` : ""}
@@ -6162,7 +6643,7 @@ function crossSection2(room, item = null) {
             <polyline class="fp-cross-roof" points="${outline}"/>${marker}
         </svg>
         <div class="fp-cross-sides"><span>A · ${sides[0]}</span><span>B · ${sides[1]}</span></div>
-        <figcaption><span>${copy.ceiling_profile}</span><strong>${copy.ceiling_pitch} ≈${number.format(Math.round(ceilingPitch(room)))}°</strong></figcaption>
+        <figcaption><span>${copy.ceiling_profile}</span><strong>${copy.ceiling_pitch} ≈${number2.format(Math.round(ceilingPitch(room)))}°</strong></figcaption>
     </figure>`;
 }
 function sensorNote(item, room) {
@@ -6176,9 +6657,9 @@ function sensorNote(item, room) {
   if (status === "height") {
     const range = ceilingReferenceRange(item.radar);
     const estimated = radarFields(room, item, coverageRadarOptions).some((field2) => field2.estimatedHeight);
-    const fill2 = (text) => text.replaceAll(":low", number.format(range[0])).replaceAll(":high", number.format(range[1]));
-    if (estimated && range && copy.height_estimate) return Object.assign(new String(fill2(copy.height_estimate)), { advice: true });
-    return [copy.height_note, range && fill2(copy.ceiling_range)].filter(Boolean).join(" ");
+    const fill3 = (text) => text.replaceAll(":low", number2.format(range[0])).replaceAll(":high", number2.format(range[1]));
+    if (estimated && range && copy.height_estimate) return Object.assign(new String(fill3(copy.height_estimate)), { advice: true });
+    return [copy.height_note, range && fill3(copy.ceiling_range)].filter(Boolean).join(" ");
   }
   return room.ceiling ? copy.ceiling_local_range : "";
 }
@@ -6199,7 +6680,7 @@ function updateSensorDetails(item) {
   const edit = element("fp-edit-ceiling");
   edit.dataset.selectRoom = room.id;
   edit.title = room.name;
-  element("fp-mount-height").textContent = `${number.format(ceilingHeightAt(room, item))} m`;
+  element("fp-mount-height").textContent = `${number2.format(ceilingHeightAt(room, item))} m`;
   element("fp-mount-level").hidden = !room.ceiling;
   element("fp-mount-level").querySelector("input").checked = item.levelMountRoom === room.id;
   const ridge = room.ceiling?.type === "gable" && Math.abs(ceilingPosition(room, item) - 0.5) < 1e-6;
@@ -6260,7 +6741,7 @@ function renderInspector() {
     roomFloor = floors.length > 1 ? `<label>${copy.floor_move_room}<select id="fp-room-floor">
             ${floors.map((floor) => `<option value="${floor.id}" ${floor.id === building.activeFloor ? "selected" : ""}>${escapeText(floorLabel(floor, copy))}</option>`).join("")}</select></label>` : "";
     settings = `<div id="fp-room-metrics"></div><label>${copy.name}<input data-field="name" maxlength="48" value="${escapeText(item.name)}" required></label>
-            ${item.outline ? `<p class="fp-note">${copy.room_outline} · ${number.format(roomArea(item))} m²</p>` : `<div class="fp-fields">${field(item, "width", copy.width, 0.5, 60, "any")}${field(item, "depth", copy.depth, 0.5, 60, "any")}</div>`}
+            ${item.outline ? `<p class="fp-note">${copy.room_outline} · ${number2.format(roomArea(item))} m²</p>` : `<div class="fp-fields">${field(item, "width", copy.width, 0.5, 60, "any")}${field(item, "depth", copy.depth, 0.5, 60, "any")}</div>`}
             ${item.ceiling ? roomCeilingFields(item) : heightField("height", copy.height, item.height)}
             ${roomFinishFields(item)}
             ${calibration ? `<p class="fp-note">${escapeText(calibration)}</p>` : ""}
@@ -6283,7 +6764,7 @@ function renderInspector() {
                 ${sensors.map((sensor) => `<option value="${sensor.id}" ${item.sensorId === sensor.id ? "selected" : ""}>
                     ${escapeText(devices[sensor.model].name)} · ${plan.sensors.indexOf(sensor) + 1}</option>`).join("")}
             </select></label>
-            ${item.parts.length > 1 ? `<label>${copy.zone_part}<select id="fp-zone-part-index">${item.parts.map((_, i) => `<option value="${i}">${number.format(i + 1)}</option>`).join("")}</select></label>` : ""}
+            ${item.parts.length > 1 ? `<label>${copy.zone_part}<select id="fp-zone-part-index">${item.parts.map((_, i) => `<option value="${i}">${number2.format(i + 1)}</option>`).join("")}</select></label>` : ""}
             ${item.type === "entry" ? `<label>${copy.zone_direction}<select data-field="direction">
                 ${options(["left", "right"], item.direction ?? "right", (value) => copy["zone_" + value])}</select></label>` : ""}
             <p class="fp-note">${copy.zone_note}</p>`;
@@ -6301,6 +6782,10 @@ function renderInspector() {
     }
     if (devices[item.model].mount === "wall") {
       settings += field({ ...item, mountHeight: item.mountHeight ?? 1.4 }, "mountHeight", copy.wall_sensor_height, 0.15, 6, "any");
+    }
+    if (sensorAim && canAimSensor(item)) {
+      if (isWallMounted(item)) settings += field({ ...item, pan: item.pan ?? 0 }, "pan", copy.wall_sensor_pan, -sensorPan, sensorPan, 1);
+      settings += field({ ...item, tilt: item.tilt ?? 0 }, "tilt", copy.wall_sensor_tilt, sensorTilt.min, sensorTilt.max, 1);
     }
     if (!integration && item.model === "ceilsense-v2") {
       settings += `<label class="fp-climate-field"><input type="checkbox" data-field="climate" ${item.climate ? "checked" : ""}> ${copy.plan_scd41}</label>`;
@@ -6372,8 +6857,8 @@ function renderRoomMetrics(room) {
     [copy.room_mirrors, objects.mirrors.length],
     [copy.room_zones, objects.zones.length]
   ].filter(([, value]) => value);
-  metrics.innerHTML = `<div class="fp-room-metric-lead"><strong>${number.format(roomArea(room))} m²</strong>
-        <span>${copy.room_perimeter.replace(":length", number.format(perimeter))}</span></div>
+  metrics.innerHTML = `<div class="fp-room-metric-lead"><strong>${number2.format(roomArea(room))} m²</strong>
+        <span>${copy.room_perimeter.replace(":length", number2.format(perimeter))}</span></div>
         ${counts.length ? `<div class="fp-room-metric-grid">${counts.map(([label, value]) => `<span><strong>${value}</strong> ${label}</span>`).join("")}</div>` : ""}`;
 }
 function filterCatalog() {
@@ -6478,7 +6963,8 @@ function updateRangeKey(item) {
   key.hidden = !two;
   key.innerHTML = two ? `
         <span><i></i> ${copy.tracking_line} · ${item.radar === "combined" ? "LD6002B" : item.radar.toUpperCase()}</span>
-        <span><i></i> ${copy.presence_line} · LD2412</span>` : "";
+        <span><i></i> ${copy.presence_line} · LD2412</span>
+        ${hasMotionSensor(item.model) && copy.sim_motion ? `<span class="fp-range-key-motion"><i></i> ${copy.sim_motion} · PIR</span>` : ""}` : "";
 }
 function renderHandoff() {
   const room = selectedItem().type === "furniture" ? null : currentRoom();
@@ -6527,8 +7013,8 @@ function inspectMapSelection(type, changed) {
 }
 function announcePosition(point3, item = null, prefix = copy.position_status) {
   const room = item ? roomForDevice(plan.rooms, item) : null;
-  const height = room && devices[item.model].mount === "ceiling" ? ` · ${copy.ceiling_mount_height} ${number.format(ceilingHeightAt(room, item))} m` : "";
-  element("fp-event").textContent = `${prefix} · X ${number.format(point3.x)} m · Y ${number.format(point3.y)} m${height}`;
+  const height = room && devices[item.model].mount === "ceiling" ? ` · ${copy.ceiling_mount_height} ${number2.format(ceilingHeightAt(room, item))} m` : "";
+  element("fp-event").textContent = `${prefix} · X ${number2.format(point3.x)} m · Y ${number2.format(point3.y)} m${height}`;
 }
 function render() {
   element("fp-name").value = building?.name ?? plan.name;
@@ -6547,7 +7033,7 @@ function renderFloors() {
   const options2 = floors.map((floor) => ({
     id: floor.id,
     label: floorLabel(floor, copy),
-    level: (floor.level > 0 ? "+" : "") + number.format(floor.level)
+    level: (floor.level > 0 ? "+" : "") + number2.format(floor.level)
   })).reverse();
   if (floors.length > 1) options2.push({ id: "all", label: copy.floor_all, level: "3D" });
   const choices = element("fp-floor-choices");
@@ -6678,7 +7164,7 @@ function choosePdfPage(pdf) {
   };
   input.max = pdf.pages;
   input.value = 1;
-  element("fp-pdf-page-label").textContent = copy.underlay_pdf_page.replace(":count", number.format(pdf.pages));
+  element("fp-pdf-page-label").textContent = copy.underlay_pdf_page.replace(":count", number2.format(pdf.pages));
   return new Promise((resolve) => {
     input.oninput = show;
     pdfPages.onclose = () => {
@@ -6781,7 +7267,8 @@ function renderDrawing() {
   beamChoices = showCoverage ? visibleSensors(plan).flatMap((item, index) => {
     const room = roomForDevice(plan.rooms, item);
     const marker = String(index + 1).padStart(2, "0");
-    return radarFields(room, item, coverageRadarOptions).reverse().map((field2) => {
+    const motion = room && copy.sim_motion ? motionField(item) : null;
+    return [...radarFields(room, item, coverageRadarOptions).reverse(), ...motion ? [motion] : []].map((field2) => {
       const radar = field2.radar.toUpperCase();
       return {
         item,
@@ -6795,6 +7282,7 @@ function renderDrawing() {
     });
   }) : [];
   if (showCoverage && beamChoice && !beamChoices.some((choice2) => choice2.key === beamChoice)) beamChoice = "";
+  if (motionLegend) motionLegend.hidden = !beamChoices.some((choice2) => choice2.field.mode === "motion");
   beamPanelKey = null;
   if (view === "3d") {
     renderSpatialDrawing();
@@ -6953,13 +7441,14 @@ function renderBeam() {
       planForDrawing(plan),
       showCoverage,
       selected,
-      number,
+      number2,
       focus && { ...focus, profile: profile2 },
       {
         measures: showMeasures,
         interactiveSensors: true,
         radarOptions: coverageRadarOptions,
-        casing: Boolean(plan.underlay)
+        casing: Boolean(plan.underlay),
+        motion: Boolean(copy.sim_motion)
       }
     ) + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : "") + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ""));
   } else if (layer) layer.innerHTML = focus ? paintBeam(focus, spaceCamera, profile2) : "";
@@ -6986,11 +7475,11 @@ function renderBeam() {
   if (focus.field.profiles) {
     radii.innerHTML = `<span class="fp-visually-hidden">${copy.beam_radius}</span>` + ceilingProfiles.map((name) => `<span class="fp-radar-radius${name === profile2 ? " active" : ""}" data-profile="${name}" aria-current="${name === profile2}">
                 <span><i aria-hidden="true"></i>${copy["beam_" + name]}</span>
-                <strong>${focus.field.profiles[name].map((value) => number.format(value)).join(" × ")} m</strong>
+                <strong>${focus.field.profiles[name].map((value) => number2.format(value)).join(" × ")} m</strong>
             </span>`).join("");
   } else if (wall) {
     radii.innerHTML = `<span class="fp-radar-radius active"><span>${copy.beam_wall_range}</span>
-            <strong>${number.format(focus.field.range)} m · ±${number.format(focus.field.half)}°</strong></span>`;
+            <strong>${number2.format(focus.field.range)} m · ±${number2.format(focus.field.half)}°</strong></span>`;
   }
 }
 function renderActivities(camera3D) {
@@ -7078,9 +7567,9 @@ function renderPerson() {
       field2.toggleAttribute("data-detected", Boolean(reading?.signals.some((signal) => signal.seen && (!field2.dataset.radar || signal.radar === field2.dataset.radar))));
     });
   }
-  const count = copy.sim_count.replace(":seen", number.format(seen.size)).replace(":total", number.format(readings.length));
+  const count = copy.sim_count.replace(":seen", number2.format(seen.size)).replace(":total", number2.format(readings.length));
   const affected = readings.filter((reading) => reading.obstacle).length;
-  const extra = affected ? " · " + copy.sim_risk_count.replace(":count", number.format(affected)) : "";
+  const extra = affected ? " · " + copy.sim_risk_count.replace(":count", number2.format(affected)) : "";
   const floorLabelText = allFloors ? floorLabel(building.floors.find((floor2) => floor2.id === building.activeFloor), copy) + " · " : "";
   const summary = (walkers.woman || walkers.child ? `${copy["sim_" + activeWalker]} · ` : "") + floorLabelText + (room ? `${room.name} · ${count}` : count) + extra;
   const status = element("fp-sim-summary");
@@ -7088,7 +7577,7 @@ function renderPerson() {
   const roomLabel2 = room?.name ?? copy.sim_outside_rooms;
   const floor = building?.floors.find((floor2) => floor2.id === walkFloorId());
   const levelLabel = floor ? floorLabel(floor, copy) : "";
-  const metric = readings.length ? copy.sim_count_short.replace(":seen", number.format(seen.size)).replace(":total", number.format(readings.length)) : copy.sim_no_sensors_short;
+  const metric = readings.length ? copy.sim_count_short.replace(":seen", number2.format(seen.size)).replace(":total", number2.format(readings.length)) : copy.sim_no_sensors_short;
   const readingLabel = copy.sim_view_readings + " · " + metric + (readings.length ? " " + copy.sim_detecting_sensors : "");
   if (element("fp-sim-room-label").textContent !== roomLabel2) element("fp-sim-room-label").textContent = roomLabel2;
   if (element("fp-sim-floor-label").textContent !== levelLabel) element("fp-sim-floor-label").textContent = levelLabel;
@@ -7109,25 +7598,27 @@ function renderPerson() {
   const distanceLabel = route.distance ? copy.sim_route_distance.replace(":covered", tenth.format(route.covered)).replace(":total", tenth.format(route.distance)) : copy.sim_route_empty;
   const routeLabel = route.uncertain > 0.049 ? distanceLabel + " · " + copy.sim_risk_route.replace(":distance", tenth.format(route.uncertain)) : distanceLabel;
   if (distance4.textContent !== routeLabel) distance4.textContent = routeLabel;
-  const fill2 = element("fp-route-fill");
-  fill2.parentElement.hidden = !route.distance;
-  fill2.style.width = route.distance ? `${Math.min(100, route.covered / route.distance * 100)}%` : "";
+  const fill3 = element("fp-route-fill");
+  fill3.parentElement.hidden = !route.distance;
+  fill3.style.width = route.distance ? `${Math.min(100, route.covered / route.distance * 100)}%` : "";
   root.querySelector('[data-action="clear_walk"]').disabled = !route.distance;
   root.querySelectorAll("[data-person-pose]").forEach((button) => {
     const pressed = String(button.dataset.personPose === person.pose);
     if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
   });
   const profile2 = radarProfileFor(person);
-  const key = person.pose + ":" + profile2 + ":" + readings.map((reading) => reading.signals.map((signal) => signal.obstacle ? signal.obstacle.id + signal.obstacle.status : signal.exclusion?.id ?? Number(signal.seen)).join(",")).join("/");
+  const key = person.pose + ":" + profile2 + ":" + readings.map((reading) => reading.signals.map((signal) => signal.obstacle ? signal.obstacle.id + signal.obstacle.status : signal.exclusion?.id ?? Number(signal.seen)).join(",") + (reading.motion ? `,${Number(reading.motion.seen)}${Number(reading.motion.still)}` : "")).join("/");
   if (readingKey === key) return;
   readingKey = key;
-  element("fp-sim-sensors").innerHTML = readings.map(({ item, index, signals, seen: seen2, obstacle }) => `<li>
+  element("fp-sim-sensors").innerHTML = readings.map(({ item, index, signals, motion, seen: seen2, obstacle }) => `<li>
         <div class="fp-sim-device"><span class="fp-index ${devices[item.model].mount}">${String(index + 1).padStart(2, "0")}</span>
             <strong>${devices[item.model].name}</strong><span class="fp-sim-light" data-seen="${seen2}" aria-hidden="true"></span></div>
         ${signals.length ? signals.map((signal) => `<div class="fp-sim-signal">
             <span>${signal.radar.toUpperCase()} · ${signal.profiles ? copy["beam_" + (person.pose === "lying" ? "lying" : profile2)] : copy["sim_" + signal.mode]}</span>
             <span data-seen="${signal.seen}" data-status="${signal.obstacle?.status ?? ""}">${signal.obstacle ? copy["sim_" + signal.obstacle.status] : signal.exclusion ? copy.sim_excluded : signal.seen ? copy.sim_seen : copy.sim_missed}</span>
-        </div>${signal.height === null ? "" : `<p class="fp-sim-height">Z · ${copy["sim_" + person.pose]} · ${copy.sim_height.replace(":height", number.format(signal.height))}</p>`}`).join("") : `<p class="fp-note">${copy.sim_no_profile}</p>`}
+        </div>${signal.height === null ? "" : `<p class="fp-sim-height">Z · ${copy["sim_" + person.pose]} · ${copy.sim_height.replace(":height", number2.format(signal.height))}</p>`}`).join("") : `<p class="fp-note">${copy.sim_no_profile}</p>`}
+        ${motion && copy.sim_motion ? `<div class="fp-sim-signal fp-sim-motion"><span>PIR · ${copy.sim_motion}</span>
+            <span data-seen="${motion.seen}">${motion.seen ? copy.sim_seen : motion.still ? copy.sim_still : copy.sim_missed}</span></div>` : ""}
         ${obstacle ? `<p class="fp-obstacle-name" data-status="${obstacle.status}">${escapeText(obstacle.name)}</p>` : ""}
     </li>`).join("") || `<li class="fp-note">${copy.sim_empty}</li>`;
 }
@@ -7943,7 +8434,7 @@ function updateView() {
   const scale3 = element("fp-scale");
   const metres = pixelsPerMetre > 110 ? 0.5 : pixelsPerMetre > 34 ? 1 : pixelsPerMetre > 15 ? 2 : 5;
   scale3.style.setProperty("--metre", `${metres * pixelsPerMetre}px`);
-  scale3.lastChild.textContent = `${number.format(metres)} m`;
+  scale3.lastChild.textContent = `${number2.format(metres)} m`;
   showZoom();
   refreshSensorTip();
 }
@@ -8111,14 +8602,14 @@ function renderRoomHandles() {
     roomHandles.dataset.room = key;
     roomHandleFeedback.textContent = "";
     roomHandles.innerHTML = points.map((_, index) => {
-      const label = copy.room_corner_status.replace(":index", number.format(index + 1)).replace(":total", number.format(points.length));
+      const label = copy.room_corner_status.replace(":index", number2.format(index + 1)).replace(":total", number2.format(points.length));
       return `<g class="fp-room-handle" data-room-handle="${index}" role="button" tabindex="0"
                 aria-label="${escapeText(label)}" aria-describedby="fp-room-handle-keys">
                 <circle class="fp-room-handle-hit" r=".08"/><circle class="fp-room-handle-focus" r=".14"/>
                 <circle class="fp-room-handle-dot" r=".08"/></g>`;
     }).join("");
     roomMidpoints.innerHTML = points.length < maxRoomCorners ? points.map((_, index) => {
-      const label = escapeText(copy.room_midpoint_label.replace(":index", number.format(index + 1)));
+      const label = escapeText(copy.room_midpoint_label.replace(":index", number2.format(index + 1)));
       return `<g class="fp-room-midpoint" data-room-midpoint="${index}" role="button" tabindex="0" aria-label="${label}">
                 <title>${label}</title>
                 <circle class="fp-room-handle-hit" r=".08"/>
@@ -8266,16 +8757,24 @@ function applyRoomOutline(room, geometry) {
 function alignSensorToWall(item, room = plan.rooms.find((room2) => contains(room2, item))) {
   if (!isWallMounted(item)) return item;
   const edge = nearestEdge(item, true, Infinity, room);
-  return edge ? { ...item, x: edge.x, y: edge.y, angle: edge.facing } : item;
+  const turned = canAimSensor(item) ? item.pan ?? 0 : 0;
+  return edge ? { ...item, x: edge.x, y: edge.y, angle: ((edge.facing + turned) % 360 + 360) % 360 } : item;
 }
 function sensorPlacement(point3) {
+  const room = devices[choice].mount === "wall" ? plan.rooms.find((room2) => contains(room2, point3)) : null;
+  const middle = room && roomInteriorPoint(room);
+  const angle2 = middle && Math.hypot(middle.x - point3.x, middle.y - point3.y) > 0.3 ? directionTo(point3, middle, 45) : 0;
   return alignSensorToWall({
     ...point3,
-    angle: 0,
+    angle: angle2,
     model: choice,
     radar: placementDevice?.radar ?? devices[choice].defaultRadar ?? "none",
     installation: placementInstallation,
-    ...placementDevice ? { haDevice: placementDevice.id, mountHeight: placementDevice.mountHeight } : {}
+    ...placementDevice ? {
+      haDevice: placementDevice.id,
+      mountHeight: placementDevice.mountHeight,
+      ...placementDevice.tilt ? { tilt: placementDevice.tilt } : {}
+    } : {}
   });
 }
 function doorWall(door, room = null) {
@@ -8317,7 +8816,7 @@ function renderOpeningPreview(point3) {
 }
 function openingHelp(preview) {
   if (!preview) return copy.opening_choose_wall;
-  if (preview.tooWide) return copy.opening_too_wide.replace(":length", number.format(preview.edge.length));
+  if (preview.tooWide) return copy.opening_too_wide.replace(":length", number2.format(preview.edge.length));
   return copy[preview.position ? "opening_ready" : "opening_invalid_dimensions"];
 }
 function placeOpening() {
@@ -8466,7 +8965,7 @@ function showGhost(point3, anchor = start2) {
     mark = `<rect x="${room.x}" y="${room.y}" width="${room.width}" height="${room.depth}"/>`;
     x = room.x + room.width / 2;
     y = room.y + room.depth / 2;
-    dimensions2 = `${number.format(room.width)} × ${number.format(room.depth)} m`;
+    dimensions2 = `${number2.format(room.width)} × ${number2.format(room.depth)} m`;
   } else {
     mark = `<line x1="${anchor.x}" y1="${anchor.y}" x2="${point3.x}" y2="${point3.y}"/>`;
     if (tool !== "wall") {
@@ -8475,7 +8974,7 @@ function showGhost(point3, anchor = start2) {
     }
     x = (anchor.x + point3.x) / 2;
     y = (anchor.y + point3.y) / 2;
-    dimensions2 = `${number.format(Math.hypot(point3.x - anchor.x, point3.y - anchor.y))} m`;
+    dimensions2 = `${number2.format(Math.hypot(point3.x - anchor.x, point3.y - anchor.y))} m`;
   }
   ghost.innerHTML = `${mark}<text class="fp-draft-dimension" x="${x}" y="${y}" dy="-.5em" text-anchor="middle">${dimensions2}</text>`;
 }
@@ -8683,6 +9182,7 @@ function readField(item, key) {
   if (key === "ceilingHigh") return item.ceiling?.high;
   if (key === "ceilingDirection") return item.ceiling?.direction;
   if (key === "mountHeight") return item.mountHeight ?? 1.4;
+  if (key === "tilt" || key === "pan") return item[key] ?? 0;
   if (key === "sensorId") return item.sensorId ?? "";
   return item[key];
 }
@@ -8723,7 +9223,7 @@ function updateField(input) {
     item.ceiling = { ...item.ceiling, [key === "ceilingHigh" ? "high" : "direction"]: value };
   } else if (group) {
     for (const entry of group) Object.assign(entry, translatedItem(entry, key === "x" ? value - original : 0, key === "y" ? value - original : 0));
-  } else if (type === "sensors" && (key === "installation" || ["x", "y"].includes(key) && isWallMounted(item))) {
+  } else if (type === "sensors" && (key === "installation" || key === "pan" || ["x", "y"].includes(key) && isWallMounted(item))) {
     Object.assign(item, alignSensorToWall({ ...item, [key]: value }, roomForDevice(plan.rooms, item)));
   } else if (key === "width" && ["windows", "mirrors"].includes(type)) {
     Object.assign(item, roomOpening(currentRoom(), item, value));
@@ -8738,12 +9238,16 @@ function updateField(input) {
   } else {
     item[key] = key === "sensorId" ? value || null : value;
   }
+  if (type === "sensors") {
+    if (!item.tilt) delete item.tilt;
+    if (!item.pan || !isWallMounted(item)) delete item.pan;
+  }
   const validationPlan = key === "ceilingType" && value === "flat" ? { ...plan, sensors: plan.sensors.map((sensor) => sensor.levelMountRoom === item.id ? { ...sensor, levelMountRoom: null } : sensor) } : plan;
   if (!validPlan(validationPlan)) {
     if (group) plan = JSON.parse(previous);
     Object.assign(item, savedItem);
     if (!Object.hasOwn(savedItem, key)) delete item[key];
-    input.value = decimal ? number.format(original) : original;
+    input.value = decimal ? number2.format(original) : original;
     const message = isCeilingField ? copy.ceiling_invalid : copy.invalid;
     input.setCustomValidity(message);
     input.reportValidity();
@@ -8754,7 +9258,7 @@ function updateField(input) {
   if (isCeilingField) clearRoomMounts(item.id);
   if (type === "rooms" && key === "name" && item.useSampleName) item.useSampleName = false;
   if (type === "sensors" && (key === "x" || key === "y") && item.levelMountRoom) item.levelMountRoom = null;
-  if (decimal) input.value = number.format(value);
+  if (decimal) input.value = number2.format(value);
   remember(previous);
   save();
   updateTools();
@@ -8803,7 +9307,7 @@ async function openOrder(opener) {
     orderStep.disabled = false;
   }
 }
-var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, pdfPages, imageParts, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, recogniseRooms, recognition, zoomBar, doorActions, roomRemoval, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, placedWithTool, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, walkSight, heldDoors, heldDoorPaint, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, visiblePlan, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
+var element, root, canvas, board, drawing, ghost, roomMidpoints, roomHandles, roomHandleFeedback, space, sensorTip, stage, stairPrompt, simGuide, simCast, simTools, simMenus, simReading, sensorEdit, pdfPages, imageParts, sensorEditForm, projectMenu, projectTrigger, floorMenu, floorTrigger, drawingMenu, toolbox, viewMenu, library, sidebar, compactLibrary, libraryIsOpen, libraryButton, roomForm, roomStep, sensorStep, testStep, orderStep, extraSensor, copy, integration, appPlanner, recogniseRooms, recognition, zoomBar, sensorAim, doorActions, roomRemoval, coverageRadarOptions, coverageEstimateLabel, coverageEstimateLegend, motionLegend, liveMode, livePeople, openingWidth, openingHeight, openingDefaults, number2, tenth, maxProjectFileSize, reducedMotion, sharedRoom, demo, exampleHome, storageKey, withEditableFurniture, demoHome, building, plan, showStart, stopDemoPreview, roomFormOpen, placementInstallation, placementDevice, allFloors, floorSeparation, showMeasures, tool, placingOpening, choice, placedWithTool, start2, roomDraft, draftCorner, selected, showCoverage, showHeatmap, heatCache, beamChoices, beamChoice, beamKey, beamPanelKey, detectedBeam, inspectedMarker, sensorTipTimer, editingSensor, view, spaceCamera, spaceBounds, spaceZoom, wallMode, daylight, detailedSpacePeople, spaceFollow, orbitDrag, orbitFrame, ignoreSpaceClick, simulation, reviewedCoverage, walkers, activeWalker, currentWalker, walkFloorId, walkersOnFloor, walkWalls, walkSensors, walkFurniture, walkSight, heldDoors, heldDoorPaint, readingKey, autoWalk, autoWalkFrame, stairWalk, stairFrame, camera2, interaction, touchPositions, pinch, ignoreTouchClick, recentUndo, cursor, underlayMeasure, libraryOpener, libraryPanelWasOpen, quickPlacement, placementPoint, catalogMount, catalogRoomId, catalogAreaOnly, placementAreaId, lastRoomClick, placementOpener, furnitureOpener, history, future, unreadableDraft, currentStairTrip, deviceIcon, homeAssistantAreas, homeAssistantFloors, roomById, linkedAreaIds, homeAssistantAreaName, visiblePlan, furnitureDialog, sensorMarkerAt, field, mirrorReflectionCopy, heightField, options, viewSwitchIcons, viewSwitches, heatToggle, heatLegend, direction, wasd, walkControls, smokeTestAudio, limitPoint, finePoint, isWallMounted, actions, orderButton;
 var init_floor_planner2 = __esm({
   "src/js/floor-planner.js"() {
     init_floor_planner();
@@ -8818,6 +9322,7 @@ var init_floor_planner2 = __esm({
     init_floor_planner_stairs();
     init_floor_planner_beam();
     init_floor_planner_radar();
+    init_floor_planner_aim();
     init_floor_planner_person();
     init_floor_planner_person_input();
     init_floor_planner_live();
@@ -8950,6 +9455,54 @@ var init_floor_planner2 = __esm({
       document.getElementById("fp-walk-stage").append(bar);
       return { zoomIn, zoomOut, level, share: new Intl.NumberFormat(root.dataset.locale, { style: "percent", maximumFractionDigits: 0 }) };
     })() : null;
+    sensorAim = ["aim_top", "aim_side", "aim_turn", "aim_tilt", "aim_reach"].every((key) => copy[key]) ? (() => {
+      const box2 = document.createElement("div");
+      box2.className = "fp-aim";
+      box2.hidden = true;
+      const views = document.createElement("div");
+      views.className = "fp-aim-views";
+      const part = (view2, caption, name, title) => {
+        const figure = document.createElement("figure");
+        figure.className = "fp-aim-view";
+        figure.dataset.view = view2;
+        const heading = document.createElement("figcaption");
+        heading.textContent = caption;
+        const drawing2 = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        drawing2.setAttribute("aria-hidden", "true");
+        const row = document.createElement("div");
+        row.className = "fp-aim-row";
+        const label = document.createElement("label");
+        const text = document.createElement("span");
+        text.textContent = title;
+        const words = document.createElement("output");
+        const slider = document.createElement("input");
+        Object.assign(slider, { type: "range", step: 1, id: `fp-aim-${name}`, disabled: true });
+        label.htmlFor = slider.id;
+        label.append(text, words);
+        const input = document.createElement("input");
+        Object.assign(input, { name, type: "number", step: 1, required: true, disabled: true });
+        input.setAttribute("aria-label", title);
+        row.append(label, slider, input);
+        figure.append(heading, drawing2, row);
+        views.append(figure);
+        return { drawing: drawing2, slider, input, words };
+      };
+      const turn = part("top", copy.aim_top, "aim", copy.aim_turn), tilt = part("side", copy.aim_side, "tilt", copy.aim_tilt);
+      for (const control of [tilt.input, tilt.slider]) Object.assign(control, { min: sensorTilt.min, max: sensorTilt.max });
+      const hint2 = document.createElement("p");
+      hint2.className = "fp-note";
+      hint2.textContent = copy.aim_hint ?? "";
+      hint2.hidden = !hint2.textContent;
+      const note = document.createElement("p");
+      note.className = "fp-note fp-aim-seen";
+      note.setAttribute("role", "status");
+      const lens = document.createElement("p");
+      lens.className = "fp-note fp-aim-lens";
+      lens.hidden = true;
+      box2.append(views, hint2, note, lens);
+      document.getElementById("fp-sensor-edit-height").after(box2);
+      return { box: box2, turn, tilt, note, lens, preview: null };
+    })() : null;
     doorActions = copy.door_close && copy.door_open ? (() => {
       const bar = document.createElement("div");
       bar.className = "fp-place-actions fp-door-actions";
@@ -8998,6 +9551,16 @@ var init_floor_planner2 = __esm({
       coverageEstimateLegend.append(symbol, coverageEstimateLabel);
       element("fp-legend").append(coverageEstimateLegend);
     }
+    motionLegend = copy.legend_motion ? (() => {
+      const entry = document.createElement("span");
+      const symbol = document.createElement("i");
+      symbol.className = "fp-legend-motion";
+      symbol.setAttribute("aria-hidden", "true");
+      entry.hidden = true;
+      entry.append(symbol, copy.legend_motion);
+      element("fp-legend").append(entry);
+      return entry;
+    })() : null;
     liveMode = false;
     livePeople = [];
     openingWidth = element("fp-opening-width");
@@ -9007,7 +9570,7 @@ var init_floor_planner2 = __esm({
       window: { width: 1.2, min: 0.1, max: 8, height: 1.05, base: defaultWindowSill },
       mirror: { width: 0.7, min: 0.1, max: 8, height: 1.4, base: 0.5 }
     };
-    number = new Intl.NumberFormat(root.dataset.locale, { maximumFractionDigits: 2 });
+    number2 = new Intl.NumberFormat(root.dataset.locale, { maximumFractionDigits: 2 });
     tenth = new Intl.NumberFormat(root.dataset.locale, { maximumFractionDigits: 1 });
     maxProjectFileSize = maxFloors * (maxImageData + 1e6);
     reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
@@ -9119,6 +9682,53 @@ var init_floor_planner2 = __esm({
     homeAssistantAreaName = (id) => homeAssistantAreas().find((area) => area.id === id)?.name ?? id;
     visiblePlan = (floorPlan) => integration ? { ...floorPlan, sensors: visibleSensors(floorPlan) } : floorPlan;
     furnitureDialog = element("fp-furniture-library");
+    if (sensorAim) {
+      const set = (part, value) => {
+        part.input.value = part.slider.value = value;
+        paintSensorAim();
+      };
+      for (const part of [sensorAim.turn, sensorAim.tilt]) {
+        part.slider.addEventListener("input", () => set(part, part.slider.value));
+        part.input.addEventListener("input", () => {
+          if (part.input.validity.valid && part.input.value !== "") part.slider.value = part.input.value;
+          paintSensorAim();
+        });
+      }
+      sensorEditForm.elements.mountHeight.addEventListener("input", paintSensorAim);
+      const follow = (drawing2, begin, move) => drawing2.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || !sensorAim.preview) return;
+        event.preventDefault();
+        const at = (pointer) => {
+          const point3 = new DOMPoint(pointer.clientX, pointer.clientY).matrixTransform(drawing2.getScreenCTM().inverse());
+          return { x: point3.x, y: point3.y };
+        };
+        const held = begin(at(event));
+        const moved = (pointer) => move(at(pointer), held);
+        const stop = () => {
+          drawing2.removeEventListener("pointermove", moved);
+          drawing2.removeEventListener("pointerup", stop);
+          drawing2.removeEventListener("pointercancel", stop);
+        };
+        drawing2.setPointerCapture(event.pointerId);
+        drawing2.addEventListener("pointermove", moved);
+        drawing2.addEventListener("pointerup", stop);
+        drawing2.addEventListener("pointercancel", stop);
+        moved(event);
+      });
+      follow(sensorAim.turn.drawing, () => null, (point3) => {
+        const { item, onBracket } = sensorAim.preview;
+        if (Math.hypot(point3.x - item.x, point3.y - item.y) < 0.12) return;
+        set(sensorAim.turn, onBracket ? turnTo(item, point3, sensorPan) : directionTo(item, point3));
+      });
+      const mounted = () => sensorAim.preview.item.mountHeight ?? 1.4;
+      follow(sensorAim.tilt.drawing, (point3) => onDevice(mounted(), { ahead: point3.x, height: -point3.y }) ? "height" : "tilt", (point3, held) => {
+        const spot = { ahead: point3.x, height: -point3.y };
+        if (held === "height") {
+          sensorEditForm.elements.mountHeight.value = heightTo(spot.height, sensorAim.preview.room?.height);
+          paintSensorAim();
+        } else set(sensorAim.tilt, tiltTo(mounted(), spot));
+      });
+    }
     sensorEditForm.addEventListener("change", (event) => {
       const item = plan.sensors.find((item2) => item2.id === editingSensor?.id);
       if (!item) return;
@@ -9136,6 +9746,10 @@ var init_floor_planner2 = __esm({
         const model = event.target.value;
         editingSensor.model = model;
         renderSensorEdit(item, editingSensor.drafts.get(model) ?? sensorEditValues(model, previous));
+      } else if (event.target.name === "installation" && sensorAim) {
+        const values = readSensorEdit();
+        if (sensorAim.preview) values.angle = sensorAim.preview.item.angle;
+        renderSensorEdit(item, values);
       } else updateSensorEditNote(item, readSensorEdit());
     });
     sensorEditForm.addEventListener("submit", (event) => {
@@ -9228,7 +9842,7 @@ var init_floor_planner2 = __esm({
       es: ["Suprimir reflejos del espejo", "Profundidad de reflexión (m)", "Crea una exclusión prudente detrás del espejo para cada radar vinculado. El espacio real nunca se excluye automáticamente."]
     };
     heightField = (key, label, value) => `<label>${label}
-    <input data-field="${key}" data-decimal type="text" inputmode="decimal" maxlength="8" value="${number.format(value)}" required></label>`;
+    <input data-field="${key}" data-decimal type="text" inputmode="decimal" maxlength="8" value="${number2.format(value)}" required></label>`;
     options = (values, active, label) => values.map((value) => `<option value="${value}" ${value === active ? "selected" : ""}>${label(value)}</option>`).join("");
     library.addEventListener("beforetoggle", (event) => {
       setLibraryExpanded(event.newState === "open");
@@ -9733,7 +10347,7 @@ var init_floor_planner2 = __esm({
           if (!waiting) throw Object.assign(new Error("No rooms"), { code: "no_rooms_found" });
           if (!measured && !draftFromRecognition(answer.recognition, plan.underlay)?.scaled) {
             recognition.pending = answer;
-            showRecognition("idle", recognitionWaiting(copy, waiting, (value) => number.format(value)));
+            showRecognition("idle", recognitionWaiting(copy, waiting, (value) => number2.format(value)));
             return actions.scale_underlay();
           }
           addRecognisedRooms(answer, measured);

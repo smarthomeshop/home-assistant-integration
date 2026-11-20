@@ -203,10 +203,15 @@ function roomChange({ id, room, level, items }, previous, stored) {
             const height = sensor.mountHeight
                 ?? (mount === 'ceiling' && previous?.room.height === room.height ? source?.height_m : null)
                 ?? sensorMountHeight(sensor, room);
-            const { device_id: _legacyDevice, ...rest } = source ?? {};
+            const { device_id: _legacyDevice, tilt_deg: _tilt, installation: _installation, pan_deg: _pan, ...rest } = source ?? {};
             return {
                 ...rest, id: sourceId(sensor), deviceId: sensor.haDevice ?? null, x, y, rotation, mountingMode: mount,
                 x_m: metres(x), y_m: metres(y), orientation_deg: rotation, heightMm: millimetres(height), height_m: height,
+                // How far a wall sensor is tilted down, when it is.
+                ...(mount === 'wall' && sensor.tilt ? { tilt_deg: sensor.tilt } : {}),
+                // On its wall bracket, and how far it is turned on it from straight out of the wall.
+                ...(mount === 'wall' && sensor.installation === 'wall-bracket'
+                    ? { installation: 'wall-bracket', ...(sensor.pan ? { pan_deg: sensor.pan } : {}) } : {}),
             };
         })];
         if (record?.calibration?.enabled && record.calibration.sensorId

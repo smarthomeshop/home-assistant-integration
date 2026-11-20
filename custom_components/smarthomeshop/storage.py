@@ -371,7 +371,7 @@ class SmartHomeShopStore:
         fields = ("id", "name", "walls", "doors", "windows", "mirrors", "furniture", "zones", "house", "ceilingHeightMm",
                   "haAreaId", "haFloorId")
         source_fields = ("id", "deviceId", "device_id", "x", "y", "x_m", "y_m", "heightMm", "height_m",
-                         "rotation", "orientation_deg", "mountingMode")
+                         "rotation", "orientation_deg", "mountingMode", "tilt_deg", "installation", "pan_deg")
         geometry = [{**{key: room[key] for key in fields if key in room}, "sensors": [
             {key: source[key] for key in source_fields if key in source} for source in room.get("sensors", [])
         ]} for room in sorted(rooms, key=lambda room: room["id"])]

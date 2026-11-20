@@ -79,6 +79,38 @@ test('every planner shell can open and close a door and says what that does', ()
     }
 });
 
+test('every planner shell can turn and tilt a wall sensor', () => {
+    for (const { language, copy } of shells) {
+        for (const key of ['wall_sensor_height', 'wall_sensor_pan', 'wall_sensor_tilt', 'angle']) {
+            assert.ok(copy[key]?.trim(), `${language}.${key}`);
+            assert.doesNotMatch(copy[key], typographic, `${language}.${key}`);
+        }
+        // Both are angles, and the turn says which way is which.
+        assert.match(copy.wall_sensor_tilt, /\(\u00b0\)/, language);
+        assert.match(copy.wall_sensor_pan, /\(\u00b0\),/, language);
+        assert.notEqual(copy.wall_sensor_pan, copy.wall_sensor_tilt, language);
+        // The aim tool of the sensor dialog: two drawings, a slider under each and what it sees.
+        const aim = ['aim_top', 'aim_side', 'aim_hint', 'aim_turn', 'aim_tilt', 'aim_left', 'aim_right', 'aim_straight', 'aim_down', 'aim_up', 'aim_level',
+            'aim_reach', 'aim_reach_none'];
+        for (const key of aim) {
+            assert.ok(copy[key]?.trim(), `${language}.${key}`);
+            assert.doesNotMatch(copy[key], typographic, `${language}.${key}`);
+        }
+        for (const key of ['aim_left', 'aim_right', 'aim_down', 'aim_up']) assert.match(copy[key], /^:value\u00b0 /, `${language}.${key}`);
+        assert.ok(copy.aim_reach.includes(':from') && copy.aim_reach.includes(':to'), language);
+        assert.equal(new Set(aim.map(key => copy[key])).size, aim.length, language);
+        // The PIR of the UltimateSensor: what it is, what it sees and what it does not.
+        for (const key of ['sim_motion', 'sim_still', 'legend_motion', 'sensor_pir_range', 'aim_motion', 'pir_note']) {
+            assert.ok(copy[key]?.trim(), `${language}.${key}`);
+            assert.doesNotMatch(copy[key], typographic, `${language}.${key}`);
+        }
+        assert.ok(copy.aim_motion.includes(':to'), language);
+        assert.match(copy.sensor_pir_range, /12 m/, language);
+        assert.match(copy.pir_note, /Panasonic/, language);
+        assert.match(copy.legend_motion, /^PIR/, language);
+    }
+});
+
 test('every planner shell can zoom on the map and asks before a room is removed', () => {
     for (const { language, copy } of shells) {
         // The zoom bar on the map takes its names from the texts of the view menu.

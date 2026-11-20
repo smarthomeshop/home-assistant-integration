@@ -1,6 +1,6 @@
 import { ceilingHeightAt } from './floor-planner-ceiling.mjs';
 import { roomForDevice } from './floor-planner-model.mjs';
-import { ceilingProfiles, radarFields, radarOrigin, sensorMountHeight, wallSector } from './floor-planner-radar.mjs';
+import { beamSector, ceilingProfiles, radarFields, radarOrigin, sensorMountHeight, wallSector } from './floor-planner-radar.mjs';
 import { projectSpace } from './floor-planner-space.mjs';
 import { convexHull, polygonEdges, roomCorners, roomRayEnd, roomVisibility } from './floor-planner-geometry.mjs';
 import { prepareSight, sightPolygon, sightReach } from './floor-planner-sight.mjs';
@@ -46,6 +46,17 @@ function coneOutline(foot, apex) {
         .filter(points => Math.abs(turning(points)) > 1e-6).map(points => path(sameWay(points))).join('');
 }
 
+// A polygon cut off along a line: what is left on the side where `keep` is not negative.
+function cutPolygon(points, keep) {
+    return points.flatMap((point, index) => {
+        const next = points[(index + 1) % points.length];
+        const a = keep(point), b = keep(next);
+        const crossing = (a < 0) !== (b < 0)
+            ? [[point[0] + (next[0] - point[0]) * a / (a - b), point[1] + (next[1] - point[1]) * a / (a - b)]] : [];
+        return a >= 0 ? [point, ...crossing] : crossing;
+    });
+}
+
 function paintWallFan({ room, item, fields, sight = null }, camera, height, plane, floorId = '') {
     const clip = `fp-wall-${plane}-${floorId ? floorId + '_' : ''}${item.id}`;
     const points = sight ? sightPolygon(sight, radarOrigin(item), { height: sensorMountHeight(item, room) })
@@ -56,10 +67,38 @@ function paintWallFan({ room, item, fields, sight = null }, camera, height, plan
         ...projectSpace([0, 1], 0, camera, false),
         ...projectSpace([0, 0], height, camera, false),
     ];
+    const tilt = (item.tilt ?? 0) * Math.PI / 180;
+    if (plane === 'height' && tilt) {
+        // The fan leaves the radar along where it points. Its own plane is laid
+        // into the scene: sideways stays level, ahead goes down with the tilt.
+        const turn = item.angle * Math.PI / 180;
+        const [ax, ay, bx, by] = matrix;
+        const [, rise] = projectSpace([0, 0], 1, camera, false);
+        const flat = (x, y) => [ax * x + bx * y, ay * x + by * y];
+        const side = flat(Math.cos(turn), Math.sin(turn));
+        const ahead = flat(-Math.sin(turn) * Math.cos(tilt), Math.cos(turn) * Math.cos(tilt));
+        const start = flat(item.x, item.y);
+        const laid = [...side, ahead[0], ahead[1] + rise * Math.sin(tilt), start[0], start[1] + rise * height];
+        // The walls cut the fan off where they stand, whatever its slope.
+        // The floor does too, and the ceiling when the radar looks up.
+        const reach = Math.max(0, tilt > 0 ? height : room.height - height) / Math.sin(Math.abs(tilt));
+        const local = cutPolygon(points.map(([x, y]) => {
+            const dx = x - item.x, dy = y - item.y;
+            return [dx * Math.cos(turn) + dy * Math.sin(turn), (-dx * Math.sin(turn) + dy * Math.cos(turn)) / Math.cos(tilt)];
+        }), ([, ahead]) => ahead + reach).map(point => point.map(value => Number(value.toFixed(3))));
+        return `<g class="fp-wall-fan" data-plane="${plane}" data-sensor="${item.id}" data-tilted transform="matrix(${laid.map(value => Number(value.toFixed(4))).join(' ')})">
+            <defs><clipPath id="${clip}"><polygon points="${local.map(point => point.join(',')).join(' ')}"/></clipPath></defs>
+            <g clip-path="url(#${clip})">
+                ${fields.map(field => `<path class="fp-wall-sector" data-radar="${field.radar}" data-secondary="${Boolean(field.secondary)}" d="${beamSector(field)}"/>`).join('')}
+            </g>
+        </g>`;
+    }
+    // At the height of the radar the fan is as wide and as far as it sees; on the floor it is what it covers there.
+    const shape = plane === 'height' ? beamSector : wallSector;
     return `<g class="fp-wall-fan" data-plane="${plane}" data-sensor="${item.id}" transform="matrix(${matrix.join(' ')})">
         <defs><clipPath id="${clip}"><polygon points="${points.map(point => point.join(',')).join(' ')}"/></clipPath></defs>
         <g clip-path="url(#${clip})"><g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">
-            ${fields.map(field => `<path class="fp-wall-sector" data-radar="${field.radar}" data-secondary="${Boolean(field.secondary)}" d="${wallSector(field)}"/>`).join('')}
+            ${fields.map(field => `<path class="fp-wall-sector" data-radar="${field.radar}" data-secondary="${Boolean(field.secondary)}" d="${shape(field)}"/>`).join('')}
         </g></g>
     </g>`;
 }

@@ -1,5 +1,5 @@
 import { exampleWindows, furnitureParts } from './floor-planner-furniture.mjs';
-import { ceilingProfiles, radarFields, radarOrigin, sensorMountHeight, wallSector } from './floor-planner-radar.mjs';
+import { ceilingProfiles, motionField, radarFields, radarOrigin, sensorMountHeight, wallSector } from './floor-planner-radar.mjs';
 import { devices, roomForDevice } from './floor-planner-model.mjs';
 import { polygonEdges, roomArea, roomCorners, roomInteriorPoint } from './floor-planner-geometry.mjs';
 import { prepareSight, sightPolygon } from './floor-planner-sight.mjs';
@@ -54,9 +54,10 @@ export function paintFurniture(item, selected = false, interactive = true) {
 
 // The range of a sensor, cut off where it cannot see: at walls and closed
 // doors, and past an open door only as far as it looks through it.
-function coverage(item, room, isSelected, focus, radarOptions, sight) {
+function coverage(item, room, isSelected, focus, radarOptions, sight, motion = false) {
     const fields = radarFields(room, item, radarOptions);
     if (!fields.length) return '';
+    const lens = motion && room ? motionField(item) : null;
     const ceiling = devices[item.model].mount === 'ceiling';
     const shape = fields.map(field => {
         const style = field.secondary ? ' class="fp-secondary-range"' : '';
@@ -77,7 +78,7 @@ function coverage(item, room, isSelected, focus, radarOptions, sight) {
     </clipPath></defs>`;
     return `${clip}<g class="fp-range ${ceiling ? 'ceiling' : 'wall'} ${isSelected ? 'selected' : ''}"
         ${fields.some(field => field.estimatedHeight) ? 'data-height-estimate' : ''} clip-path="url(#${clipId})">
-        <g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">${shape}</g></g>`;
+        <g transform="translate(${item.x} ${item.y}) rotate(${item.angle})">${shape}${lens ? `<path class="fp-motion-range" d="${wallSector(lens)}"/>` : ''}</g></g>`;
 }
 
 export function paintPlacementPreview(plan, item, radarOptions) {
@@ -148,7 +149,7 @@ export const sensorMarkerAttributes = (item, index) =>
 // With casing, every room outline gets a wider line in the floor colour under
 // it. The editor asks for that while the floors are see-through on top of an
 // image, where the outline alone would fade into a light plan.
-export function paintPlan(plan, showCoverage, selected, number, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false } = {}) {
+export function paintPlan(plan, showCoverage, selected, number, focus = null, { measures = false, interactiveSensors = false, radarOptions, casing = false, motion = false } = {}) {
     const selectedClass = item => selected === item.id ? ' selected' : '';
     const activeSensor = plan.sensors.find(item => item.id === selected);
     const activeRoom = plan.rooms.find(room => room.id === selected) ?? (activeSensor && roomForDevice(plan.rooms, activeSensor));
@@ -183,7 +184,7 @@ export function paintPlan(plan, showCoverage, selected, number, focus = null, { 
     const clips = plan.rooms.map(room => `<clipPath id="clip-${room.id}">${paintRoomSurface(room)}</clipPath>`).join('');
     const sight = showCoverage ? prepareSight(plan) : null;
     const ranges = showCoverage ? plan.sensors.map(item =>
-        coverage(item, roomForDevice(plan.rooms, item), selected === item.id, focus, radarOptions, sight)).join('') : '';
+        coverage(item, roomForDevice(plan.rooms, item), selected === item.id, focus, radarOptions, sight, motion)).join('') : '';
     const outline = activeRoom && activeRoom.id === selected
         ? paintRoomSurface(activeRoom, 'class="fp-room-outline"') : '';
     const walls = plan.walls.map(wall => `<g class="fp-wall${selectedClass(wall)}" data-item="${wall.id}">
