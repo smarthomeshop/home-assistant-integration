@@ -17,6 +17,7 @@ import {
   createMirrorReflectionPolygon,
   filterReflectedTargets,
   pointInPolygon,
+  safelyOutsideRoom,
 } from '../utils/reflection-protection';
 import {
   normaliseRoomViewHeight,
@@ -1094,6 +1095,12 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
       .filter((wall: any) => Number.isFinite(Number(wall?.x1)) && Number.isFinite(Number(wall?.y1)))
       .map((wall: any) => ({ x: Number(wall.x1), y: Number(wall.y1) }));
     if (roomPoints.length < 3) return active;
+    // Walls that do not follow on from each other give no outline to judge "outside" by.
+    const walls = room.walls || [];
+    const closed = walls.every((wall: any, index: number) => {
+      const next = walls[(index + 1) % walls.length];
+      return Math.hypot(Number(wall?.x2) - Number(next?.x1), Number(wall?.y2) - Number(next?.y1)) < 1;
+    });
     const sensor = { x: Number(placement.x), y: Number(placement.y) };
     const rotation = ((Number.isFinite(Number(placement.rotation)) ? Number(placement.rotation) : 270) - 90)
       * Math.PI / 180;
@@ -1102,8 +1109,12 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
         x: sensor.x + target.y * Math.cos(rotation) - target.x * Math.sin(rotation),
         y: sensor.y + target.y * Math.sin(rotation) + target.x * Math.cos(rotation),
       };
+      // Like the room views: a target well outside the room is not a person in it.
+      if (closed && safelyOutsideRoom(roomTarget, roomPoints)) return false;
+      // An exclusion zone drawn for one sensor hides nothing for the others.
       const manualExclusions = (room.zones || [])
-        .filter((zone: any) => zone?.type === 'exclusion')
+        .filter((zone: any) => zone?.type === 'exclusion'
+          && (!(zone.sensorId || zone.sensor_id) || (zone.sensorId || zone.sensor_id) === placement.id))
         .flatMap((zone: any) => Array.isArray(zone.parts) && zone.parts.length ? zone.parts : [zone.points])
         .filter((points: any) => Array.isArray(points) && points.length >= 3);
       if (manualExclusions.some((points: Array<{ x: number; y: number }>) => pointInPolygon(roomTarget, points))) return false;
@@ -2039,7 +2050,7 @@ export class SmartHomeShopUltimateSensorCard extends LitElement {
             const centerY = p1.y + (p2.y - p1.y) * mirror.position;
             const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
             const halfWidth = Number(mirror.width || 1000) / 2;
-            const reflection = createMirrorReflectionPolygon(pts, mirror, sensorMm);
+            const reflection = createMirrorReflectionPolygon(pts, mirror, sensorMm)?.points;
             const reflectionPath = reflection
               ? `M ${reflection.map(point => `${point.x / 1000} ${point.y / 1000}`).join(' L ')} Z`
               : '';

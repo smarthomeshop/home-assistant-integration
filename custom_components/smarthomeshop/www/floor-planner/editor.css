@@ -1853,6 +1853,19 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron {
   fill: none;
   stroke-dasharray: 1.5 4;
 }
+.fp-mirror-wedge {
+  fill: #c2410c;
+  fill-opacity: .1;
+  stroke: #c2410c;
+  stroke-width: 1.2px;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.fp-mirror-wedge.selected {
+  fill-opacity: .22;
+  stroke-width: 1.8px;
+}
 .fp-range .fp-motion-range {
   fill: none;
   stroke: var(--fp-motion, #d9892b);

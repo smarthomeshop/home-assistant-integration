@@ -6,7 +6,7 @@ import {
     newId, radarNames, radarsFor, readDemo, roomForDevice, sameSensorPlacement, sensorPan, sensorTilt, snap, validPlan, wallColors, zoneTypes,
 } from './floor-planner-model.mjs';
 import { escapeText, paintFurniture, paintPlacementPreview, paintPlan } from './floor-planner-drawing.mjs';
-import { defaultWindowSill, edgePosition, maxRoomCorners, outlineBounds, polygonEdges, roomArea, roomCorners, roomInteriorPoint, roomWallEdges } from './floor-planner-geometry.mjs';
+import { defaultWindowSill, edgePosition, maxRoomCorners, outlineBounds, polygonEdges, roomArea, roomCorners, roomInteriorPoint, roomRayEnd, roomWallEdges } from './floor-planner-geometry.mjs';
 import { furnitureAt, furnitureCatalog, furnitureFootprint, furnitureMaterials, maxFurniture, withFurniture } from './floor-planner-furniture.mjs';
 import { defaultSpaceCamera, orbitSpaceCamera, paintBuilding, paintSpace, projectSpace, unprojectFloor } from './floor-planner-space.mjs';
 import { buildingFormat, floorLabel, localizeSampleRooms, maxFloors, moveRoomToFloor, roomContents, roomOpening, rotatedRoom, sampleBuilding, snapRoomOffset, translatedItem, validProject, wallOpeningPosition } from './floor-planner-building.mjs';
@@ -1394,21 +1394,58 @@ const field = (item, key, label, min, max, step) => `
 // Only Home Assistant knows which radars can see a mirror, so the reflection
 // filter is offered there and nowhere else.
 const mirrorReflectionCopy = {
-    en: ['Suppress mirror reflections', 'Reflection depth (m)', 'Creates a conservative exclusion behind this mirror for each linked radar. Real room space is never excluded automatically.'],
-    nl: ['Spiegelreflecties onderdrukken', 'Reflectiediepte (m)', 'Maakt per gekoppelde radar een veilige uitsluiting achter deze spiegel. Echte ruimte wordt nooit automatisch uitgesloten.'],
-    de: ['Spiegelreflexionen unterdrücken', 'Reflexionstiefe (m)', 'Erstellt pro verknüpftem Radar einen sicheren Ausschluss hinter diesem Spiegel. Echter Raum wird nie automatisch ausgeschlossen.'],
-    fr: ['Supprimer les reflets du miroir', 'Profondeur de réflexion (m)', "Crée une exclusion prudente derrière ce miroir pour chaque radar associé. L'espace réel n'est jamais exclu automatiquement."],
-    es: ['Suprimir reflejos del espejo', 'Profundidad de reflexión (m)', 'Crea una exclusión prudente detrás del espejo para cada radar vinculado. El espacio real nunca se excluye automáticamente.'],
+    en: ['Suppress mirror reflections', 'Reflection depth (m)', 'Creates a conservative exclusion behind this mirror for each linked radar. Real room space is never excluded automatically.',
+        'No radar with position tracking in this room looks at this mirror, so nothing is excluded yet.',
+        'A radar holds two exclusion areas. With this mirror a radar here needs more, and sending to the radars is refused until a zone or a mirror filter is removed.'],
+    nl: ['Spiegelreflecties onderdrukken', 'Reflectiediepte (m)', 'Maakt per gekoppelde radar een veilige uitsluiting achter deze spiegel. Echte ruimte wordt nooit automatisch uitgesloten.',
+        'Geen radar met positiebepaling in deze kamer kijkt naar deze spiegel, dus er wordt nog niets uitgesloten.',
+        'Een radar onthoudt twee uitsluitingsvlakken. Met deze spiegel heeft een radar hier er meer nodig, en verzenden naar de radars wordt geweigerd tot je een zone of een spiegelfilter weghaalt.'],
+    de: ['Spiegelreflexionen unterdrücken', 'Reflexionstiefe (m)', 'Erstellt pro verknüpftem Radar einen sicheren Ausschluss hinter diesem Spiegel. Echter Raum wird nie automatisch ausgeschlossen.',
+        'Kein Radar mit Positionserkennung in diesem Raum sieht diesen Spiegel, daher wird noch nichts ausgeschlossen.',
+        'Ein Radar speichert zwei Ausschlussflächen. Mit diesem Spiegel braucht ein Radar hier mehr, und das Senden an die Radare wird abgelehnt, bis eine Zone oder ein Spiegelfilter entfernt wird.'],
+    fr: ['Supprimer les reflets du miroir', 'Profondeur de réflexion (m)', "Crée une exclusion prudente derrière ce miroir pour chaque radar associé. L'espace réel n'est jamais exclu automatiquement.",
+        "Aucun radar de suivi dans cette pièce ne regarde ce miroir, donc rien n'est encore exclu.",
+        "Un radar retient deux zones d'exclusion. Avec ce miroir, un radar en demande plus ici. L'envoi aux radars est refusé tant qu'une zone ou un filtre de miroir n'est pas retiré."],
+    es: ['Suprimir reflejos del espejo', 'Profundidad de reflexión (m)', 'Crea una exclusión prudente detrás del espejo para cada radar vinculado. El espacio real nunca se excluye automáticamente.',
+        'Ningún radar de seguimiento de esta habitación mira a este espejo, así que todavía no se excluye nada.',
+        'Un radar guarda dos áreas de exclusión. Con este espejo, un radar necesita más aquí, y el envío a los radares se rechaza hasta que quites una zona o un filtro de espejo.'],
 };
+
+// A reflection lies as far behind a mirror as the person stands in front of
+// it, so the room in front of the mirror says how deep the filter has to look.
+function reflectionDepth(mirror) {
+    const room = plan.rooms.find(room => room.id === mirror.roomId);
+    if (!room) return 2;
+    const turn = mirror.angle * Math.PI / 180;
+    const middle = { x: mirror.x + Math.cos(turn) * mirror.width / 2, y: mirror.y + Math.sin(turn) * mirror.width / 2 };
+    const across = side => {
+        const [x, y] = roomRayEnd(room, middle, { x: middle.x - Math.sin(turn) * side * 80, y: middle.y + Math.cos(turn) * side * 80 });
+        return Math.hypot(x - middle.x, y - middle.y);
+    };
+    return Math.max(.25, Math.min(6, Math.round(Math.max(across(1), across(-1)) * 20) / 20));
+}
+
+// The areas the reflection filters hide, drawn behind their mirrors.
+function paintMirrorWedges() {
+    const protection = integration?.mirrorProtection?.(planForDrawing(plan));
+    return protection ? protection.wedges.map(({ mirrorId, sensorId, points }) =>
+        `<polygon class="fp-mirror-wedge${mirrorId === selected ? ' selected' : ''}" data-mirror="${mirrorId}" data-sensor="${sensorId}"
+            points="${points.map(point => point.join(',')).join(' ')}"/>`).join('') : '';
+}
 
 function mirrorSettings(item) {
     if (!integration) return `<p class="fp-note">${copy.mirror_note}</p>`;
-    const [label, depth, note] = mirrorReflectionCopy[document.documentElement.lang?.split('-')[0]] ?? mirrorReflectionCopy.en;
+    const [label, depth, note, unseen, crowded] = mirrorReflectionCopy[document.documentElement.lang?.split('-')[0]] ?? mirrorReflectionCopy.en;
     // Home Assistant uses 2 m until someone picks a depth, so show that here too.
     const depthField = field({ reflectionDepthM: item.reflectionDepthM ?? 2 }, 'reflectionDepthM', depth, .25, 6, 'any');
-    return `<label><input type="checkbox" data-field="protectionEnabled" ${item.protectionEnabled ? 'checked' : ''}> ${label}</label>
+    // Say so when the filter does nothing yet, or asks more of a radar than it can hold.
+    const protection = item.protectionEnabled ? integration.mirrorProtection?.(plan) : null;
+    const own = protection?.wedges.filter(wedge => wedge.mirrorId === item.id) ?? [];
+    const warning = !protection ? '' : !own.length ? unseen : own.some(wedge => protection.crowded.includes(wedge.sensorId)) ? crowded : '';
+    return `<label class="fp-climate-field"><input type="checkbox" data-field="protectionEnabled" ${item.protectionEnabled ? 'checked' : ''}> ${label}</label>
         ${item.protectionEnabled ? depthField : ''}
-        <p class="fp-note">${item.protectionEnabled ? note : copy.mirror_note}</p>`;
+        <p class="fp-note">${item.protectionEnabled ? note : copy.mirror_note}</p>
+        ${warning ? `<p class="fp-note fp-warning">${escapeText(warning)}</p>` : ''}`;
 }
 
 const heightField = (key, label, value) => `<label>${label}
@@ -2417,7 +2454,7 @@ function renderBeam() {
             focus && { ...focus, profile }, { measures: showMeasures, interactiveSensors: true, radarOptions: coverageRadarOptions,
                 casing: Boolean(plan.underlay), motion: Boolean(copy.sim_motion) })
             + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : '')
-            + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ''));
+            + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : '') + paintMirrorWedges());
     }
     else if (layer) layer.innerHTML = focus ? paintBeam(focus, spaceCamera, profile) : '';
     const panelKey = `${key}:${beamChoice}`;
@@ -2595,14 +2632,15 @@ function renderPerson() {
         + (reading.motion ? `,${Number(reading.motion.seen)}${Number(reading.motion.still)}` : '')).join('/');
     if (readingKey === key) return;
     readingKey = key;
-    element('fp-sim-sensors').innerHTML = readings.map(({ item, index, signals, motion, seen, obstacle }) => `<li>
+    element('fp-sim-sensors').innerHTML = readings.map(({ item, index, room: home, signals, motion, seen, obstacle }) => `<li>
         <div class="fp-sim-device"><span class="fp-index ${devices[item.model].mount}">${String(index + 1).padStart(2, '0')}</span>
             <strong>${devices[item.model].name}</strong><span class="fp-sim-light" data-seen="${seen}" aria-hidden="true"></span></div>
         ${signals.length ? signals.map(signal => `<div class="fp-sim-signal">
             <span>${signal.radar.toUpperCase()} · ${signal.profiles ? copy['beam_' + (person.pose === 'lying' ? 'lying' : profile)] : copy['sim_' + signal.mode]}</span>
             <span data-seen="${signal.seen}" data-status="${signal.obstacle?.status ?? ''}">${signal.obstacle ? copy['sim_' + signal.obstacle.status] : signal.exclusion ? copy.sim_excluded : signal.seen ? copy.sim_seen : copy.sim_missed}</span>
         </div>${signal.height === null ? '' : `<p class="fp-sim-height">Z · ${copy['sim_' + person.pose]} · ${copy.sim_height.replace(':height', number.format(signal.height))}</p>`}`).join('')
-            : `<p class="fp-note">${copy.sim_no_profile}</p>`}
+            : `<p class="fp-note">${escapeText(String(sensorNote(item, home) || copy.sim_no_profile))}</p>`}
+        ${signals.some(signal => signal.estimatedHeight) ? `<p class="fp-note fp-sim-estimate">${escapeText(coverageEstimateLabel)}</p>` : ''}
         ${motion && copy.sim_motion ? `<div class="fp-sim-signal fp-sim-motion"><span>PIR · ${copy.sim_motion}</span>
             <span data-seen="${motion.seen}">${motion.seen ? copy.sim_seen : motion.still ? copy.sim_still : copy.sim_missed}</span></div>` : ''}
         ${obstacle ? `<p class="fp-obstacle-name" data-status="${obstacle.status}">${escapeText(obstacle.name)}</p>` : ''}
@@ -5172,6 +5210,9 @@ function updateField(input) {
     } else {
         item[key] = key === 'sensorId' ? value || null : value;
     }
+    // A filter that is switched on starts as deep as the room in front of its mirror.
+    // The 2 m it may carry is what was filled in before anybody chose a depth.
+    if (type === 'mirrors' && key === 'protectionEnabled' && value && [undefined, 2].includes(item.reflectionDepthM)) item.reflectionDepthM = reflectionDepth(item);
     // A sensor that looks level, or straight out of its wall, carries no tilt or turn.
     if (type === 'sensors') {
         if (!item.tilt) delete item.tilt;

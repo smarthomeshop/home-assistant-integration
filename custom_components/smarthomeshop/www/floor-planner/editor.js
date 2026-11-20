@@ -9,20 +9,217 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// src/css/floor-planner.css
-var init_floor_planner = __esm({
-  "src/css/floor-planner.css"() {
+// src/js/floor-planner-geometry.mjs
+function convexHull(points) {
+  if (points.length < 3) return points;
+  const sorted = [...points].sort(([ax, ay], [bx, by]) => ax - bx || ay - by);
+  const half = (ordered) => {
+    const edge = [];
+    for (const point3 of ordered) {
+      while (edge.length > 1) {
+        const [ax, ay] = edge.at(-2), [bx, by] = edge.at(-1);
+        if (cross(bx - ax, by - ay, point3[0] - ax, point3[1] - ay) > 0) break;
+        edge.pop();
+      }
+      edge.push(point3);
+    }
+    return edge.slice(0, -1);
+  };
+  return [...half(sorted), ...half(sorted.reverse())];
+}
+function roomWallEdges(room) {
+  const corners = roomCorners(room);
+  return polygonEdges(corners.filter((point3, index) => !onSegment(
+    point3,
+    corners[(index + corners.length - 1) % corners.length],
+    corners[(index + 1) % corners.length]
+  )));
+}
+function polygonContains(vertices, x, y, includeEdge = true) {
+  let inside = false;
+  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+    const a = vertices[j], b = vertices[i];
+    if (onSegment([x, y], a, b)) return includeEdge;
+    if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+function roomContains(room, point3, includeEdge = true) {
+  const x = point3.x - room.x, y = point3.y - room.y;
+  if (!room.outline) return includeEdge ? point3.x >= room.x && point3.y >= room.y && point3.x <= room.x + room.width && point3.y <= room.y + room.depth : x > epsilon && y > epsilon && x < room.width - epsilon && y < room.depth - epsilon;
+  if (x < -epsilon || y < -epsilon || x > room.width + epsilon || y > room.depth + epsilon) return false;
+  return polygonContains(room.outline, x, y, includeEdge);
+}
+function crossing(a, b, c, d) {
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]], [ex, ey] = [d[0] - c[0], d[1] - c[1]];
+  const determinant = cross(dx, dy, ex, ey);
+  if (Math.abs(determinant) < epsilon) return null;
+  const [x, y] = [c[0] - a[0], c[1] - a[1]];
+  const t = cross(x, y, ex, ey) / determinant, u = cross(x, y, dx, dy) / determinant;
+  return t >= -epsilon && t <= 1 + epsilon && u >= -epsilon && u <= 1 + epsilon ? Math.max(0, Math.min(1, t)) : null;
+}
+function outlineBounds(points, { maxCorners = maxRoomCorners, minSpan = 0.5, maxSpan = 60, minArea = 0.1 } = {}) {
+  if (points.length < 3 || points.length > maxCorners || points.some((point3) => !Array.isArray(point3) || point3.length !== 2 || !point3.every(Number.isFinite))) return null;
+  const xs = points.map(([x2]) => x2), ys = points.map(([, y2]) => y2);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  const width = Math.max(...xs) - x, depth = Math.max(...ys) - y;
+  const area = signedArea(points);
+  if (width < minSpan || depth < minSpan || width > maxSpan || depth > maxSpan || Math.abs(area) < minArea) return null;
+  const edges = polygonEdges(points);
+  for (let i = 0; i < edges.length; i++) {
+    const [a, b] = edges[i];
+    if (samePoint(a, b)) return null;
+    const c = edges[(i + 1) % edges.length][1];
+    if (onSegment(c, a, b) || onSegment(a, b, c)) return null;
+    for (let j = i + 2; j < edges.length; j++) {
+      if (i === 0 && j === edges.length - 1) continue;
+      const [c2, d] = edges[j];
+      if (crossing(a, b, c2, d) !== null || onSegment(a, c2, d) || onSegment(b, c2, d) || onSegment(c2, a, b) || onSegment(d, a, b)) return null;
+    }
+  }
+  const outline = (area > 0 ? points : [points[0], ...points.slice(1).reverse()]).map(([px, py]) => [px - x, py - y]);
+  return { x, y, width, depth, outline };
+}
+function validRoomOutline(room) {
+  if (!Array.isArray(room.outline)) return false;
+  const bounds = outlineBounds(room.outline);
+  return Boolean(bounds && Math.abs(bounds.x) < epsilon && Math.abs(bounds.y) < epsilon && Math.abs(bounds.width - room.width) < epsilon && Math.abs(bounds.depth - room.depth) < epsilon && signedArea(room.outline) > 0);
+}
+function roomLineSpans(room, from, to, includeEdge = true) {
+  const a = [from.x, from.y], b = [to.x, to.y];
+  const cuts = [0, 1];
+  for (const [c, d] of polygonEdges(roomCorners(room))) {
+    const t = crossing(a, b, c, d);
+    if (t !== null) cuts.push(t);
+  }
+  cuts.sort((a2, b2) => a2 - b2);
+  const spans = [];
+  for (let i = 1; i < cuts.length; i++) {
+    const start3 = cuts[i - 1], end2 = cuts[i];
+    if (end2 - start3 < epsilon) continue;
+    const middle = (start3 + end2) / 2;
+    if (roomContains(room, { x: a[0] + (b[0] - a[0]) * middle, y: a[1] + (b[1] - a[1]) * middle }, includeEdge)) {
+      if (spans.length && start3 - spans.at(-1)[1] < epsilon) spans.at(-1)[1] = end2;
+      else spans.push([start3, end2]);
+    }
+  }
+  return spans;
+}
+function roomRayEnd(room, origin, target, edges = polygonEdges(roomCorners(room))) {
+  const a = [origin.x, origin.y], b = [target.x, target.y];
+  let limit = 1;
+  if (!roomContains(room, { x: origin.x + (target.x - origin.x) * 1e-5, y: origin.y + (target.y - origin.y) * 1e-5 })) limit = 0;
+  else for (const [c, d] of edges) {
+    const t = crossing(a, b, c, d);
+    if (t !== null && t > epsilon) limit = Math.min(limit, t);
+  }
+  return [a[0] + (b[0] - a[0]) * limit, a[1] + (b[1] - a[1]) * limit];
+}
+function roomVisibility(room, origin) {
+  const corners = roomCorners(room);
+  const edges = polygonEdges(corners);
+  const distance4 = Math.hypot(room.width, room.depth) + 1;
+  const angles2 = corners.flatMap(([x, y]) => {
+    const angle2 = Math.atan2(y - origin.y, x - origin.x);
+    return [angle2 - 1e-5, angle2, angle2 + 1e-5];
+  }).map((angle2) => (angle2 + Math.PI * 2) % (Math.PI * 2)).sort((a, b) => a - b);
+  return angles2.map((angle2) => roomRayEnd(room, origin, {
+    x: origin.x + Math.cos(angle2) * distance4,
+    y: origin.y + Math.sin(angle2) * distance4
+  }, edges));
+}
+function roomInteriorPoint(room, preferred = { x: room.x + room.width / 2, y: room.y + room.depth / 2 }) {
+  if (!room.outline || roomContains(room, preferred, false)) return preferred;
+  const levels = [...new Set(room.outline.map(([, y]) => y))].sort((a, b) => a - b);
+  let best = preferred, score = 0;
+  for (let i = 1; i < levels.length; i++) {
+    const y = room.y + (levels[i - 1] + levels[i]) / 2;
+    for (const [left, right] of roomLineSpans(room, { x: room.x, y }, { x: room.x + room.width, y })) {
+      const weight = (right - left) * (levels[i] - levels[i - 1]);
+      if (weight <= score) continue;
+      best = { x: room.x + (left + right) * room.width / 2, y };
+      score = weight;
+    }
+  }
+  return best;
+}
+function edgePosition([ax, ay], [bx, by], point3) {
+  const dx = bx - ax, dy = by - ay;
+  const length = Math.hypot(dx, dy);
+  const along = Math.max(0, Math.min(length, ((point3.x - ax) * dx + (point3.y - ay) * dy) / length));
+  const angle2 = Math.atan2(dy, dx) * 180 / Math.PI;
+  return {
+    x: ax + dx * along / length,
+    y: ay + dy * along / length,
+    along,
+    length,
+    facing: (angle2 + 540) % 360,
+    angle: (angle2 + 360) % 360,
+    a: [ax, ay],
+    b: [bx, by]
+  };
+}
+function wallSegments(a, b, doors, reach2 = 0.04) {
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+  const length = Math.hypot(dx, dy);
+  const position = ([x, y]) => ((x - a[0]) * dx + (y - a[1]) * dy) / length ** 2;
+  const onLine = ([x, y]) => Math.abs((x - a[0]) * dy - (y - a[1]) * dx) / length < reach2;
+  const openings = doors.filter((door) => door.every(onLine)).map((door) => door.map(position).sort((a2, b2) => a2 - b2)).filter(([from, to]) => to > 0 && from < 1).sort(([a2], [b2]) => a2 - b2);
+  const at = (fraction) => [a[0] + dx * fraction, a[1] + dy * fraction];
+  const segments = [];
+  let end2 = 0;
+  for (const [from, to] of openings) {
+    if (from > end2) segments.push([at(end2), at(from)]);
+    end2 = Math.max(end2, to);
+  }
+  if (end2 < 1) segments.push([at(end2), b]);
+  return segments;
+}
+var epsilon, maxRoomCorners, defaultWindowSill, rectangle, roomCorners, polygonEdges, cross, signedArea, roomArea, samePoint, onSegment, pointInOutline, roomContainsLine, doorsOnPlan;
+var init_floor_planner_geometry = __esm({
+  "src/js/floor-planner-geometry.mjs"() {
+    epsilon = 1e-7;
+    maxRoomCorners = 64;
+    defaultWindowSill = 1.15;
+    rectangle = (room) => [
+      [room.x, room.y],
+      [room.x + room.width, room.y],
+      [room.x + room.width, room.y + room.depth],
+      [room.x, room.y + room.depth]
+    ];
+    roomCorners = (room) => room.outline?.map(([x, y]) => [x + room.x, y + room.y]) ?? rectangle(room);
+    polygonEdges = (points) => points.map((point3, index) => [point3, points[(index + 1) % points.length]]);
+    cross = (ax, ay, bx, by) => ax * by - ay * bx;
+    signedArea = (points) => polygonEdges(points).reduce((area, [[ax, ay], [bx, by]]) => area + ax * by - ay * bx, 0) / 2;
+    roomArea = (room) => room.outline ? Math.abs(signedArea(room.outline)) : room.width * room.depth;
+    samePoint = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < epsilon;
+    onSegment = ([x, y], [ax, ay], [bx, by]) => Math.abs(cross(bx - ax, by - ay, x - ax, y - ay)) < epsilon && x >= Math.min(ax, bx) - epsilon && x <= Math.max(ax, bx) + epsilon && y >= Math.min(ay, by) - epsilon && y <= Math.max(ay, by) + epsilon;
+    pointInOutline = (vertices, point3) => polygonContains(vertices, point3.x, point3.y);
+    roomContainsLine = (room, from, to) => {
+      const spans = roomLineSpans(room, from, to);
+      return spans[0]?.[0] < epsilon && spans[0][1] > 1 - epsilon;
+    };
+    doorsOnPlan = (plan2) => plan2.doors.map((door) => {
+      const angle2 = door.angle * Math.PI / 180;
+      return [[door.x, door.y], [door.x + door.width * Math.cos(angle2), door.y + door.width * Math.sin(angle2)]];
+    });
   }
 });
 
 // src/js/ceilsense-room-model.mjs
+function reachAbove(radius, top, height, body) {
+  const reach2 = Math.hypot(radius, top - body);
+  return Math.sqrt(Math.max(0, reach2 ** 2 - (height - body) ** 2));
+}
 function radarFootprint(radar, height) {
   if (radar === "combined") return radarFootprint("ld6002b", height);
   if (radar === "ld2412") {
+    const [, top] = mountingRanges.ld2412;
+    const footprint2 = (posture, radii2) => scale(Math.min(height, top), 2.8, radii2).map((radius) => height > top ? reachAbove(radius, top, height, bodyHeight[posture]) : radius);
     return {
-      moving: scale(height, 2.8, [4.8, 6.4]),
-      standing: scale(height, 2.8, [4.4, 5.6]),
-      seated: scale(height, 2.8, [3, 4.2])
+      moving: footprint2("moving", [4.8, 6.4]),
+      standing: footprint2("standing", [4.4, 5.6]),
+      seated: footprint2("seated", [3, 4.2])
     };
   }
   const radii = radar === "ld2460" ? scale(height, 2.8, [4, 2.8]) : height < 2.7 ? scale(height, 2.7, [2.5, 1.5]) : height <= 3 ? [1.5 + (3 - height) / 0.3, 1.5] : scale(height, 3, [1.5, 1.5]);
@@ -41,7 +238,7 @@ function mountingRange(radar) {
   const [positionMin, positionMax] = mountingRanges.ld6002b;
   return [Math.max(presenceMin, positionMin), Math.min(presenceMax, positionMax)];
 }
-var roomLimits, mountingRanges, plannerRadars, modelGoal, slots, scale;
+var roomLimits, mountingRanges, plannerRadars, modelGoal, slots, scale, bodyHeight;
 var init_ceilsense_room_model = __esm({
   "src/js/ceilsense-room-model.mjs"() {
     roomLimits = { width: [2, 15], depth: [2, 12], height: [2, 4] };
@@ -53,48 +250,7 @@ var init_ceilsense_room_model = __esm({
       const factor = Math.min(height / reference, reference / height);
       return radii.map((radius) => radius * factor);
     };
-  }
-});
-
-// src/js/ceilsense-planner.js
-function formatPlannerLink({ width, depth, height, radar, obstacles, count, priority, positions }) {
-  const pair = ({ x, y }) => [x, y].map((value) => Number(value.toFixed(4)));
-  const points = positions.flatMap((position) => [...pair(position), Number(Boolean(position.rotated))]);
-  return "cs-room=" + [
-    "v3",
-    width,
-    depth,
-    height,
-    radar,
-    Number(Boolean(obstacles)),
-    count,
-    ...pair(priority || { x: 0, y: 0 }),
-    ...points
-  ].join(",");
-}
-function parsePlannerLink(hash) {
-  if (!hash.startsWith("#cs-room=") || hash.length > 180) return null;
-  const [version, width, depth, height, radar, obstacles, choice2, ...layout2] = hash.slice(9).split(",");
-  if (version !== "v3" && version !== "v2") return null;
-  const legacy = version === "v2";
-  const [oldRotation, px, py, ...points] = legacy ? layout2 : [null, ...layout2];
-  const stride = legacy ? 2 : 3;
-  const room = { width: Number(width), depth: Number(depth), height: Number(height) };
-  const count = Number(choice2);
-  const validPoint = (value) => Number(value) >= 0.05 && Number(value) <= 0.95;
-  const priority = px === "0" && py === "0" ? null : { x: Number(px), y: Number(py) };
-  if (!validRoom(room) || !plannerRadars.includes(radar) || !["0", "1"].includes(obstacles) || legacy && !["0", "1"].includes(oldRotation) || ![0, 1, 2, 3].includes(count) || ![1, 2, 3].includes(points.length / stride) || count && points.length !== count * stride || priority && ![px, py].every(validPoint)) return null;
-  const positions = [];
-  for (let i = 0; i < points.length; i += stride) {
-    const [x, y, rotated] = points.slice(i, i + stride);
-    if (![x, y].every((value) => value?.trim() && Number(value) >= 0 && Number(value) <= 1) || !legacy && !["0", "1"].includes(rotated)) return null;
-    positions.push({ x: Number(x), y: Number(y), rotated: (legacy ? oldRotation : rotated) === "1" });
-  }
-  return { ...room, radar, obstacles: obstacles === "1", count, priority, positions };
-}
-var init_ceilsense_planner = __esm({
-  "src/js/ceilsense-planner.js"() {
-    init_ceilsense_room_model();
+    bodyHeight = { moving: 1.35, standing: 1.35, seated: 0.85 };
   }
 });
 
@@ -321,203 +477,6 @@ var init_floor_planner_furniture = __esm({
       study: [[0.32, 1, 0.75, 1]]
     };
     exampleWindows = (room) => Object.hasOwn(windows, room.id) ? windows[room.id] : [];
-  }
-});
-
-// src/js/floor-planner-geometry.mjs
-function convexHull(points) {
-  if (points.length < 3) return points;
-  const sorted = [...points].sort(([ax, ay], [bx, by]) => ax - bx || ay - by);
-  const half = (ordered) => {
-    const edge = [];
-    for (const point3 of ordered) {
-      while (edge.length > 1) {
-        const [ax, ay] = edge.at(-2), [bx, by] = edge.at(-1);
-        if (cross(bx - ax, by - ay, point3[0] - ax, point3[1] - ay) > 0) break;
-        edge.pop();
-      }
-      edge.push(point3);
-    }
-    return edge.slice(0, -1);
-  };
-  return [...half(sorted), ...half(sorted.reverse())];
-}
-function roomWallEdges(room) {
-  const corners = roomCorners(room);
-  return polygonEdges(corners.filter((point3, index) => !onSegment(
-    point3,
-    corners[(index + corners.length - 1) % corners.length],
-    corners[(index + 1) % corners.length]
-  )));
-}
-function polygonContains(vertices, x, y, includeEdge = true) {
-  let inside = false;
-  for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
-    const a = vertices[j], b = vertices[i];
-    if (onSegment([x, y], a, b)) return includeEdge;
-    if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
-  }
-  return inside;
-}
-function roomContains(room, point3, includeEdge = true) {
-  const x = point3.x - room.x, y = point3.y - room.y;
-  if (!room.outline) return includeEdge ? point3.x >= room.x && point3.y >= room.y && point3.x <= room.x + room.width && point3.y <= room.y + room.depth : x > epsilon && y > epsilon && x < room.width - epsilon && y < room.depth - epsilon;
-  if (x < -epsilon || y < -epsilon || x > room.width + epsilon || y > room.depth + epsilon) return false;
-  return polygonContains(room.outline, x, y, includeEdge);
-}
-function crossing(a, b, c, d) {
-  const [dx, dy] = [b[0] - a[0], b[1] - a[1]], [ex, ey] = [d[0] - c[0], d[1] - c[1]];
-  const determinant = cross(dx, dy, ex, ey);
-  if (Math.abs(determinant) < epsilon) return null;
-  const [x, y] = [c[0] - a[0], c[1] - a[1]];
-  const t = cross(x, y, ex, ey) / determinant, u = cross(x, y, dx, dy) / determinant;
-  return t >= -epsilon && t <= 1 + epsilon && u >= -epsilon && u <= 1 + epsilon ? Math.max(0, Math.min(1, t)) : null;
-}
-function outlineBounds(points, { maxCorners = maxRoomCorners, minSpan = 0.5, maxSpan = 60, minArea = 0.1 } = {}) {
-  if (points.length < 3 || points.length > maxCorners || points.some((point3) => !Array.isArray(point3) || point3.length !== 2 || !point3.every(Number.isFinite))) return null;
-  const xs = points.map(([x2]) => x2), ys = points.map(([, y2]) => y2);
-  const x = Math.min(...xs), y = Math.min(...ys);
-  const width = Math.max(...xs) - x, depth = Math.max(...ys) - y;
-  const area = signedArea(points);
-  if (width < minSpan || depth < minSpan || width > maxSpan || depth > maxSpan || Math.abs(area) < minArea) return null;
-  const edges = polygonEdges(points);
-  for (let i = 0; i < edges.length; i++) {
-    const [a, b] = edges[i];
-    if (samePoint(a, b)) return null;
-    const c = edges[(i + 1) % edges.length][1];
-    if (onSegment(c, a, b) || onSegment(a, b, c)) return null;
-    for (let j = i + 2; j < edges.length; j++) {
-      if (i === 0 && j === edges.length - 1) continue;
-      const [c2, d] = edges[j];
-      if (crossing(a, b, c2, d) !== null || onSegment(a, c2, d) || onSegment(b, c2, d) || onSegment(c2, a, b) || onSegment(d, a, b)) return null;
-    }
-  }
-  const outline = (area > 0 ? points : [points[0], ...points.slice(1).reverse()]).map(([px, py]) => [px - x, py - y]);
-  return { x, y, width, depth, outline };
-}
-function validRoomOutline(room) {
-  if (!Array.isArray(room.outline)) return false;
-  const bounds = outlineBounds(room.outline);
-  return Boolean(bounds && Math.abs(bounds.x) < epsilon && Math.abs(bounds.y) < epsilon && Math.abs(bounds.width - room.width) < epsilon && Math.abs(bounds.depth - room.depth) < epsilon && signedArea(room.outline) > 0);
-}
-function roomLineSpans(room, from, to, includeEdge = true) {
-  const a = [from.x, from.y], b = [to.x, to.y];
-  const cuts = [0, 1];
-  for (const [c, d] of polygonEdges(roomCorners(room))) {
-    const t = crossing(a, b, c, d);
-    if (t !== null) cuts.push(t);
-  }
-  cuts.sort((a2, b2) => a2 - b2);
-  const spans = [];
-  for (let i = 1; i < cuts.length; i++) {
-    const start3 = cuts[i - 1], end2 = cuts[i];
-    if (end2 - start3 < epsilon) continue;
-    const middle = (start3 + end2) / 2;
-    if (roomContains(room, { x: a[0] + (b[0] - a[0]) * middle, y: a[1] + (b[1] - a[1]) * middle }, includeEdge)) {
-      if (spans.length && start3 - spans.at(-1)[1] < epsilon) spans.at(-1)[1] = end2;
-      else spans.push([start3, end2]);
-    }
-  }
-  return spans;
-}
-function roomRayEnd(room, origin, target, edges = polygonEdges(roomCorners(room))) {
-  const a = [origin.x, origin.y], b = [target.x, target.y];
-  let limit = 1;
-  if (!roomContains(room, { x: origin.x + (target.x - origin.x) * 1e-5, y: origin.y + (target.y - origin.y) * 1e-5 })) limit = 0;
-  else for (const [c, d] of edges) {
-    const t = crossing(a, b, c, d);
-    if (t !== null && t > epsilon) limit = Math.min(limit, t);
-  }
-  return [a[0] + (b[0] - a[0]) * limit, a[1] + (b[1] - a[1]) * limit];
-}
-function roomVisibility(room, origin) {
-  const corners = roomCorners(room);
-  const edges = polygonEdges(corners);
-  const distance4 = Math.hypot(room.width, room.depth) + 1;
-  const angles2 = corners.flatMap(([x, y]) => {
-    const angle2 = Math.atan2(y - origin.y, x - origin.x);
-    return [angle2 - 1e-5, angle2, angle2 + 1e-5];
-  }).map((angle2) => (angle2 + Math.PI * 2) % (Math.PI * 2)).sort((a, b) => a - b);
-  return angles2.map((angle2) => roomRayEnd(room, origin, {
-    x: origin.x + Math.cos(angle2) * distance4,
-    y: origin.y + Math.sin(angle2) * distance4
-  }, edges));
-}
-function roomInteriorPoint(room, preferred = { x: room.x + room.width / 2, y: room.y + room.depth / 2 }) {
-  if (!room.outline || roomContains(room, preferred, false)) return preferred;
-  const levels = [...new Set(room.outline.map(([, y]) => y))].sort((a, b) => a - b);
-  let best = preferred, score = 0;
-  for (let i = 1; i < levels.length; i++) {
-    const y = room.y + (levels[i - 1] + levels[i]) / 2;
-    for (const [left, right] of roomLineSpans(room, { x: room.x, y }, { x: room.x + room.width, y })) {
-      const weight = (right - left) * (levels[i] - levels[i - 1]);
-      if (weight <= score) continue;
-      best = { x: room.x + (left + right) * room.width / 2, y };
-      score = weight;
-    }
-  }
-  return best;
-}
-function edgePosition([ax, ay], [bx, by], point3) {
-  const dx = bx - ax, dy = by - ay;
-  const length = Math.hypot(dx, dy);
-  const along = Math.max(0, Math.min(length, ((point3.x - ax) * dx + (point3.y - ay) * dy) / length));
-  const angle2 = Math.atan2(dy, dx) * 180 / Math.PI;
-  return {
-    x: ax + dx * along / length,
-    y: ay + dy * along / length,
-    along,
-    length,
-    facing: (angle2 + 540) % 360,
-    angle: (angle2 + 360) % 360,
-    a: [ax, ay],
-    b: [bx, by]
-  };
-}
-function wallSegments(a, b, doors, reach2 = 0.04) {
-  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-  const length = Math.hypot(dx, dy);
-  const position = ([x, y]) => ((x - a[0]) * dx + (y - a[1]) * dy) / length ** 2;
-  const onLine = ([x, y]) => Math.abs((x - a[0]) * dy - (y - a[1]) * dx) / length < reach2;
-  const openings = doors.filter((door) => door.every(onLine)).map((door) => door.map(position).sort((a2, b2) => a2 - b2)).filter(([from, to]) => to > 0 && from < 1).sort(([a2], [b2]) => a2 - b2);
-  const at = (fraction) => [a[0] + dx * fraction, a[1] + dy * fraction];
-  const segments = [];
-  let end2 = 0;
-  for (const [from, to] of openings) {
-    if (from > end2) segments.push([at(end2), at(from)]);
-    end2 = Math.max(end2, to);
-  }
-  if (end2 < 1) segments.push([at(end2), b]);
-  return segments;
-}
-var epsilon, maxRoomCorners, defaultWindowSill, rectangle, roomCorners, polygonEdges, cross, signedArea, roomArea, samePoint, onSegment, pointInOutline, roomContainsLine, doorsOnPlan;
-var init_floor_planner_geometry = __esm({
-  "src/js/floor-planner-geometry.mjs"() {
-    epsilon = 1e-7;
-    maxRoomCorners = 64;
-    defaultWindowSill = 1.15;
-    rectangle = (room) => [
-      [room.x, room.y],
-      [room.x + room.width, room.y],
-      [room.x + room.width, room.y + room.depth],
-      [room.x, room.y + room.depth]
-    ];
-    roomCorners = (room) => room.outline?.map(([x, y]) => [x + room.x, y + room.y]) ?? rectangle(room);
-    polygonEdges = (points) => points.map((point3, index) => [point3, points[(index + 1) % points.length]]);
-    cross = (ax, ay, bx, by) => ax * by - ay * bx;
-    signedArea = (points) => polygonEdges(points).reduce((area, [[ax, ay], [bx, by]]) => area + ax * by - ay * bx, 0) / 2;
-    roomArea = (room) => room.outline ? Math.abs(signedArea(room.outline)) : room.width * room.depth;
-    samePoint = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < epsilon;
-    onSegment = ([x, y], [ax, ay], [bx, by]) => Math.abs(cross(bx - ax, by - ay, x - ax, y - ay)) < epsilon && x >= Math.min(ax, bx) - epsilon && x <= Math.max(ax, bx) + epsilon && y >= Math.min(ay, by) - epsilon && y <= Math.max(ay, by) + epsilon;
-    pointInOutline = (vertices, point3) => polygonContains(vertices, point3.x, point3.y);
-    roomContainsLine = (room, from, to) => {
-      const spans = roomLineSpans(room, from, to);
-      return spans[0]?.[0] < epsilon && spans[0][1] > 1 - epsilon;
-    };
-    doorsOnPlan = (plan2) => plan2.doors.map((door) => {
-      const angle2 = door.angle * Math.PI / 180;
-      return [[door.x, door.y], [door.x + door.width * Math.cos(angle2), door.y + door.width * Math.sin(angle2)]];
-    });
   }
 });
 
@@ -872,6 +831,54 @@ var init_floor_planner_model = __esm({
   }
 });
 
+// src/css/floor-planner.css
+var init_floor_planner = __esm({
+  "src/css/floor-planner.css"() {
+  }
+});
+
+// src/js/ceilsense-planner.js
+function formatPlannerLink({ width, depth, height, radar, obstacles, count, priority, positions }) {
+  const pair = ({ x, y }) => [x, y].map((value) => Number(value.toFixed(4)));
+  const points = positions.flatMap((position) => [...pair(position), Number(Boolean(position.rotated))]);
+  return "cs-room=" + [
+    "v3",
+    width,
+    depth,
+    height,
+    radar,
+    Number(Boolean(obstacles)),
+    count,
+    ...pair(priority || { x: 0, y: 0 }),
+    ...points
+  ].join(",");
+}
+function parsePlannerLink(hash) {
+  if (!hash.startsWith("#cs-room=") || hash.length > 180) return null;
+  const [version, width, depth, height, radar, obstacles, choice2, ...layout2] = hash.slice(9).split(",");
+  if (version !== "v3" && version !== "v2") return null;
+  const legacy = version === "v2";
+  const [oldRotation, px, py, ...points] = legacy ? layout2 : [null, ...layout2];
+  const stride = legacy ? 2 : 3;
+  const room = { width: Number(width), depth: Number(depth), height: Number(height) };
+  const count = Number(choice2);
+  const validPoint = (value) => Number(value) >= 0.05 && Number(value) <= 0.95;
+  const priority = px === "0" && py === "0" ? null : { x: Number(px), y: Number(py) };
+  if (!validRoom(room) || !plannerRadars.includes(radar) || !["0", "1"].includes(obstacles) || legacy && !["0", "1"].includes(oldRotation) || ![0, 1, 2, 3].includes(count) || ![1, 2, 3].includes(points.length / stride) || count && points.length !== count * stride || priority && ![px, py].every(validPoint)) return null;
+  const positions = [];
+  for (let i = 0; i < points.length; i += stride) {
+    const [x, y, rotated] = points.slice(i, i + stride);
+    if (![x, y].every((value) => value?.trim() && Number(value) >= 0 && Number(value) <= 1) || !legacy && !["0", "1"].includes(rotated)) return null;
+    positions.push({ x: Number(x), y: Number(y), rotated: (legacy ? oldRotation : rotated) === "1" });
+  }
+  return { ...room, radar, obstacles: obstacles === "1", count, priority, positions };
+}
+var init_ceilsense_planner = __esm({
+  "src/js/ceilsense-planner.js"() {
+    init_ceilsense_room_model();
+  }
+});
+
 // src/js/wall-radar-profiles.mjs
 var derate, wallPresence, wallMotion, wallTrackers;
 var init_wall_radar_profiles = __esm({
@@ -929,7 +936,7 @@ function stretch(field2, angle2) {
   };
   return [first <= step2 * 2 ? 0 : edge(first, first - step2), edge(last, Math.min(field2.range, last + step2))];
 }
-function wallReach(field2) {
+function wallReach2(field2) {
   if (field2.pitch === void 0) return { from: 0, to: field2.range };
   const reach2 = stretch(field2, 0);
   return reach2 && { from: reach2[0], to: reach2[1] };
@@ -2198,7 +2205,7 @@ function stairHeading(stair, up) {
   return Math.atan2(direction2 * (stair.top.x - stair.bottom.x), direction2 * (stair.bottom.y - stair.top.y)) * 180 / Math.PI;
 }
 function stairGait(stair, progress, rise, up, lane = 0) {
-  const step2 = clamp(progress) * stairSteps;
+  const step2 = clamp2(progress) * stairSteps;
   const index = Math.min(stairSteps - 1, Math.floor(step2));
   const time = step2 - index;
   const run = Math.hypot(stair.top.x - stair.bottom.x, stair.top.y - stair.bottom.y);
@@ -2329,7 +2336,7 @@ function paintStairFlight(stair, project, base, rise, towardCamera2, occlusion =
         <g${masked}>${treads}</g><g data-stair-walkers=""></g><g data-stair-rail=""${masked}>${lowerPosts}${line(edge(start, 1, railHeight), railUnder)}</g>${upperRail}
     </g>`;
 }
-var floorStackHeight, polygon, steps, start, end, onTread, clamp, smooth, mix, stairSteps, stairGaitDuration, stairOcclusionId;
+var floorStackHeight, polygon, steps, start, end, onTread, clamp2, smooth, mix, stairSteps, stairGaitDuration, stairOcclusionId;
 var init_floor_planner_stairs = __esm({
   "src/js/floor-planner-stairs.mjs"() {
     init_floor_planner_depth();
@@ -2340,9 +2347,9 @@ var init_floor_planner_stairs = __esm({
     start = 0.09;
     end = 0.91;
     onTread = (index) => start + (end - start) * index / steps;
-    clamp = (value) => Math.min(1, Math.max(0, value));
+    clamp2 = (value) => Math.min(1, Math.max(0, value));
     smooth = (value) => {
-      const t = clamp(value);
+      const t = clamp2(value);
       return t * t * (3 - 2 * t);
     };
     mix = (a, b, t) => a + (b - a) * t;
@@ -2996,7 +3003,7 @@ function aimSideView({ room, item, fields, onWall }) {
   const end2 = Math.min(wall, Math.max(4.5, ...fields.map((field2) => field2.range)));
   const { height: tall3, depth: deep, lens } = glyph(item.model);
   const back = -(deep / 2 + 0.12);
-  const open = primary ? wallReach(primary) : null;
+  const open = primary ? wallReach2(primary) : null;
   const reach2 = open && open.from < wall ? { from: open.from, to: Math.min(open.to, wall) } : null;
   const person = Math.max(0.6, Math.min(2.5, end2 - 0.45));
   const seen = Boolean(primary) && person <= wall && fieldCoversPoint(primary, { x: 0, y: 0, angle: 0 }, { x: 0, y: -person }, "standing", 1.35);
@@ -3042,7 +3049,7 @@ function tiltText(copy2, value) {
   return value ? fill(value < 0 ? copy2.aim_up : copy2.aim_down, { value: String(Math.abs(Math.round(value))) }) : copy2.aim_level;
 }
 function motionReach(room, item, field2) {
-  const reach2 = field2 && wallReach(field2);
+  const reach2 = field2 && wallReach2(field2);
   return reach2 ? Math.min(reach2.to, wallAhead(room, item)) : null;
 }
 function reachText(copy2, reach2, number3 = String) {
@@ -3813,7 +3820,7 @@ function preparePersonSensors(plan2) {
   return plan2.sensors.map((item, index) => {
     const room = roomForDevice(plan2.rooms, item);
     const exclusions = (plan2.zones ?? []).filter((zone) => zone.type === "exclusion" && zone.roomId === room?.id && (!zone.sensorId || zone.sensorId === item.id));
-    return { item, index, room, fields: radarFields(room, item), motion: room ? motionField(item) : null, exclusions };
+    return { item, index, room, fields: radarFields(room, item, { allowHeightEstimate: true }), motion: room ? motionField(item) : null, exclusions };
   });
 }
 function personSignals(plan2, person, sensors = preparePersonSensors(plan2), furniture = prepareFurnitureOcclusion(plan2.furniture ?? []), sight = prepareSight(plan2)) {
@@ -4618,7 +4625,7 @@ function draftFromRecognition(recognition2, underlay, { roomName = "Room", heigh
     rooms.push({ ...shape, id: newId(), name, height });
   }
   if (!rooms.length) return null;
-  const reach2 = wallReach2 * image.width;
+  const reach2 = wallReach3 * image.width;
   const openings = (list2, minimum, maximum, extra) => (Array.isArray(list2) ? list2 : []).slice(0, recognitionLimits.openings).flatMap((item) => {
     if (!imagePoint(item?.from) || !imagePoint(item?.to)) return [];
     const from = onPlan(across(item.from), down(item.from)), to = onPlan(across(item.to), down(item.to));
@@ -4695,7 +4702,7 @@ function recognitionProblem(copy2, error, locale) {
     popup_blocked: "recognise_error_popup"
   }[code] ?? "recognise_error_failed"] ?? "";
 }
-var recognitionLimits, lineSnap, wallReach2, unit2, imagePoint, millimetres, degrees, isRectangle, most, fill2, usualPace, recognitionProgress, recognitionWaiting;
+var recognitionLimits, lineSnap, wallReach3, unit2, imagePoint, millimetres, degrees, isRectangle, most, fill2, usualPace, recognitionProgress, recognitionWaiting;
 var init_floor_planner_recognise = __esm({
   "src/js/floor-planner-recognise.mjs"() {
     init_floor_planner_geometry();
@@ -4703,7 +4710,7 @@ var init_floor_planner_recognise = __esm({
     init_floor_planner_underlay();
     recognitionLimits = { rooms: 40, corners: 24, openings: 80 };
     lineSnap = 0.012;
-    wallReach2 = 0.03;
+    wallReach3 = 0.03;
     unit2 = (value) => Number.isFinite(value) && value >= 0 && value <= 1;
     imagePoint = (value) => Array.isArray(value) && value.length === 2 && unit2(value[0]) && unit2(value[1]);
     millimetres = (value) => Math.round(value * 1e3) / 1e3;
@@ -6572,13 +6579,33 @@ function renderFurnitureList() {
         </button>`;
   }).join("") || `<p class="fp-note">${copy.furniture_empty}</p>`;
 }
+function reflectionDepth(mirror2) {
+  const room = plan.rooms.find((room2) => room2.id === mirror2.roomId);
+  if (!room) return 2;
+  const turn = mirror2.angle * Math.PI / 180;
+  const middle = { x: mirror2.x + Math.cos(turn) * mirror2.width / 2, y: mirror2.y + Math.sin(turn) * mirror2.width / 2 };
+  const across = (side) => {
+    const [x, y] = roomRayEnd(room, middle, { x: middle.x - Math.sin(turn) * side * 80, y: middle.y + Math.cos(turn) * side * 80 });
+    return Math.hypot(x - middle.x, y - middle.y);
+  };
+  return Math.max(0.25, Math.min(6, Math.round(Math.max(across(1), across(-1)) * 20) / 20));
+}
+function paintMirrorWedges() {
+  const protection = integration?.mirrorProtection?.(planForDrawing(plan));
+  return protection ? protection.wedges.map(({ mirrorId, sensorId, points }) => `<polygon class="fp-mirror-wedge${mirrorId === selected ? " selected" : ""}" data-mirror="${mirrorId}" data-sensor="${sensorId}"
+            points="${points.map((point3) => point3.join(",")).join(" ")}"/>`).join("") : "";
+}
 function mirrorSettings(item) {
   if (!integration) return `<p class="fp-note">${copy.mirror_note}</p>`;
-  const [label, depth, note] = mirrorReflectionCopy[document.documentElement.lang?.split("-")[0]] ?? mirrorReflectionCopy.en;
+  const [label, depth, note, unseen, crowded] = mirrorReflectionCopy[document.documentElement.lang?.split("-")[0]] ?? mirrorReflectionCopy.en;
   const depthField = field({ reflectionDepthM: item.reflectionDepthM ?? 2 }, "reflectionDepthM", depth, 0.25, 6, "any");
-  return `<label><input type="checkbox" data-field="protectionEnabled" ${item.protectionEnabled ? "checked" : ""}> ${label}</label>
+  const protection = item.protectionEnabled ? integration.mirrorProtection?.(plan) : null;
+  const own = protection?.wedges.filter((wedge) => wedge.mirrorId === item.id) ?? [];
+  const warning = !protection ? "" : !own.length ? unseen : own.some((wedge) => protection.crowded.includes(wedge.sensorId)) ? crowded : "";
+  return `<label class="fp-climate-field"><input type="checkbox" data-field="protectionEnabled" ${item.protectionEnabled ? "checked" : ""}> ${label}</label>
         ${item.protectionEnabled ? depthField : ""}
-        <p class="fp-note">${item.protectionEnabled ? note : copy.mirror_note}</p>`;
+        <p class="fp-note">${item.protectionEnabled ? note : copy.mirror_note}</p>
+        ${warning ? `<p class="fp-note fp-warning">${escapeText(warning)}</p>` : ""}`;
 }
 function ceilingTypeField(ceiling) {
   return `<label>${copy.ceiling_type}<select data-field="ceilingType">${options(
@@ -7450,7 +7477,7 @@ function renderBeam() {
         casing: Boolean(plan.underlay),
         motion: Boolean(copy.sim_motion)
       }
-    ) + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : "") + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : ""));
+    ) + (stair ? paintStairPlan(stair.stair, escapeText(copy.staircase), stair.up) : "") + (showHeatmap ? paintCoverageHeat(heatCells(plan)) : "") + paintMirrorWedges());
   } else if (layer) layer.innerHTML = focus ? paintBeam(focus, spaceCamera, profile2) : "";
   const panelKey = `${key}:${beamChoice}`;
   if (beamPanelKey === panelKey) return;
@@ -7610,13 +7637,14 @@ function renderPerson() {
   const key = person.pose + ":" + profile2 + ":" + readings.map((reading) => reading.signals.map((signal) => signal.obstacle ? signal.obstacle.id + signal.obstacle.status : signal.exclusion?.id ?? Number(signal.seen)).join(",") + (reading.motion ? `,${Number(reading.motion.seen)}${Number(reading.motion.still)}` : "")).join("/");
   if (readingKey === key) return;
   readingKey = key;
-  element("fp-sim-sensors").innerHTML = readings.map(({ item, index, signals, motion, seen: seen2, obstacle }) => `<li>
+  element("fp-sim-sensors").innerHTML = readings.map(({ item, index, room: home, signals, motion, seen: seen2, obstacle }) => `<li>
         <div class="fp-sim-device"><span class="fp-index ${devices[item.model].mount}">${String(index + 1).padStart(2, "0")}</span>
             <strong>${devices[item.model].name}</strong><span class="fp-sim-light" data-seen="${seen2}" aria-hidden="true"></span></div>
         ${signals.length ? signals.map((signal) => `<div class="fp-sim-signal">
             <span>${signal.radar.toUpperCase()} · ${signal.profiles ? copy["beam_" + (person.pose === "lying" ? "lying" : profile2)] : copy["sim_" + signal.mode]}</span>
             <span data-seen="${signal.seen}" data-status="${signal.obstacle?.status ?? ""}">${signal.obstacle ? copy["sim_" + signal.obstacle.status] : signal.exclusion ? copy.sim_excluded : signal.seen ? copy.sim_seen : copy.sim_missed}</span>
-        </div>${signal.height === null ? "" : `<p class="fp-sim-height">Z · ${copy["sim_" + person.pose]} · ${copy.sim_height.replace(":height", number2.format(signal.height))}</p>`}`).join("") : `<p class="fp-note">${copy.sim_no_profile}</p>`}
+        </div>${signal.height === null ? "" : `<p class="fp-sim-height">Z · ${copy["sim_" + person.pose]} · ${copy.sim_height.replace(":height", number2.format(signal.height))}</p>`}`).join("") : `<p class="fp-note">${escapeText(String(sensorNote(item, home) || copy.sim_no_profile))}</p>`}
+        ${signals.some((signal) => signal.estimatedHeight) ? `<p class="fp-note fp-sim-estimate">${escapeText(coverageEstimateLabel)}</p>` : ""}
         ${motion && copy.sim_motion ? `<div class="fp-sim-signal fp-sim-motion"><span>PIR · ${copy.sim_motion}</span>
             <span data-seen="${motion.seen}">${motion.seen ? copy.sim_seen : motion.still ? copy.sim_still : copy.sim_missed}</span></div>` : ""}
         ${obstacle ? `<p class="fp-obstacle-name" data-status="${obstacle.status}">${escapeText(obstacle.name)}</p>` : ""}
@@ -9238,6 +9266,7 @@ function updateField(input) {
   } else {
     item[key] = key === "sensorId" ? value || null : value;
   }
+  if (type === "mirrors" && key === "protectionEnabled" && value && [void 0, 2].includes(item.reflectionDepthM)) item.reflectionDepthM = reflectionDepth(item);
   if (type === "sensors") {
     if (!item.tilt) delete item.tilt;
     if (!item.pan || !isWallMounted(item)) delete item.pan;
@@ -9835,11 +9864,41 @@ var init_floor_planner2 = __esm({
     field = (item, key, label, min, max, step2) => `
     <label>${label}<input type="number" data-field="${key}" min="${min}" max="${max}" step="${step2}" value="${Number(item[key].toFixed(2))}" required></label>`;
     mirrorReflectionCopy = {
-      en: ["Suppress mirror reflections", "Reflection depth (m)", "Creates a conservative exclusion behind this mirror for each linked radar. Real room space is never excluded automatically."],
-      nl: ["Spiegelreflecties onderdrukken", "Reflectiediepte (m)", "Maakt per gekoppelde radar een veilige uitsluiting achter deze spiegel. Echte ruimte wordt nooit automatisch uitgesloten."],
-      de: ["Spiegelreflexionen unterdrücken", "Reflexionstiefe (m)", "Erstellt pro verknüpftem Radar einen sicheren Ausschluss hinter diesem Spiegel. Echter Raum wird nie automatisch ausgeschlossen."],
-      fr: ["Supprimer les reflets du miroir", "Profondeur de réflexion (m)", "Crée une exclusion prudente derrière ce miroir pour chaque radar associé. L'espace réel n'est jamais exclu automatiquement."],
-      es: ["Suprimir reflejos del espejo", "Profundidad de reflexión (m)", "Crea una exclusión prudente detrás del espejo para cada radar vinculado. El espacio real nunca se excluye automáticamente."]
+      en: [
+        "Suppress mirror reflections",
+        "Reflection depth (m)",
+        "Creates a conservative exclusion behind this mirror for each linked radar. Real room space is never excluded automatically.",
+        "No radar with position tracking in this room looks at this mirror, so nothing is excluded yet.",
+        "A radar holds two exclusion areas. With this mirror a radar here needs more, and sending to the radars is refused until a zone or a mirror filter is removed."
+      ],
+      nl: [
+        "Spiegelreflecties onderdrukken",
+        "Reflectiediepte (m)",
+        "Maakt per gekoppelde radar een veilige uitsluiting achter deze spiegel. Echte ruimte wordt nooit automatisch uitgesloten.",
+        "Geen radar met positiebepaling in deze kamer kijkt naar deze spiegel, dus er wordt nog niets uitgesloten.",
+        "Een radar onthoudt twee uitsluitingsvlakken. Met deze spiegel heeft een radar hier er meer nodig, en verzenden naar de radars wordt geweigerd tot je een zone of een spiegelfilter weghaalt."
+      ],
+      de: [
+        "Spiegelreflexionen unterdrücken",
+        "Reflexionstiefe (m)",
+        "Erstellt pro verknüpftem Radar einen sicheren Ausschluss hinter diesem Spiegel. Echter Raum wird nie automatisch ausgeschlossen.",
+        "Kein Radar mit Positionserkennung in diesem Raum sieht diesen Spiegel, daher wird noch nichts ausgeschlossen.",
+        "Ein Radar speichert zwei Ausschlussflächen. Mit diesem Spiegel braucht ein Radar hier mehr, und das Senden an die Radare wird abgelehnt, bis eine Zone oder ein Spiegelfilter entfernt wird."
+      ],
+      fr: [
+        "Supprimer les reflets du miroir",
+        "Profondeur de réflexion (m)",
+        "Crée une exclusion prudente derrière ce miroir pour chaque radar associé. L'espace réel n'est jamais exclu automatiquement.",
+        "Aucun radar de suivi dans cette pièce ne regarde ce miroir, donc rien n'est encore exclu.",
+        "Un radar retient deux zones d'exclusion. Avec ce miroir, un radar en demande plus ici. L'envoi aux radars est refusé tant qu'une zone ou un filtre de miroir n'est pas retiré."
+      ],
+      es: [
+        "Suprimir reflejos del espejo",
+        "Profundidad de reflexión (m)",
+        "Crea una exclusión prudente detrás del espejo para cada radar vinculado. El espacio real nunca se excluye automáticamente.",
+        "Ningún radar de seguimiento de esta habitación mira a este espejo, así que todavía no se excluye nada.",
+        "Un radar guarda dos áreas de exclusión. Con este espejo, un radar necesita más aquí, y el envío a los radares se rechaza hasta que quites una zona o un filtro de espejo."
+      ]
     };
     heightField = (key, label, value) => `<label>${label}
     <input data-field="${key}" data-decimal type="text" inputmode="decimal" maxlength="8" value="${number2.format(value)}" required></label>`;
@@ -11415,9 +11474,196 @@ var init_floor_planner2 = __esm({
   }
 });
 
+// ../panel/src/utils/reflection-protection.ts
+var DEFAULT_REFLECTION_DEPTH_MM = 2e3;
+var OUTSIDE_ROOM_SUPPRESSION_MARGIN_MM = 350;
+var REFLECTION_START_OFFSET_MM = OUTSIDE_ROOM_SUPPRESSION_MARGIN_MM;
+var clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+var polygonSignedArea = (points) => points.reduce(
+  (area, point3, index) => {
+    const next = points[(index + 1) % points.length];
+    return area + point3.x * next.y - next.x * point3.y;
+  },
+  0
+) / 2;
+var orientation = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+var strictlyBetween = (value, first, second) => value > Math.min(first, second) + 1e-3 && value < Math.max(first, second) - 1e-3;
+var properSegmentIntersection = (a, b, c, d) => {
+  const first = orientation(a, b, c);
+  const second = orientation(a, b, d);
+  const third = orientation(c, d, a);
+  const fourth = orientation(c, d, b);
+  if (first * second < -1e-3 && third * fourth < -1e-3) return true;
+  if (Math.abs(first) <= 1e-3 && strictlyBetween(c.x, a.x, b.x) && strictlyBetween(c.y, a.y, b.y)) return true;
+  if (Math.abs(second) <= 1e-3 && strictlyBetween(d.x, a.x, b.x) && strictlyBetween(d.y, a.y, b.y)) return true;
+  return false;
+};
+var pointToSegmentDistance = (point3, start3, end2) => {
+  const dx = end2.x - start3.x;
+  const dy = end2.y - start3.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const fraction = lengthSquared > 0 ? Math.max(0, Math.min(
+    1,
+    ((point3.x - start3.x) * dx + (point3.y - start3.y) * dy) / lengthSquared
+  )) : 0;
+  return Math.hypot(
+    point3.x - (start3.x + fraction * dx),
+    point3.y - (start3.y + fraction * dy)
+  );
+};
+var segmentDistance = (a, b, c, d) => {
+  if (properSegmentIntersection(a, b, c, d)) return 0;
+  return Math.min(
+    pointToSegmentDistance(a, c, d),
+    pointToSegmentDistance(b, c, d),
+    pointToSegmentDistance(c, a, b),
+    pointToSegmentDistance(d, a, b)
+  );
+};
+var reflectionPolygonEntersRoom = (reflection, room) => {
+  if (reflection.some((point3) => pointInPolygon(point3, room))) return true;
+  if (room.some((point3) => pointInPolygon(point3, reflection))) return true;
+  for (let reflectionIndex = 0; reflectionIndex < reflection.length; reflectionIndex += 1) {
+    const reflectionStart = reflection[reflectionIndex];
+    const reflectionEnd = reflection[(reflectionIndex + 1) % reflection.length];
+    const midpoint2 = {
+      x: (reflectionStart.x + reflectionEnd.x) / 2,
+      y: (reflectionStart.y + reflectionEnd.y) / 2
+    };
+    if (pointInPolygon(midpoint2, room)) return true;
+    for (let roomIndex = 0; roomIndex < room.length; roomIndex += 1) {
+      const distance4 = segmentDistance(
+        reflectionStart,
+        reflectionEnd,
+        room[roomIndex],
+        room[(roomIndex + 1) % room.length]
+      );
+      if (distance4 < OUTSIDE_ROOM_SUPPRESSION_MARGIN_MM - 1e-3) return true;
+    }
+  }
+  return false;
+};
+var mirrorSegment = (roomPoints, mirror2) => {
+  if (roomPoints.length < 3 || mirror2.wallIndex < 0 || mirror2.wallIndex >= roomPoints.length) return null;
+  const start3 = roomPoints[mirror2.wallIndex];
+  const end2 = roomPoints[(mirror2.wallIndex + 1) % roomPoints.length];
+  const dx = end2.x - start3.x;
+  const dy = end2.y - start3.y;
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length < 1) return null;
+  const halfFraction = clamp((Number(mirror2.width) || 0) / length / 2, 5e-3, 0.5);
+  const position = clamp(Number(mirror2.position) || 0.5, halfFraction, 1 - halfFraction);
+  const firstT = position - halfFraction;
+  const secondT = position + halfFraction;
+  return [
+    { x: start3.x + dx * firstT, y: start3.y + dy * firstT },
+    { x: start3.x + dx * secondT, y: start3.y + dy * secondT }
+  ];
+};
+var createMirrorReflectionPolygon = (roomPoints, mirror2, sensor) => {
+  if (mirror2.protectionEnabled !== true) return null;
+  const segment = mirrorSegment(roomPoints, mirror2);
+  if (!segment || !Number.isFinite(sensor.x) || !Number.isFinite(sensor.y)) return null;
+  const protectionDepth = clamp(
+    Number(mirror2.reflectionDepthMm) || DEFAULT_REFLECTION_DEPTH_MM,
+    250,
+    6e3
+  );
+  const wallStart = roomPoints[mirror2.wallIndex];
+  const wallEnd = roomPoints[(mirror2.wallIndex + 1) % roomPoints.length];
+  const wallDx = wallEnd.x - wallStart.x;
+  const wallDy = wallEnd.y - wallStart.y;
+  const wallLength = Math.hypot(wallDx, wallDy);
+  if (!Number.isFinite(wallLength) || wallLength < 1) return null;
+  const signedArea2 = polygonSignedArea(roomPoints);
+  if (!Number.isFinite(signedArea2) || Math.abs(signedArea2) < 1) return null;
+  const outwardNormal = signedArea2 > 0 ? { x: wallDy / wallLength, y: -wallDx / wallLength } : { x: -wallDy / wallLength, y: wallDx / wallLength };
+  const extendToPerpendicularDepth = (point3, perpendicularDepth) => {
+    const dx = point3.x - sensor.x;
+    const dy = point3.y - sensor.y;
+    const distance4 = Math.hypot(dx, dy);
+    if (!Number.isFinite(distance4) || distance4 < 100) return null;
+    const rayX = dx / distance4;
+    const rayY = dy / distance4;
+    const outwardComponent = rayX * outwardNormal.x + rayY * outwardNormal.y;
+    if (!Number.isFinite(outwardComponent) || outwardComponent <= 0.01) return null;
+    const extra = perpendicularDepth / outwardComponent;
+    return {
+      x: point3.x + rayX * extra,
+      y: point3.y + rayY * extra
+    };
+  };
+  const nearA = extendToPerpendicularDepth(segment[0], REFLECTION_START_OFFSET_MM);
+  const nearB = extendToPerpendicularDepth(segment[1], REFLECTION_START_OFFSET_MM);
+  const farDepth = REFLECTION_START_OFFSET_MM + protectionDepth;
+  const farA = extendToPerpendicularDepth(segment[0], farDepth);
+  const farB = extendToPerpendicularDepth(segment[1], farDepth);
+  if (!nearA || !nearB || !farA || !farB) return null;
+  const points = [nearA, nearB, farB, farA];
+  if (reflectionPolygonEntersRoom(points, roomPoints)) return null;
+  return { mirrorId: mirror2.id, points };
+};
+var pointInPolygon = (point3, polygon2) => {
+  if (polygon2.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon2.length - 1; i < polygon2.length; j = i++) {
+    const a = polygon2[i];
+    const b = polygon2[j];
+    const crosses = a.y > point3.y !== b.y > point3.y && point3.x < (b.x - a.x) * (point3.y - a.y) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+};
+
+// src/ha/ha-mirrors.js
+init_floor_planner_geometry();
+init_floor_planner_model();
+var tracking = ["ld2450", "ld2460"];
+var exclusionSlots = 2;
+var wallReach = 0.1;
+var middleOf = (mirror2) => {
+  const turn = mirror2.angle * Math.PI / 180;
+  return { x: mirror2.x + Math.cos(turn) * mirror2.width / 2, y: mirror2.y + Math.sin(turn) * mirror2.width / 2 };
+};
+function mirrorProtection(plan2) {
+  const wedges = (plan2.mirrors ?? []).filter((mirror2) => mirror2.protectionEnabled === true).flatMap((mirror2) => {
+    const room = plan2.rooms.find((room2) => room2.id === mirror2.roomId);
+    if (!room) return [];
+    const corners = roomCorners(room);
+    const middle = middleOf(mirror2);
+    const [wall] = polygonEdges(corners).map(([a, b], index) => ({ index, ...edgePosition(a, b, middle) })).map((edge) => ({ ...edge, away: Math.hypot(edge.x - middle.x, edge.y - middle.y) })).sort((a, b) => a.away - b.away);
+    if (!wall || wall.away > wallReach) return [];
+    const outline = corners.map(([x, y]) => ({ x: x * 1e3, y: y * 1e3 }));
+    const placement = {
+      id: mirror2.id,
+      wallIndex: wall.index,
+      position: wall.along / wall.length,
+      width: mirror2.width * 1e3,
+      protectionEnabled: true,
+      reflectionDepthMm: Math.round((mirror2.reflectionDepthM ?? 2) * 1e3)
+    };
+    return plan2.sensors.filter((sensor) => tracking.includes(sensor.radar) && roomForDevice(plan2.rooms, sensor)?.id === room.id).flatMap((sensor) => {
+      const wedge = createMirrorReflectionPolygon(outline, placement, { id: sensor.id, x: sensor.x * 1e3, y: sensor.y * 1e3 });
+      return wedge ? [{
+        mirrorId: mirror2.id,
+        sensorId: sensor.id,
+        points: wedge.points.map(({ x, y }) => [Number((x / 1e3).toFixed(3)), Number((y / 1e3).toFixed(3))])
+      }] : [];
+    });
+  });
+  const crowded = plan2.sensors.filter((sensor) => {
+    const room = roomForDevice(plan2.rooms, sensor);
+    const drawn = (plan2.zones ?? []).filter((zone) => zone.type === "exclusion" && zone.roomId === room?.id && (!zone.sensorId || zone.sensorId === sensor.id)).length;
+    const mirrored = wedges.filter((wedge) => wedge.sensorId === sensor.id).length;
+    return mirrored > 0 && drawn + mirrored > exclusionSlots;
+  }).map((sensor) => sensor.id);
+  return { wedges, crowded };
+}
+
 // src/ha/editor-entry.js
 var host = window.frameElement?.floorPlannerHost;
 if (host) {
+  host.mirrorProtection = mirrorProtection;
   window.floorPlannerHost = host;
   document.documentElement.dataset.haTheme = host.theme();
   document.querySelector("#main-content").setAttribute("aria-label", window.frameElement.title);

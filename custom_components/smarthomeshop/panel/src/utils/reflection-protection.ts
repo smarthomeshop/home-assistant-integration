@@ -1,3 +1,5 @@
+// Shared by the panel and the dashboard cards: frontend/src/utils/reflection-protection.ts
+// is a copy of this file and a test keeps the two the same.
 export interface ReflectionPoint {
   x: number;
   y: number;
@@ -243,6 +245,17 @@ export const pointInPolygon = (point: ReflectionPoint, polygon: ReflectionPoint[
     if (crosses) inside = !inside;
   }
   return inside;
+};
+
+/** The targets of one radar that are not reflections in a protected mirror. */
+export const filterReflectedTargets = <T extends ReflectionPoint>(
+  targets: T[],
+  roomPoints: ReflectionPoint[],
+  mirrors: MirrorPlacement[],
+  sensor: ReflectionSensorPlacement,
+): T[] => {
+  const polygons = createMirrorReflectionPolygons(roomPoints, mirrors, sensor);
+  return targets.filter(target => !polygons.some(polygon => pointInPolygon(target, polygon.points)));
 };
 
 export const distanceToPolygonBoundary = (

@@ -10,14 +10,31 @@ const scale = (height, reference, radii) => {
     return radii.map(radius => radius * factor);
 };
 
-// The existing ceiling demo's Hi-Link references. Interpolation is illustrative.
+// How high above the floor the part of a person is that a ceiling radar
+// answers to: the chest of someone who stands or walks, the lap of someone who sits.
+const bodyHeight = { moving: 1.35, standing: 1.35, seated: .85 };
+
+// Above its measured mounting range a radar still reaches as far in a straight
+// line as it does at the top of that range. A higher ceiling uses up part of
+// that reach on the way down, so the footprint on the floor shrinks, soonest
+// for someone who sits still.
+function reachAbove(radius, top, height, body) {
+    const reach = Math.hypot(radius, top - body);
+    return Math.sqrt(Math.max(0, reach ** 2 - (height - body) ** 2));
+}
+
+// The existing ceiling demo's Hi-Link references. Interpolation is illustrative
+// within the measured range; above it the LD2412 follows its straight-line reach.
 export function radarFootprint(radar, height) {
     if (radar === 'combined') return radarFootprint('ld6002b', height);
     if (radar === 'ld2412') {
+        const [, top] = mountingRanges.ld2412;
+        const footprint = (posture, radii) => scale(Math.min(height, top), 2.8, radii)
+            .map(radius => height > top ? reachAbove(radius, top, height, bodyHeight[posture]) : radius);
         return {
-            moving: scale(height, 2.8, [4.8, 6.4]),
-            standing: scale(height, 2.8, [4.4, 5.6]),
-            seated: scale(height, 2.8, [3, 4.2]),
+            moving: footprint('moving', [4.8, 6.4]),
+            standing: footprint('standing', [4.4, 5.6]),
+            seated: footprint('seated', [3, 4.2]),
         };
     }
     const radii = radar === 'ld2460' ? scale(height, 2.8, [4, 2.8])

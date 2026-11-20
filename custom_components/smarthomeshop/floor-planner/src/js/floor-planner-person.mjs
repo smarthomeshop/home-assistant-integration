@@ -56,7 +56,8 @@ export function preparePersonSensors(plan) {
         const room = roomForDevice(plan.rooms, item);
         const exclusions = (plan.zones ?? []).filter(zone => zone.type === 'exclusion' && zone.roomId === room?.id
             && (!zone.sensorId || zone.sensorId === item.id));
-        return { item, index, room, fields: radarFields(room, item), motion: room ? motionField(item) : null, exclusions };
+        // Above the measured ceiling height the walk test uses the same marked estimate as the map.
+        return { item, index, room, fields: radarFields(room, item, { allowHeightEstimate: true }), motion: room ? motionField(item) : null, exclusions };
     });
 }
 

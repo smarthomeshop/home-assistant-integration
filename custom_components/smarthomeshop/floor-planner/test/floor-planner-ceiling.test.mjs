@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { plannerRadars, roomPlans, supportedMounting } from '../src/js/ceilsense-room-model.mjs';
+import { personSignals } from '../src/js/floor-planner-person.mjs';
+import { plannerRadars, radarFootprint, roomPlans, supportedMounting } from '../src/js/ceilsense-room-model.mjs';
 import { paintFloorCoverage } from '../src/js/floor-planner-beam.mjs';
 import { ceilingHeightAt, ceilingPitch, ceilingProfile, validCeiling } from '../src/js/floor-planner-ceiling.mjs';
 import { blankPlan, ceilingCoverageStatus, guidePlanForRoom, validPlan } from '../src/js/floor-planner-model.mjs';
@@ -96,4 +97,48 @@ test('the sensor advisor still advises a ceiling sensor on a 4 m ceiling, marked
     assert.equal(ceiling.estimated, true);
     const measured = adviseRoom({ ...plan, rooms: [{ ...room, height: 2.8 }] }, { ...room, height: 2.8 }, { ...defaultAdvice, mount: 'ceiling' });
     assert.equal(measured.choices.find(choice => choice.family === 'ceiling').estimated, false);
+});
+
+test('an LD2412 on a 3.5 m ceiling sees people in the walk test, as a marked estimate', () => {
+    const high = { ...room, width: 8, depth: 8, height: 3.5 };
+    const sensor = { id: 'mini', model: 'ceilsense-mini', radar: 'ld2412', x: 6, y: 5, angle: 0 };
+    const plan = { ...blankPlan('High ceiling'), rooms: [high], sensors: [sensor] };
+    const reading = person => personSignals(plan, { pose: 'standing', moving: false, ...person })[0];
+    const below = reading({ x: 6, y: 5 });
+    assert.equal(below.seen, true);
+    assert.deepEqual(below.signals.map(signal => [signal.radar, signal.seen, signal.estimatedHeight]), [['ld2412', true, true]]);
+    // Standing 3.5 m to the side is within its reach; sitting still there is not, but 2 m to the side is.
+    assert.equal(reading({ x: 9.5, y: 5 }).seen, true);
+    assert.equal(reading({ x: 9.5, y: 5, pose: 'sitting' }).seen, false);
+    assert.equal(reading({ x: 8, y: 5, pose: 'sitting' }).seen, true);
+    // Within the measured range nothing is marked as an estimate.
+    plan.rooms = [{ ...high, height: 2.8 }];
+    assert.equal(reading({ x: 6, y: 5 }).signals[0].estimatedHeight, false);
+    // Above 4 m there is no model to estimate with.
+    plan.rooms = [{ ...high, height: 4.5 }];
+    assert.deepEqual(reading({ x: 6, y: 5 }).signals, []);
+    assert.equal(reading({ x: 6, y: 5 }).seen, false);
+});
+
+test('above its measured height the LD2412 keeps its straight-line reach, so its footprint only shrinks', () => {
+    const at = height => radarFootprint('ld2412', height);
+    const bodies = { moving: 1.35, standing: 1.35, seated: .85 };
+    for (const [posture, body] of Object.entries(bodies)) {
+        const top = at(3)[posture];
+        // It follows on from the measured footprint without a jump.
+        at(3.001)[posture].forEach((radius, axis) => assert.ok(Math.abs(radius - top[axis]) < .01, posture));
+        let previous = top;
+        for (const height of [3.25, 3.5, 3.75, 4]) {
+            const next = at(height)[posture];
+            assert.ok(next.every((radius, axis) => radius > 1 && radius < previous[axis]), `${posture} at ${height} m`);
+            // The distance from the radar to the body at the edge stays what it was at 3 m.
+            next.forEach((radius, axis) => assert.ok(Math.abs(Math.hypot(radius, height - body) - Math.hypot(top[axis], 3 - body)) < 1e-9));
+            previous = next;
+        }
+    }
+    // Someone who sits still is lost soonest.
+    assert.ok(at(4).seated[0] / at(3).seated[0] < at(4).moving[0] / at(3).moving[0]);
+    // Within the measured range the footprint is what it was.
+    assert.deepEqual(at(2.8), { moving: [4.8, 6.4], standing: [4.4, 5.6], seated: [3, 4.2] });
+    assert.deepEqual(at(3).seated.map(radius => Number(radius.toFixed(3))), [2.8, 3.92]);
 });

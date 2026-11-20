@@ -5,9 +5,13 @@
 // at start-up, from globalThis, so it is copied over before the editor module
 // runs. Opened on its own, without a host, the page stays empty on purpose:
 // there is nothing to save to.
+import { mirrorProtection } from './ha-mirrors.js';
+
 const host = window.frameElement?.floorPlannerHost;
 
 if (host) {
+    // The editor draws what the reflection filter of a mirror will hide; the geometry of it lives on this side.
+    host.mirrorProtection = mirrorProtection;
     window.floorPlannerHost = host;
     document.documentElement.dataset.haTheme = host.theme();
     document.querySelector('#main-content').setAttribute('aria-label', window.frameElement.title);

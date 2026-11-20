@@ -3268,7 +3268,8 @@ export class ZonesPage extends LitElement {
           .map((mirror: any, index: number): MirrorItem => ({
             id: String(mirror.id || `mirror_${index + 1}`),
             wallIndex: Number(mirror.wallIndex),
-            position: Math.min(0.95, Math.max(0.05, Number(mirror.position) || 0.5)),
+            // Kept as it was saved: the wedge sent to a radar has to lie where the designer drew it.
+            position: Math.min(1, Math.max(0, Number.isFinite(Number(mirror.position)) ? Number(mirror.position) : 0.5)),
             width: Math.min(5000, Math.max(100, Number(mirror.width) || 1000)),
             height: Math.min(3000, Math.max(100, Number(mirror.height) || 1800)),
             protectionEnabled: mirror.protectionEnabled === true,
@@ -4787,7 +4788,7 @@ export class ZonesPage extends LitElement {
     });
     if (safelyOutsideRoom(roomTarget, roomPolygon)) return true;
     const manualExclusions = this._zones
-      .filter(zone => zone.type === 'exclusion')
+      .filter(zone => zone.type === 'exclusion' && zoneAppliesToSensor(zone, sensor.id))
       .flatMap(zone => getZoneParts(zone));
     if (manualExclusions.some(points => pointInPolygon(roomTarget, points))) return true;
     return createMirrorReflectionPolygons(roomPolygon, this._mirrors, sensor)
@@ -7242,6 +7243,7 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
     const feedback = this._hardwareFeedback;
     const count = this._calibration.corners.length;
     const zoneCount = this._zones.length;
+    const mirrorFilters = this._mirrors.filter(mirror => mirror.protectionEnabled).length;
     return html`<section class="radar-settings">
       <div class="radar-fields">
         <label class="radar-field">${t('Room', 'Kamer')}
@@ -7303,6 +7305,8 @@ private _draw3DTargets(ctx: CanvasRenderingContext2D): void {
         </div>
         <p>${selectedRadar && !canPush
           ? t('Check the mounting mode and installation data of the linked radars first.', 'Controleer eerst de montagemodus en installatiegegevens van de gekoppelde radars.')
+          : canPush && !zoneCount && mirrorFilters
+          ? t('This room has no zones, but it has a mirror filter. Sending writes that to its radars.', 'Deze kamer heeft geen zones, maar wel een spiegelfilter. Verzenden zet dat op de radars in deze kamer.')
           : canPush && !zoneCount
           ? t('This room has no zones. Sending clears the zones on its radars.', 'Deze kamer heeft geen zones. Verzenden wist de zones op de radars in deze kamer.')
           : t('Send this room\'s saved zones to its linked radars.', 'Stuur de opgeslagen zones naar de gekoppelde radars in deze kamer.')}</p>
