@@ -109,10 +109,14 @@ Draw your rooms or import them (including Apple RoomPlan scans), place them on
 floors and add doors, windows, mirrors and furniture. You can also upload your
 floor plan as an image or PDF and trace it. If the sheet shows more than one
 floor, drag a box around the floor you want and only that part is used, as
-sharp as the original. With a linked SmartHomeShop.io
-account, **Recognise rooms with AI** reads the plan and adds the rooms as a
-draft for you to check (the image is sent to SmartHomeShop.io for this, only
-when you ask for it). Then place your
+sharp as the original. **Trace walls** finds the rooms between the walls of
+the drawing and the doors between them, in your browser, without an account
+and without sending anything; it asks for the scale first. It works on walls
+drawn as solid bands or as two lines, straight or slanted. With a linked
+SmartHomeShop.io account, **Recognise rooms with AI** reads the plan and adds
+the rooms as a draft for you to check (the image is sent to SmartHomeShop.io
+for this, only when you ask for it); rooms it finds that match the walls on
+the image follow those walls exactly. Then place your
 UltimateSensor, UltimateSensor Mini, CeilSense and WallSense radars where they
 hang in real life. Administrators edit the plan; other users see the live view.
 

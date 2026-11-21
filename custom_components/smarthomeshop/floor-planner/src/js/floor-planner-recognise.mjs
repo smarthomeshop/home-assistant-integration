@@ -64,7 +64,10 @@ function tidy(points) {
 const isRectangle = ({ width, depth, outline }) => outline.length === 4 && outline.every(([x, y]) =>
     (Math.abs(x) < 1e-6 || Math.abs(x - width) < 1e-6) && (Math.abs(y) < 1e-6 || Math.abs(y - depth) < 1e-6));
 
-function roomShape(points) {
+// A room's place and shape from its corners in plan metres: a plain room for
+// a rectangle, a room with an outline otherwise, and a rough box for an
+// outline that crosses itself. Null when it is too small or too large.
+export function roomShape(points) {
     const shape = outlineBounds(tidy(points));
     if (shape) return isRectangle(shape) ? { x: shape.x, y: shape.y, width: shape.width, depth: shape.depth } : shape;
     // An outline that crosses itself still gives a usable rough room.
@@ -85,6 +88,25 @@ function nearestWall(rooms, point) {
         }
     }
     return best;
+}
+
+/**
+ * Doors or windows on the nearest wall of the given rooms. Each item spans
+ * { from: [x, y], to: [x, y] } in plan metres; one further than reach from
+ * every wall is left out, and its width is kept between minimum and maximum
+ * and within its wall. extra is added to each, such as a window's height.
+ */
+export function openingsOnWalls(rooms, items, { minimum, maximum, reach, extra = {} }) {
+    return items.flatMap(({ from, to }) => {
+        const wall = nearestWall(rooms, { x: (from[0] + to[0]) / 2, y: (from[1] + to[1]) / 2 });
+        if (!wall || wall.distance > reach) return [];
+        const width = millimetres(Math.min(maximum, wall.length, Math.max(minimum, Math.hypot(to[0] - from[0], to[1] - from[1]))));
+        if (width < minimum) return [];
+        const start = Math.max(0, Math.min(wall.length - width, wall.along - width / 2));
+        const [dx, dy] = [(wall.b[0] - wall.a[0]) / wall.length, (wall.b[1] - wall.a[1]) / wall.length];
+        return [{ id: newId(), roomId: wall.room.id, width, angle: degrees(wall.angle),
+            x: millimetres(wall.a[0] + dx * start), y: millimetres(wall.a[1] + dy * start), ...extra }];
+    });
 }
 
 /**
@@ -129,19 +151,10 @@ export function draftFromRecognition(recognition, underlay, { roomName = 'Room',
     if (!rooms.length) return null;
 
     const reach = wallReach * image.width;
-    const openings = (list, minimum, maximum, extra) => (Array.isArray(list) ? list : []).slice(0, recognitionLimits.openings)
-        .flatMap(item => {
-            if (!imagePoint(item?.from) || !imagePoint(item?.to)) return [];
-            const from = onPlan(across(item.from), down(item.from)), to = onPlan(across(item.to), down(item.to));
-            const wall = nearestWall(rooms, { x: (from[0] + to[0]) / 2, y: (from[1] + to[1]) / 2 });
-            if (!wall || wall.distance > reach) return [];
-            const width = millimetres(Math.min(maximum, wall.length, Math.max(minimum, Math.hypot(to[0] - from[0], to[1] - from[1]))));
-            if (width < minimum) return [];
-            const start = Math.max(0, Math.min(wall.length - width, wall.along - width / 2));
-            const [dx, dy] = [(wall.b[0] - wall.a[0]) / wall.length, (wall.b[1] - wall.a[1]) / wall.length];
-            return [{ id: newId(), roomId: wall.room.id, width, angle: degrees(wall.angle),
-                x: millimetres(wall.a[0] + dx * start), y: millimetres(wall.a[1] + dy * start), ...extra }];
-        });
+    const openings = (list, minimum, maximum, extra) => openingsOnWalls(rooms, (Array.isArray(list) ? list : [])
+        .slice(0, recognitionLimits.openings).filter(item => imagePoint(item?.from) && imagePoint(item?.to))
+        .map(item => ({ from: onPlan(across(item.from), down(item.from)), to: onPlan(across(item.to), down(item.to)) })),
+    { minimum, maximum, reach, extra });
 
     return {
         underlay: image,

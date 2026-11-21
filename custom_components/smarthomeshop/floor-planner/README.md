@@ -20,6 +20,11 @@ card. This folder is its source; Home Assistant serves the build in
     open door lets it through up to the door frame, and a closed door is a
     wall until a test person stands at it. Detection, the coverage map and
     the drawn ranges all use it.
+  - `floor-planner-trace.mjs` finds the rooms on an uploaded floor plan
+    from its pixels: dark, uncoloured parts thick enough to be a wall are
+    walls, openings up to a door wide are closed, and every space they close
+    off is a room. It runs in the browser and needs the image's scale. A
+    recognised room that covers about the same space takes the traced outline.
   - `floor-planner-recognise.mjs` turns rooms recognised on an uploaded floor
     plan into a draft that lies on that image. The recognition itself runs in
     an account service: Home Assistant passes its own (`recognise` on the

@@ -6,7 +6,10 @@ import {
     newId, radarNames, radarsFor, readDemo, roomForDevice, sameSensorPlacement, sensorPan, sensorTilt, snap, validPlan, wallColors, zoneTypes,
 } from './floor-planner-model.mjs';
 import { escapeText, paintFurniture, paintPlacementPreview, paintPlan } from './floor-planner-drawing.mjs';
-import { defaultWindowSill, edgePosition, maxRoomCorners, outlineBounds, polygonEdges, roomArea, roomCorners, roomInteriorPoint, roomRayEnd, roomWallEdges } from './floor-planner-geometry.mjs';
+import {
+    defaultWindowSill, edgePosition, maxRoomCorners, outlineBounds, polygonEdges, roomArea, roomContains, roomCorners, roomInteriorPoint, roomRayEnd,
+    roomWallEdges,
+} from './floor-planner-geometry.mjs';
 import { furnitureAt, furnitureCatalog, furnitureFootprint, furnitureMaterials, maxFurniture, withFurniture } from './floor-planner-furniture.mjs';
 import { defaultSpaceCamera, orbitSpaceCamera, paintBuilding, paintSpace, projectSpace, unprojectFloor } from './floor-planner-space.mjs';
 import { buildingFormat, floorLabel, localizeSampleRooms, maxFloors, moveRoomToFloor, roomContents, roomOpening, rotatedRoom, sampleBuilding, snapRoomOffset, translatedItem, validProject, wallOpeningPosition } from './floor-planner-building.mjs';
@@ -28,8 +31,9 @@ import { doorAt, doorsHeldOpen, planWithOpenDoors, prepareSight } from './floor-
 import { removeOrphanedSensorZones, removeZonesOwnedBySensor } from './floor-planner-zones.mjs';
 import {
     calibrateUnderlay, imagePart, loadUnderlay, maxImageData, movedPart, roomTransparency, startingWidth, underlayKind, underlayMessage,
-    usablePart, wholeImage,
+    underlayPixels, usablePart, wholeImage,
 } from './floor-planner-underlay.mjs';
+import { followTracedWalls, traceFloorPlan } from './floor-planner-trace.mjs';
 import { chosenTool, toolRepeats } from './floor-planner-tools.mjs';
 import { recognise as siteRecognise } from './floor-planner-account.js';
 import {
@@ -138,6 +142,24 @@ const recognition = recogniseRooms && copy.recognise_action ? (() => {
     document.getElementById('fp-underlay').after(scan);
     const percentage = new Intl.NumberFormat(root.dataset.locale, { style: 'percent' });
     return { button, note, meter, bar, share, scan, frame, percentage, timer: 0, state: 'idle', image: null, pending: null };
+})() : null;
+
+// Tracing the walls on the image runs here, in the browser: no account and
+// nothing is sent. It needs the image's scale, because a wall, a door and a
+// room are only told apart by their real size.
+const tracing = copy.trace_action ? (() => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = 'trace_underlay';
+    button.textContent = copy.trace_action;
+    const note = document.createElement('p');
+    note.className = 'fp-note fp-recognise-note';
+    note.setAttribute('role', 'status');
+    note.hidden = true;
+    const controls = document.getElementById('fp-underlay-controls');
+    controls.insertBefore(button, controls.querySelector('[data-action="scale_underlay"]'));
+    controls.append(note);
+    return { button, note, busy: false, pending: false, image: null };
 })() : null;
 
 // Zoom in the corner of the map, where it is seen: out, how far the map is
@@ -271,9 +293,25 @@ const roomRemoval = copy.room_delete_title && copy.room_delete_confirm ? (() => 
     return dialog;
 })() : null;
 
-// Adds the rooms of an answer to the plan, on the image as it lies now.
-function addRecognisedRooms(answer, keepScale) {
-    const draft = draftFromRecognition(answer?.recognition, plan.underlay, { roomName: copy.room, keepScale });
+// The rooms between the walls on the image, at the given width in metres.
+// Null when the image cannot be read or traced.
+async function tracedUnderlay(underlay, metres = underlay.width) {
+    try {
+        return traceFloorPlan(await underlayPixels(underlay), metres);
+    } catch {
+        return null;
+    }
+}
+
+// Adds the rooms of an answer to the plan, on the image as it lies now. A
+// room that matches the walls on the image takes their outline.
+async function addRecognisedRooms(answer, keepScale) {
+    const underlay = plan.underlay;
+    const width = answer?.recognition?.width_m;
+    const traced = await tracedUnderlay(underlay, !keepScale && Number.isFinite(width) && width > 0 ? width : underlay.width);
+    if (plan.underlay?.data !== underlay.data) return showRecognition('idle');
+    const recognition = traced ? followTracedWalls(answer?.recognition, traced) : answer?.recognition;
+    const draft = draftFromRecognition(recognition, plan.underlay, { roomName: copy.room, keepScale });
     const next = draft && planWithDraft(plan, draft);
     if (!next) throw Object.assign(new Error('No rooms'), { code: draft ? 'recognition_failed' : 'no_rooms_found' });
     remember();
@@ -283,6 +321,39 @@ function addRecognisedRooms(answer, keepScale) {
     finish();
     fit();
     showRecognition('idle', recognitionNote(copy, { rooms: added, quota: answer.quota }, value => number.format(value)));
+}
+
+function showTracing(message = '', busy = false) {
+    if (!tracing) return;
+    tracing.busy = busy;
+    tracing.button.disabled = busy;
+    tracing.button.toggleAttribute('aria-busy', busy);
+    tracing.note.textContent = message;
+    tracing.note.hidden = !message;
+}
+
+// Adds the rooms found between the walls of the image, which has its scale.
+// Spaces that already have a room keep it.
+async function traceUnderlay() {
+    const underlay = plan.underlay;
+    showTracing(copy.trace_busy, true);
+    // Let the message show before the work, which takes a moment, starts.
+    await new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve)));
+    const traced = await tracedUnderlay(underlay);
+    if (plan.underlay?.data !== underlay.data) return showTracing();
+    const draft = traced?.rooms.length ? draftFromRecognition(traced, plan.underlay, { roomName: copy.room, keepScale: true }) : null;
+    if (!draft) return showTracing(copy.trace_none);
+    const rooms = draft.rooms.filter(room => !plan.rooms.some(existing => roomContains(existing, roomInteriorPoint(room))));
+    const kept = new Set(rooms.map(room => room.id));
+    const next = rooms.length && planWithDraft(plan, { ...draft, rooms, doors: draft.doors.filter(door => kept.has(door.roomId)) });
+    if (!next) return showTracing(rooms.length ? copy.trace_none : copy.trace_none_new);
+    remember();
+    const added = next.rooms.length - plan.rooms.length;
+    plan = next;
+    setTool('edit');
+    finish();
+    fit();
+    showTracing(copy.trace_done.replace(':count', number.format(added)));
 }
 
 // idle: the plain button. armed: the user saw where the image goes and can
@@ -2078,6 +2149,11 @@ function renderUnderlay() {
         recognition.image = underlay.data;
         recognition.pending = null;
         showRecognition('idle');
+    }
+    if (tracing && tracing.image !== underlay.data && !tracing.busy) {
+        tracing.image = underlay.data;
+        tracing.pending = false;
+        showTracing();
     }
     const place = { x: underlay.x, y: underlay.y, width: underlay.width, height: underlay.width / underlay.ratio };
     for (const [key, value] of Object.entries({ ...place, opacity: underlay.opacity / 100 })) image.setAttribute(key, value);
@@ -4574,12 +4650,21 @@ const actions = {
         const waiting = recognition?.pending;
         if (waiting) {
             recognition.pending = null;
-            try {
-                addRecognisedRooms(waiting, true);
-            } catch (error) {
-                showRecognition('idle', recognitionProblem(copy, error, root.dataset.locale));
-            }
+            addRecognisedRooms(waiting, true).catch(error => showRecognition('idle', recognitionProblem(copy, error, root.dataset.locale)));
+        } else if (tracing?.pending) {
+            tracing.pending = false;
+            traceUnderlay();
         }
+    },
+    // Finds the rooms between the walls on the image, once it has a scale.
+    trace_underlay() {
+        if (!tracing || !plan.underlay || tracing.busy) return;
+        if (plan.underlay.width === startingWidth) {
+            tracing.pending = true;
+            showTracing(copy.trace_needs_scale);
+            return actions.scale_underlay();
+        }
+        traceUnderlay();
     },
     // Two clicks: the first says where the image goes, the second sends it.
     // The request starts inside the click, so a sign-in window may open.
@@ -4602,7 +4687,7 @@ const actions = {
                 showRecognition('idle', recognitionWaiting(copy, waiting, value => number.format(value)));
                 return actions.scale_underlay();
             }
-            addRecognisedRooms(answer, measured);
+            return addRecognisedRooms(answer, measured);
         }).catch(error => showRecognition('idle', recognitionProblem(copy, error, root.dataset.locale)));
     },
     remove_underlay() {
@@ -5421,9 +5506,16 @@ root.addEventListener('change', async ({ target }) => {
         const file = target.files[0];
         target.value = '';
         try {
-            if (file.size > maxProjectFileSize) throw new Error('File size');
-            const data = JSON.parse(await file.text());
-            const result = validProject(data) ? { project: data } : (await import('./floor-planner-import.mjs')).importRoomGeometry(data, copy);
+            // A Sweet Home 3D project is a ZIP archive, often large with its
+            // textures; only the home inside it is read.
+            const sweetHome = await import('./floor-planner-sh3d.mjs');
+            let result;
+            if (await sweetHome.isSweetHome(file)) result = { ...await sweetHome.importSweetHome(file, copy), sweetHome: true };
+            else {
+                if (file.size > maxProjectFileSize) throw new Error('File size');
+                const data = JSON.parse(await file.text());
+                result = validProject(data) ? { project: data } : (await import('./floor-planner-import.mjs')).importRoomGeometry(data, copy);
+            }
             if (showStart || confirm(copy.confirm)) {
                 if (integration) {
                     const used = new Set();
@@ -5441,11 +5533,14 @@ root.addEventListener('change', async ({ target }) => {
                 }
                 replacePlan(result.project);
                 focusNext();
-                if (integration && !appPlanner) element('fp-save').textContent = integration.picker.importNote;
+                const skipped = result.sweetHome && result.review ? copy.import_sh3d_review : '';
+                if (integration && !appPlanner) element('fp-save').textContent = [integration.picker.importNote, skipped].filter(Boolean).join(' ');
+                else if (result.sweetHome) element('fp-save').textContent = [copy.import_sh3d_done, skipped].filter(Boolean).join(' ');
                 else if (result.review) element('fp-save').textContent = result.backup ? copy.import_ha_notes : copy.import_scan_notes;
             }
-        } catch {
-            element(showStart ? 'fp-start-status' : 'fp-save').textContent = copy.import_error;
+        } catch (error) {
+            element(showStart ? 'fp-start-status' : 'fp-save').textContent = error?.code === 'sh3d_old' && copy.import_sh3d_old
+                ? copy.import_sh3d_old : copy.import_error;
         }
     }
 });

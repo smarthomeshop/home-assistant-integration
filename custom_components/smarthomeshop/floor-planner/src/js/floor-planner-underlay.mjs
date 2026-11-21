@@ -140,6 +140,20 @@ export async function loadUnderlay(file, choosePage = () => 1, choosePart = () =
     }
 }
 
+// The pixels of an underlay's image, as { data, width, height } with RGBA
+// values the way a canvas gives them.
+export async function underlayPixels(image) {
+    const picture = new Image();
+    picture.src = image.data;
+    await picture.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = picture.naturalWidth;
+    canvas.height = picture.naturalHeight;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(picture, 0, 0);
+    return context.getImageData(0, 0, canvas.width, canvas.height);
+}
+
 export function calibrateUnderlay(image, start, length, actual) {
     const scale = actual / length;
     const next = { ...image, width: image.width * scale,
