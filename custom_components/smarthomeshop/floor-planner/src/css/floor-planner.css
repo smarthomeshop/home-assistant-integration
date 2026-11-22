@@ -1227,6 +1227,10 @@ details[open] > .fp-toolbar-trigger .fp-toolbar-chevron { transform: rotate(180d
 .fp-sensor-edit .fp-sensor-edit-check { display: flex; align-items: center; gap: 8px; min-height: 44px; color: var(--fp-text); }
 .fp-sensor-edit-check input { width: 17px; height: 17px; flex: none; accent-color: var(--fp-accent); }
 .fp-sensor-edit .fp-note { margin: 0; }
+.fp-share .fp-sensor-edit-body:not(:has(> :not([hidden]))) { display: none; }
+.fp-share-link input { width: 100%; min-height: 44px; padding: 5px 9px; border: 1px solid var(--fp-border); border-radius: 7px; background: #f7f9fc; color: var(--fp-text); font-size: 14px; }
+.fp-share .fp-note { font-size: 13px; }
+.fp-vacuum-list button { justify-content: flex-start; min-height: 44px; padding: 8px 12px; text-align: start; }
 .fp-sensor-edit-footer { display: flex; justify-content: end; gap: 8px; padding: 10px 17px; border-top: 1px solid var(--fp-border); }
 .fp-sensor-edit-footer button { min-height: 44px; padding: 5px 11px; }
 @media (max-width: 520px) {

@@ -1797,7 +1797,33 @@ var pickerCopy = {
     showAll: "Alle sensoren tonen",
     showAreaOnly: "Alleen deze ruimte",
     noAreaDevices: "In deze Home Assistant-ruimte zijn geen geschikte sensoren gevonden.",
-    wrongArea: "Deze sensor hoort bij een andere Home Assistant-ruimte. Kies een sensor uit {area} of toon alle sensoren."
+    wrongArea: "Deze sensor hoort bij een andere Home Assistant-ruimte. Kies een sensor uit {area} of toon alle sensoren.",
+    vacuumAction: "Kaart van robotstofzuiger gebruiken",
+    vacuumTitle: "Kies een kaart",
+    vacuumIntro: "Deze afbeeldingen in Home Assistant tonen de kaart van een robotstofzuiger. Kies die van deze verdieping.",
+    vacuumLoading: "De kaart wordt opgehaald uit Home Assistant...",
+    vacuumRooms: "Kamers van de kaart van je robotstofzuiger: {count}. Controleer ze en voeg je sensoren toe.",
+    vacuumNone: "Er is geen kaart van een robotstofzuiger gevonden in Home Assistant. Een robot met een kaart toont die als afbeelding of camera.",
+    vacuumError: "De kaart kon niet worden geladen. Controleer of de robot online is en probeer het opnieuw.",
+    automationTitle: "Licht volgt aanwezigheid",
+    automationNote: "Laat Home Assistant het licht in deze kamer schakelen als er iemand is.",
+    automationAction: "Automatisering instellen",
+    automationIntro: "Het licht van {area} gaat aan als er iemand in {room} is, en uit als de kamer een tijdje leeg is. Het is een gewone Home Assistant-automatisering die je later kunt aanpassen.",
+    automationLights: "Lampen in {area}: {lights}",
+    automationMinutes: "Licht uit na zoveel minuten zonder iemand",
+    automationDark: "Alleen aanzetten als het buiten donker is",
+    automationCreate: "Automatisering maken",
+    automationUpdate: "Automatisering bijwerken",
+    automationRemove: "Automatisering verwijderen",
+    automationSaved: "De automatisering is klaar en staat aan.",
+    automationRemoved: "De automatisering is verwijderd.",
+    automationOpen: "Openen in Home Assistant",
+    automationNeedsSave: "Sla eerst de plattegrond op. Daarna heeft Home Assistant een aanwezigheidsentiteit voor deze kamer.",
+    automationNeedsArea: "Koppel deze kamer eerst aan een Home Assistant-ruimte. De automatisering schakelt de lampen van die ruimte.",
+    automationNoLights: "Er zijn geen lampen gevonden in {area}. Geef je lampen die ruimte in Home Assistant en probeer het opnieuw.",
+    automationError: "Home Assistant kon de automatisering niet opslaan. Probeer het zo opnieuw.",
+    automationName: "{room}: licht volgt aanwezigheid",
+    automationDescription: "Gemaakt op de SmartHomeShop-plattegrond. Schakelt de lampen van {area} op de aanwezigheid in {room}."
   },
   en: {
     title: "Add a Home Assistant sensor",
@@ -1829,7 +1855,33 @@ var pickerCopy = {
     showAll: "Show all sensors",
     showAreaOnly: "Only this area",
     noAreaDevices: "No compatible sensors were found in this Home Assistant area.",
-    wrongArea: "This sensor belongs to another Home Assistant area. Choose a sensor from {area} or show all sensors."
+    wrongArea: "This sensor belongs to another Home Assistant area. Choose a sensor from {area} or show all sensors.",
+    vacuumAction: "Use robot vacuum map",
+    vacuumTitle: "Choose a map",
+    vacuumIntro: "These pictures in Home Assistant show the map of a robot vacuum. Pick the one of this floor.",
+    vacuumLoading: "Getting the map from Home Assistant...",
+    vacuumRooms: "Rooms from your robot vacuum map: {count}. Check them and add your sensors.",
+    vacuumNone: "No robot vacuum map was found in Home Assistant. A robot with a map shows it as an image or camera entity.",
+    vacuumError: "The map could not be loaded. Check that the robot is online and try again.",
+    automationTitle: "Lights follow presence",
+    automationNote: "Let Home Assistant switch the lights of this room when somebody is there.",
+    automationAction: "Set up automation",
+    automationIntro: "The lights of {area} go on when somebody is in {room}, and off when the room has been empty for a while. It is a normal Home Assistant automation that you can change later.",
+    automationLights: "Lights in {area}: {lights}",
+    automationMinutes: "Lights off after this many minutes without anybody",
+    automationDark: "Only switch on when it is dark outside",
+    automationCreate: "Create automation",
+    automationUpdate: "Update automation",
+    automationRemove: "Remove automation",
+    automationSaved: "The automation is ready and switched on.",
+    automationRemoved: "The automation is removed.",
+    automationOpen: "Open it in Home Assistant",
+    automationNeedsSave: "Save the floor plan first. After that Home Assistant has a presence entity for this room.",
+    automationNeedsArea: "Link this room to a Home Assistant area first. The automation switches the lights of that area.",
+    automationNoLights: "No lights were found in {area}. Give your lights that area in Home Assistant and try again.",
+    automationError: "Home Assistant could not save the automation. Try again in a moment.",
+    automationName: "{room}: lights follow presence",
+    automationDescription: "Made on the SmartHomeShop floor plan. Switches the lights of {area} by the presence in {room}."
   },
   de: {
     title: "Home-Assistant-Sensor hinzufügen",
@@ -1861,7 +1913,33 @@ var pickerCopy = {
     showAll: "Alle Sensoren anzeigen",
     showAreaOnly: "Nur dieser Bereich",
     noAreaDevices: "In diesem Home-Assistant-Bereich wurden keine kompatiblen Sensoren gefunden.",
-    wrongArea: "Dieser Sensor gehört zu einem anderen Home-Assistant-Bereich. Wähle einen Sensor aus {area} oder zeige alle Sensoren an."
+    wrongArea: "Dieser Sensor gehört zu einem anderen Home-Assistant-Bereich. Wähle einen Sensor aus {area} oder zeige alle Sensoren an.",
+    vacuumAction: "Karte des Saugroboters verwenden",
+    vacuumTitle: "Karte auswählen",
+    vacuumIntro: "Diese Bilder in Home Assistant zeigen die Karte eines Saugroboters. Wähle die Karte dieses Stockwerks.",
+    vacuumLoading: "Die Karte wird aus Home Assistant geladen...",
+    vacuumRooms: "Räume aus der Karte deines Saugroboters: {count}. Prüfe sie und füge deine Sensoren hinzu.",
+    vacuumNone: "In Home Assistant wurde keine Karte eines Saugroboters gefunden. Ein Roboter mit Karte zeigt sie als Bild oder Kamera.",
+    vacuumError: "Die Karte konnte nicht geladen werden. Prüfe, ob der Roboter online ist, und versuche es erneut.",
+    automationTitle: "Licht folgt der Anwesenheit",
+    automationNote: "Lass Home Assistant das Licht in diesem Raum schalten, wenn jemand da ist.",
+    automationAction: "Automatisierung einrichten",
+    automationIntro: "Das Licht von {area} geht an, wenn jemand in {room} ist, und aus, wenn der Raum eine Weile leer war. Es ist eine normale Home-Assistant-Automatisierung, die du später ändern kannst.",
+    automationLights: "Lichter in {area}: {lights}",
+    automationMinutes: "Licht aus nach so vielen Minuten ohne Person",
+    automationDark: "Nur einschalten, wenn es draußen dunkel ist",
+    automationCreate: "Automatisierung erstellen",
+    automationUpdate: "Automatisierung aktualisieren",
+    automationRemove: "Automatisierung entfernen",
+    automationSaved: "Die Automatisierung ist fertig und eingeschaltet.",
+    automationRemoved: "Die Automatisierung wurde entfernt.",
+    automationOpen: "In Home Assistant öffnen",
+    automationNeedsSave: "Speichere zuerst den Grundriss. Danach hat Home Assistant eine Anwesenheitsentität für diesen Raum.",
+    automationNeedsArea: "Verknüpfe diesen Raum zuerst mit einem Home-Assistant-Bereich. Die Automatisierung schaltet die Lichter dieses Bereichs.",
+    automationNoLights: "In {area} wurden keine Lichter gefunden. Weise deinen Lichtern diesen Bereich in Home Assistant zu und versuche es erneut.",
+    automationError: "Home Assistant konnte die Automatisierung nicht speichern. Versuche es gleich noch einmal.",
+    automationName: "{room}: Licht folgt der Anwesenheit",
+    automationDescription: "Erstellt im SmartHomeShop-Grundriss. Schaltet die Lichter von {area} nach der Anwesenheit in {room}."
   },
   fr: {
     title: "Ajouter un capteur Home Assistant",
@@ -1893,7 +1971,33 @@ var pickerCopy = {
     showAll: "Afficher tous les capteurs",
     showAreaOnly: "Uniquement cette zone",
     noAreaDevices: "Aucun capteur compatible trouvé dans cette zone Home Assistant.",
-    wrongArea: "Ce capteur appartient à une autre zone Home Assistant. Choisissez un capteur de {area} ou affichez tous les capteurs."
+    wrongArea: "Ce capteur appartient à une autre zone Home Assistant. Choisissez un capteur de {area} ou affichez tous les capteurs.",
+    vacuumAction: "Utiliser la carte du robot aspirateur",
+    vacuumTitle: "Choisir une carte",
+    vacuumIntro: "Ces images dans Home Assistant montrent la carte d'un robot aspirateur. Choisis celle de cet étage.",
+    vacuumLoading: "Récupération de la carte depuis Home Assistant...",
+    vacuumRooms: "Pièces de la carte de ton robot aspirateur : {count}. Vérifie-les et ajoute tes capteurs.",
+    vacuumNone: "Aucune carte de robot aspirateur n'a été trouvée dans Home Assistant. Un robot avec une carte l'affiche comme image ou caméra.",
+    vacuumError: "La carte n'a pas pu être chargée. Vérifie que le robot est en ligne et réessaie.",
+    automationTitle: "La lumière suit la présence",
+    automationNote: "Laisse Home Assistant commander la lumière de cette pièce quand quelqu'un s'y trouve.",
+    automationAction: "Configurer l'automatisation",
+    automationIntro: "Les lumières de {area} s'allument quand quelqu'un est dans {room}, et s'éteignent quand la pièce est restée vide un moment. C'est une automatisation Home Assistant normale que tu peux modifier plus tard.",
+    automationLights: "Lumières dans {area} : {lights}",
+    automationMinutes: "Lumière éteinte après ce nombre de minutes sans personne",
+    automationDark: "Allumer seulement quand il fait nuit dehors",
+    automationCreate: "Créer l'automatisation",
+    automationUpdate: "Mettre à jour l'automatisation",
+    automationRemove: "Supprimer l'automatisation",
+    automationSaved: "L'automatisation est prête et activée.",
+    automationRemoved: "L'automatisation est supprimée.",
+    automationOpen: "Ouvrir dans Home Assistant",
+    automationNeedsSave: "Enregistre d'abord le plan. Home Assistant aura ensuite une entité de présence pour cette pièce.",
+    automationNeedsArea: "Relie d'abord cette pièce à une zone Home Assistant. L'automatisation commande les lumières de cette zone.",
+    automationNoLights: "Aucune lumière n'a été trouvée dans {area}. Attribue cette zone à tes lumières dans Home Assistant et réessaie.",
+    automationError: "Home Assistant n'a pas pu enregistrer l'automatisation. Réessaie dans un instant.",
+    automationName: "{room} : la lumière suit la présence",
+    automationDescription: "Créée sur le plan SmartHomeShop. Commande les lumières de {area} selon la présence dans {room}."
   },
   es: {
     title: "Añadir un sensor de Home Assistant",
@@ -1925,7 +2029,33 @@ var pickerCopy = {
     showAll: "Mostrar todos los sensores",
     showAreaOnly: "Solo esta zona",
     noAreaDevices: "No se encontraron sensores compatibles en esta zona de Home Assistant.",
-    wrongArea: "Este sensor pertenece a otra zona de Home Assistant. Elige un sensor de {area} o muestra todos los sensores."
+    wrongArea: "Este sensor pertenece a otra zona de Home Assistant. Elige un sensor de {area} o muestra todos los sensores.",
+    vacuumAction: "Usar el mapa del robot aspirador",
+    vacuumTitle: "Elige un mapa",
+    vacuumIntro: "Estas imágenes de Home Assistant muestran el mapa de un robot aspirador. Elige el de esta planta.",
+    vacuumLoading: "Obteniendo el mapa de Home Assistant...",
+    vacuumRooms: "Habitaciones del mapa de tu robot aspirador: {count}. Compruébalas y añade tus sensores.",
+    vacuumNone: "No se encontró ningún mapa de robot aspirador en Home Assistant. Un robot con mapa lo muestra como imagen o cámara.",
+    vacuumError: "No se pudo cargar el mapa. Comprueba que el robot está en línea e inténtalo de nuevo.",
+    automationTitle: "La luz sigue la presencia",
+    automationNote: "Deja que Home Assistant controle la luz de esta habitación cuando haya alguien.",
+    automationAction: "Configurar automatización",
+    automationIntro: "Las luces de {area} se encienden cuando hay alguien en {room} y se apagan cuando la habitación lleva un rato vacía. Es una automatización normal de Home Assistant que puedes cambiar después.",
+    automationLights: "Luces en {area}: {lights}",
+    automationMinutes: "Luz apagada tras estos minutos sin nadie",
+    automationDark: "Encender solo cuando fuera esté oscuro",
+    automationCreate: "Crear automatización",
+    automationUpdate: "Actualizar automatización",
+    automationRemove: "Eliminar automatización",
+    automationSaved: "La automatización está lista y activada.",
+    automationRemoved: "La automatización se ha eliminado.",
+    automationOpen: "Abrir en Home Assistant",
+    automationNeedsSave: "Guarda primero el plano. Después Home Assistant tendrá una entidad de presencia para esta habitación.",
+    automationNeedsArea: "Vincula primero esta habitación a una zona de Home Assistant. La automatización controla las luces de esa zona.",
+    automationNoLights: "No se encontraron luces en {area}. Asigna esa zona a tus luces en Home Assistant e inténtalo de nuevo.",
+    automationError: "Home Assistant no pudo guardar la automatización. Inténtalo de nuevo en un momento.",
+    automationName: "{room}: la luz sigue la presencia",
+    automationDescription: "Creada en el plano de SmartHomeShop. Controla las luces de {area} según la presencia en {room}."
   }
 };
 var coverageEstimateCopy = {
@@ -1935,6 +2065,119 @@ var coverageEstimateCopy = {
   es: "Cobertura estimada fuera de la altura de referencia",
   fr: "Couverture estimée hors hauteur de référence"
 };
+
+// src/ha/ha-vacuum.js
+var mapWords = /(^|_)(map|maps|karte|kaart|carte|mapa)(_|$)/;
+var hasRobotVacuum = (hass) => Object.keys(hass?.states ?? {}).some((id) => id.startsWith("vacuum."));
+function vacuumMaps(hass) {
+  const states = hass?.states ?? {};
+  const registry = hass?.entities ?? {};
+  const robots = new Set(Object.values(registry).filter((entity) => entity?.entity_id?.startsWith("vacuum.") && entity.device_id).map((entity) => entity.device_id));
+  if (!robots.size && !hasRobotVacuum(hass)) return [];
+  return Object.keys(states).filter((id) => {
+    if (!/^(image|camera)\./.test(id)) return false;
+    const state = states[id];
+    if (state?.state === "unavailable" || !mapPath(state)) return false;
+    const device = registry[id]?.device_id;
+    return device && robots.has(device) || mapWords.test(id.slice(id.indexOf(".") + 1));
+  }).map((id) => ({ id, name: String(states[id].attributes.friendly_name || id) })).sort((one, two) => one.name.localeCompare(two.name));
+}
+var mapPath = (state) => {
+  const path = state?.attributes?.entity_picture;
+  return typeof path === "string" && /^\/api\/(image|camera)_proxy\//.test(path) ? path : null;
+};
+async function loadVacuumMap(hass, id, get = (...request) => fetch(...request)) {
+  const path = mapPath(hass?.states?.[id]);
+  if (!path) throw new Error("No map picture");
+  const response = await get(typeof hass.hassUrl === "function" ? hass.hassUrl(path) : path, { credentials: "same-origin" });
+  if (!response.ok) throw new Error("No map picture");
+  return response.blob();
+}
+
+// src/ha/ha-automation.js
+var automationMinutes = { least: 1, most: 120, usual: 3 };
+var presenceLightsId = (roomId) => "smarthomeshop_presence_lights_" + String(roomId).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+function roomPresenceEntity(hass, roomId) {
+  if (!roomId) return null;
+  const device = Object.values(hass?.devices ?? {}).find((candidate) => (candidate?.identifiers ?? []).some((identifier) => identifier?.[0] === "smarthomeshop" && identifier[1] === `room:${roomId}`));
+  if (!device) return null;
+  const sensors = Object.values(hass.entities ?? {}).filter((entity) => entity?.device_id === device.id && entity.entity_id?.startsWith("binary_sensor."));
+  return (sensors.find((entity) => entity.translation_key === "room_occupancy") ?? sensors[0])?.entity_id ?? null;
+}
+function areaLights(hass, areaId) {
+  if (!areaId) return [];
+  return Object.values(hass?.entities ?? {}).filter((entity) => entity?.entity_id?.startsWith("light.") && !entity.hidden && (entity.area_id ?? hass.devices?.[entity.device_id]?.area_id) === areaId).map((entity) => ({ id: entity.entity_id, name: String(hass.states?.[entity.entity_id]?.attributes?.friendly_name ?? entity.entity_id) })).sort((one, two) => one.name.localeCompare(two.name));
+}
+var wholeMinutes = (value) => Math.min(automationMinutes.most, Math.max(automationMinutes.least, Math.round(Number(value)) || automationMinutes.usual));
+function presenceLightsConfig({ presence, areaId, minutes, onlyDark, alias, description }) {
+  const target = { area_id: areaId };
+  const dark = { condition: "state", entity_id: "sun.sun", state: "below_horizon" };
+  return {
+    alias,
+    description,
+    mode: "single",
+    triggers: [
+      { trigger: "state", entity_id: presence, to: "on", id: "present" },
+      { trigger: "state", entity_id: presence, to: "off", for: { minutes: wholeMinutes(minutes) }, id: "empty" },
+      ...onlyDark ? [{ trigger: "state", entity_id: "sun.sun", to: "below_horizon", id: "dusk" }] : []
+    ],
+    conditions: [],
+    actions: [{ choose: [
+      {
+        conditions: [{ condition: "trigger", id: "present" }, ...onlyDark ? [dark] : []],
+        sequence: [{ action: "light.turn_on", target }]
+      },
+      ...onlyDark ? [{
+        conditions: [{ condition: "trigger", id: "dusk" }, { condition: "state", entity_id: presence, state: "on" }],
+        sequence: [{ action: "light.turn_on", target }]
+      }] : [],
+      { conditions: [{ condition: "trigger", id: "empty" }], sequence: [{ action: "light.turn_off", target }] }
+    ] }]
+  };
+}
+function presenceLightsOptions(config) {
+  const triggers = [config?.triggers ?? config?.trigger ?? []].flat();
+  const empty = triggers.find((trigger) => trigger?.id === "empty");
+  return { minutes: wholeMinutes(empty?.for?.minutes), onlyDark: triggers.some((trigger) => trigger?.id === "dusk") };
+}
+var address = (id) => `config/automation/config/${id}`;
+async function presenceLightsState(hass, room) {
+  const id = presenceLightsId(room.haRoom ?? room.id);
+  const presence = roomPresenceEntity(hass, room.haRoom);
+  let saved = null;
+  if (presence) {
+    try {
+      saved = presenceLightsOptions(await hass.callApi("GET", address(id)));
+    } catch (error) {
+      if (error?.status_code !== 404) throw error;
+    }
+  }
+  const areaId = room.haAreaId ?? null;
+  return {
+    id,
+    presence,
+    areaId,
+    areaName: areaId ? String(hass.areas?.[areaId]?.name ?? areaId) : "",
+    lights: areaLights(hass, areaId),
+    sun: Boolean(hass.states?.["sun.sun"]),
+    saved
+  };
+}
+async function savePresenceLights(hass, room, { minutes, onlyDark }, texts) {
+  const state = await presenceLightsState(hass, room);
+  if (!state.presence || !state.areaId) throw new Error("Room not ready");
+  const fill = (text) => String(text ?? "").replaceAll("{room}", room.name).replaceAll("{area}", state.areaName);
+  await hass.callApi("POST", address(state.id), presenceLightsConfig({
+    presence: state.presence,
+    areaId: state.areaId,
+    minutes,
+    onlyDark: Boolean(onlyDark) && state.sun,
+    alias: fill(texts.automationName),
+    description: fill(texts.automationDescription)
+  }));
+  return state.id;
+}
+var removePresenceLights = (hass, room) => hass.callApi("DELETE", address(presenceLightsId(room.haRoom ?? room.id)));
 
 // src/ha/host.js
 var same2 = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -2179,6 +2422,17 @@ var FloorPlannerPage = class extends HTMLElement {
         if (answer?.error) throw Object.assign(new Error(answer.error.message), { code: answer.error.code, quota: answer.quota });
         return answer;
       } : void 0,
+      // Lights that follow who is in a room: an automation, which only
+      // administrators can make.
+      presenceLights: this.#hass?.user?.is_admin ? {
+        state: (room) => presenceLightsState(this.#hass, room),
+        save: (room, options) => savePresenceLights(this.#hass, room, options, pickerCopy[language] ?? pickerCopy.en),
+        remove: (room) => removePresenceLights(this.#hass, room)
+      } : void 0,
+      // The maps robot vacuums drew, and the picture of one of them.
+      robotVacuum: () => hasRobotVacuum(this.#hass),
+      vacuumMaps: () => vacuumMaps(this.#hass),
+      vacuumMap: (id) => loadVacuumMap(this.#hass, id),
       calibrationLabel: (roomId) => {
         const calibration = this.#floorPlan.rooms.find((room) => room.id === roomId)?.calibration;
         return calibration?.enabled ? `${this.#text.savedCalibration} · ${calibration.corners?.length ?? 0} ${this.#text.points}` : "";

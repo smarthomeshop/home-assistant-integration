@@ -112,7 +112,9 @@ floor, drag a box around the floor you want and only that part is used, as
 sharp as the original. **Trace walls** finds the rooms between the walls of
 the drawing and the doors between them, in your browser, without an account
 and without sending anything; it asks for the scale first. It works on walls
-drawn as solid bands or as two lines, straight or slanted. With a linked
+drawn as solid bands or as two lines, straight or slanted. On a drawing with
+solid walls it also finds the windows: the stretches of wall drawn open with
+lines or a light band in them. With a linked
 SmartHomeShop.io account, **Recognise rooms with AI** reads the plan and adds
 the rooms as a draft for you to check (the image is sent to SmartHomeShop.io
 for this, only when you ask for it); rooms it finds that match the walls on
@@ -131,6 +133,21 @@ hang in real life. Administrators edit the plan; other users see the live view.
   radar sees someone, and only clear when every selected radar reports clear
   for the clear delay. Missing or stale data gives unknown, never a false
   clear.
+- **The map of your robot vacuum.** *Project > Use robot vacuum map* takes
+  the map a robot vacuum drew straight from Home Assistant, from the image or
+  camera entity of its integration. A Valetudo robot's map brings its rooms
+  along, with their names and to scale. Any other map goes under the plan as
+  an image: set the scale with two clicks and the rooms are found by their
+  colours.
+- **Lights follow presence.** A room that is saved and linked to a Home
+  Assistant area can get an automation from its settings: the lights of that
+  area go on when somebody is in the room and off after it has been empty for
+  the minutes you choose, optionally only when it is dark outside. It is a
+  normal automation that you can change in Home Assistant, and administrators
+  only.
+- **Save as image or PDF.** *Project > Save as image* gives a picture of the
+  floor that is open, *Save as PDF* a page for every floor: the rooms, the
+  sensors with what they cover and a list of those sensors.
 - **Home Assistant room links.** Link each drawn room to its Home Assistant
   floor and area. The sensor picker then starts with the devices assigned to
   that area, with an explicit option to show every compatible sensor.

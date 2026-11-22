@@ -21,6 +21,8 @@ import {
     collectLivePresence, detectionSummary, livePeople, liveTracks, radarEntityIds, radarProfiles, withFusedRooms,
 } from './ha-live.js';
 import { coverageEstimateCopy, editorLabels, pageText, pickerCopy } from './host-copy.js';
+import { hasRobotVacuum, loadVacuumMap, vacuumMaps } from './ha-vacuum.js';
+import { presenceLightsState, removePresenceLights, savePresenceLights } from './ha-automation.js';
 import { validProject } from '../js/floor-planner-building.mjs';
 import { EntityReportReceiptTracker, latestIndependentReportTimestamp } from '../../../panel/src/utils/whole-home.ts';
 
@@ -298,6 +300,17 @@ class FloorPlannerPage extends HTMLElement {
                 if (answer?.error) throw Object.assign(new Error(answer.error.message), { code: answer.error.code, quota: answer.quota });
                 return answer;
             } : undefined,
+            // Lights that follow who is in a room: an automation, which only
+            // administrators can make.
+            presenceLights: this.#hass?.user?.is_admin ? {
+                state: room => presenceLightsState(this.#hass, room),
+                save: (room, options) => savePresenceLights(this.#hass, room, options, pickerCopy[language] ?? pickerCopy.en),
+                remove: room => removePresenceLights(this.#hass, room),
+            } : undefined,
+            // The maps robot vacuums drew, and the picture of one of them.
+            robotVacuum: () => hasRobotVacuum(this.#hass),
+            vacuumMaps: () => vacuumMaps(this.#hass),
+            vacuumMap: id => loadVacuumMap(this.#hass, id),
             calibrationLabel: roomId => {
                 const calibration = this.#floorPlan.rooms.find(room => room.id === roomId)?.calibration;
                 return calibration?.enabled

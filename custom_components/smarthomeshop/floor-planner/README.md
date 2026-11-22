@@ -25,12 +25,24 @@ card. This folder is its source; Home Assistant serves the build in
     walls, openings up to a door wide are closed, and every space they close
     off is a room. It runs in the browser and needs the image's scale. A
     recognised room that covers about the same space takes the traced outline.
+    On a drawing with solid walls, a stretch of wall drawn open with lines or
+    a light band in it is a window, or a door where a door swings at it.
+  - `floor-planner-vacuum.mjs` reads the map of a robot vacuum. On an image of
+    such a map the rooms are areas of one colour each; the editor tries that
+    when an image has no walls to trace. A Valetudo robot puts the map itself
+    in its picture, in a text chunk of the PNG: that gives the rooms with
+    their names and the scale, without tracing.
+  - `floor-planner-sheet.mjs` draws a plan as pages to keep or print, one for
+    every floor, each an SVG with its own colours, and writes them into a PDF
+    file. The editor turns a page into pixels for *Save as image* and *Save as
+    PDF*.
   - `floor-planner-recognise.mjs` turns rooms recognised on an uploaded floor
     plan into a draft that lies on that image. The recognition itself runs in
     an account service: Home Assistant passes its own (`recognise` on the
     host), and `floor-planner-account.js` is the place where a site that
     offers the planner on its own plugs in one. Without either, the button is
-    not shown.
+    not shown. The same module is where such a site plugs in a place to keep
+    plans that are shared with a link (`sharing`).
 - `src/ha`: everything that ties the planner to Home Assistant.
   - `editor-entry.js` starts the editor inside the panel's iframe.
   - `host.js` is the `shs-floor-planner-page` element: it loads rooms and
@@ -40,6 +52,9 @@ card. This folder is its source; Home Assistant serves the build in
   - `ha-rooms.js` and `ha-save.js` turn stored rooms into a planner project
     and back. `ha-live.js` works out live presence, `fusion.js` combines
     several radars, `safety.js` holds the zone and validation rules.
+  - `ha-vacuum.js` finds the map pictures of robot vacuums in Home Assistant
+    and fetches one. `ha-automation.js` makes the automation that lets the
+    lights of a room's area follow the presence in that room.
   - `shells/*.html` are the editor pages in five languages, with their text.
   - `static/` holds the product images the editor shows.
 - `test/`: node tests for the planner, with the Home Assistant parts in

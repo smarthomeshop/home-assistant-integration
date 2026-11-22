@@ -34,6 +34,12 @@ function paper() {
             this.line(right, bottom, left, bottom);
             this.line(left, bottom, left, top);
         },
+        // A quarter circle one pixel wide, from one angle to the next in degrees.
+        arc(x, y, radius, from, to) {
+            for (let angle = from; angle <= to; angle += .5) {
+                paint(Math.round(px(x) + px(radius) * Math.cos(angle * Math.PI / 180)), Math.round(px(y) + px(radius) * Math.sin(angle * Math.PI / 180)), black);
+            }
+        },
         // A filled polygon, corners in metres.
         polygon(points, colour = black) {
             for (let y = 0; y < height; y++) {
@@ -124,6 +130,86 @@ test('a front door does not let the outside into the room', () => {
     assert.ok(near(bounds(sorted(traced.rooms)[0]), leftRoom, .12));
 });
 
+// The ends of a traced door or window in metres: [x1, y1, x2, y2].
+const ends = item => [item.from[0] * across, item.from[1] * down, item.to[0] * across, item.to[1] * down];
+const white = [255, 255, 255];
+
+test('a window drawn as lines in a solid wall is found, and a front door with its swing is not one', () => {
+    const drawing = paper();
+    for (const wall of walls) drawing.box(...wall);
+    // A window of 1.2 m in the top wall of the left room: the two faces of
+    // the wall and the glass between them.
+    drawing.box(2, 1, 3.2, 1.2, white);
+    drawing.outline(2, 1, 3.2, 1.175);
+    drawing.line(2, 1.1, 3.2, 1.1);
+    // A front door of 90 cm in the bottom wall, with its sill, leaf and swing.
+    drawing.box(2, 5.8, 2.9, 6, white);
+    drawing.line(2, 5.9, 2.9, 5.9);
+    drawing.line(2, 5.8, 2, 4.9);
+    drawing.arc(2, 5.8, .9, 270, 360);
+    const traced = traceFloorPlan(drawing.image, across);
+
+    assert.equal(traced.rooms.length, 2);
+    assert.equal(traced.doors.length, 1, 'only the door between the rooms');
+    assert.equal(traced.windows.length, 1);
+    const [x1, y1, x2, y2] = ends(traced.windows[0]);
+    assert.ok(Math.abs(y1 - 1.1) < .1 && Math.abs(y2 - 1.1) < .1, `in the top wall: ${y1}`);
+    assert.ok(Math.abs(Math.min(x1, x2) - 2) < .1 && Math.abs(Math.max(x1, x2) - 3.2) < .1, `as wide as it is drawn: ${x1} to ${x2}`);
+});
+
+test('a wide window drawn as one thin line keeps its room, and a light band in a wall is a window too', () => {
+    const drawing = paper();
+    for (const wall of walls) drawing.box(...wall);
+    // 2.4 m of glass in the top wall of the right room, wider than a door.
+    drawing.box(6, 1, 8.4, 1.2, white);
+    drawing.line(6, 1.1, 8.4, 1.1);
+    // A narrow grey band in the left wall.
+    drawing.box(1, 2.5, 1.2, 3.7, white);
+    drawing.box(1.05, 2.5, 1.15, 3.7, [175, 175, 175]);
+    const traced = traceFloorPlan(drawing.image, across);
+
+    assert.equal(traced.rooms.length, 2, 'the outside does not come in through the window');
+    assert.ok(near(bounds(sorted(traced.rooms)[1]), rightRoom, .12));
+    assert.equal(traced.windows.length, 2);
+    const [wide, band] = [...traced.windows].sort((a, b) => b.from[0] - a.from[0]).map(ends);
+    assert.ok(Math.abs(Math.abs(wide[2] - wide[0]) - 2.4) < .15, `the wide window: ${wide}`);
+    assert.ok(Math.abs(band[0] - 1.1) < .1 && Math.abs(Math.abs(band[3] - band[1]) - 1.2) < .15, `the band in the left wall: ${band}`);
+});
+
+test('glass between two rooms is a window where the wall goes on, and a door where a door swings', () => {
+    const drawing = paper();
+    for (const wall of walls) drawing.box(...wall);
+    // The wall between the rooms gets a window of 80 cm above its door, and
+    // the door gets glass in it and a swing.
+    drawing.box(5, 1.5, 5.2, 2.3, white);
+    drawing.outline(5, 1.5, 5.175, 2.3);
+    drawing.line(5.1, 3, 5.1, 3.9);
+    drawing.line(5.2, 3, 6.1, 3);
+    drawing.arc(5.2, 3, .9, 0, 90);
+    const traced = traceFloorPlan(drawing.image, across);
+
+    assert.equal(traced.rooms.length, 2);
+    assert.equal(traced.doors.length, 1);
+    assert.equal(traced.windows.length, 1);
+    const [, y1, , y2] = ends(traced.windows[0]);
+    assert.ok(Math.abs(Math.min(y1, y2) - 1.5) < .1 && Math.abs(Math.max(y1, y2) - 2.3) < .1, `the window: ${y1} to ${y2}`);
+});
+
+test('a drawing whose walls are two lines gives no windows, and neither does a thin wall or an open passage', () => {
+    const outlined = paper();
+    for (const wall of walls) outlined.outline(...wall);
+    outlined.line(2, 1.1, 3.2, 1.1);
+    assert.deepEqual(traceFloorPlan(outlined.image, across).windows, []);
+
+    const drawing = paper();
+    for (const wall of walls) drawing.box(...wall);
+    // A stretch of the top wall that is a thin solid wall, and a plain gap.
+    drawing.box(2, 1, 3.2, 1.2, white);
+    drawing.box(2, 1.05, 3.2, 1.15);
+    drawing.box(6.5, 1, 7.4, 1.2, white);
+    assert.deepEqual(traceFloorPlan(drawing.image, across).windows, []);
+});
+
 test('a slanted wall gives the room a slanted side', () => {
     const drawing = paper();
     for (const wall of [[1, 1, 7, 1.2], [1, 5.8, 9, 6], [1, 1, 1.2, 6]]) drawing.box(...wall);
@@ -162,6 +248,26 @@ test('traced rooms go on the plan as a valid draft, with their door', () => {
     assert.equal(plan.rooms.length, 2);
     assert.equal(plan.doors.length, 1);
     assert.equal(validPlan(plan), true);
+});
+
+test('a traced window goes on the plan in the wall of its room', () => {
+    const drawing = paper();
+    for (const wall of walls) drawing.box(...wall);
+    drawing.box(2, 1, 3.2, 1.2, white);
+    drawing.outline(2, 1, 3.2, 1.175);
+    drawing.line(2, 1.1, 3.2, 1.1);
+    const traced = traceFloorPlan(drawing.image, across);
+    const underlay = { data: 'data:image/jpeg;base64,AAAA', ratio: across / down, x: 0, y: 0, width: across, opacity: 45 };
+    const draft = draftFromRecognition(traced, underlay, { keepScale: true });
+    const plan = planWithDraft({ version: 3, name: 'Traced', rooms: [], walls: [], doors: [], sensors: [] }, draft);
+
+    assert.equal(validPlan(plan), true);
+    assert.equal(plan.windows.length, 1);
+    const [window] = plan.windows;
+    const room = plan.rooms.find(item => item.id === window.roomId);
+    assert.ok(near([room.x, room.y, room.x + room.width, room.y + room.depth], leftRoom), 'in the left room');
+    assert.ok(Math.abs(window.width - 1.2) < .1 && Math.abs(window.y - 1.2) < .1 && Math.abs(window.x - 2) < .1,
+        `on its top wall: ${JSON.stringify(window)}`);
 });
 
 test('a recognised room takes the outline of the traced room it matches and keeps its name', () => {

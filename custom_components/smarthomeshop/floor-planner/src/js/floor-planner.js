@@ -34,8 +34,10 @@ import {
     underlayPixels, usablePart, wholeImage,
 } from './floor-planner-underlay.mjs';
 import { followTracedWalls, traceFloorPlan } from './floor-planner-trace.mjs';
+import { embeddedMap, mapRooms, traceColourMap } from './floor-planner-vacuum.mjs';
 import { chosenTool, toolRepeats } from './floor-planner-tools.mjs';
-import { recognise as siteRecognise } from './floor-planner-account.js';
+import { recognise as siteRecognise, sharing as siteSharing } from './floor-planner-account.js';
+import { pdfDocument, sheetFileName, sheetFloors, sheetPages } from './floor-planner-sheet.mjs';
 import {
     draftFromRecognition, planWithDraft, recognitionNote, recognitionProblem, recognitionProgress, recognitionWaiting, roomsWaitingForScale,
 } from './floor-planner-recognise.mjs';
@@ -160,6 +162,123 @@ const tracing = copy.trace_action ? (() => {
     controls.insertBefore(button, controls.querySelector('[data-action="scale_underlay"]'));
     controls.append(note);
     return { button, note, busy: false, pending: false, image: null };
+})() : null;
+
+// The plan as an image or a PDF, and as a link where the site keeps shared
+// plans, sit with the other files in the project menu. So does the map of a
+// robot vacuum, where Home Assistant has one.
+const fileButtons = (() => {
+    const files = root.querySelector('.fp-project-files');
+    if (!files) return {};
+    const made = {};
+    // Each goes after the button it belongs with, or after the one before it.
+    for (const [action, label, drawing, after] of [
+        ['vacuum_map', integration?.vacuumMaps && integration.picker.vacuumAction,
+            '<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2.2"/><path d="M10 3v2.3m-5.4 1 1.7 1.4m9.1-1.4-1.7 1.4"/>', 'import_underlay'],
+        ['sheet_image', copy.sheet_image, '<rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="m3 13 4-4 3 3 2-2 5 5m-4-7h.1"/>', 'export'],
+        ['sheet_pdf', copy.sheet_pdf, '<path d="M5 2.5h6l4 4v11H5zM11 2.5v4h4M7.5 11h5m-5 3h5"/>', 'sheet_image'],
+        ['share', siteSharing && copy.share_action, '<path d="M8.6 11.4a3 3 0 0 0 4.2 0l2.7-2.7a3 3 0 0 0-4.2-4.2l-1 1m1.1 3.1a3 3 0 0 0-4.2 0l-2.7 2.7a3 3 0 0 0 4.2 4.2l1-1"/>', 'sheet_pdf'],
+    ]) {
+        if (!label) continue;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.action = action;
+        button.innerHTML = `<svg viewBox="0 0 20 20" aria-hidden="true">${drawing}</svg>`;
+        button.append(' ' + label);
+        (made[after] ?? files.querySelector(`[data-action="${after}"]`) ?? files.querySelector('[data-action="export"]') ?? files.lastElementChild).after(button);
+        made[action] = button;
+    }
+    return made;
+})();
+
+// A home without a robot vacuum has no map to offer. One may be added while
+// the planner is open, so the menu looks again every time it opens.
+if (fileButtons.vacuum_map) {
+    const offer = () => { fileButtons.vacuum_map.hidden = !integration.robotVacuum(); };
+    offer();
+    projectMenu.addEventListener('toggle', offer);
+}
+
+// A home with more than one robot map, or a robot that keeps a map of every
+// floor, asks which one to use.
+const vacuumChoice = fileButtons.vacuum_map ? (() => {
+    const picked = integration.picker;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'fp-furniture-dialog fp-sensor-edit fp-vacuum-maps';
+    dialog.id = 'fp-vacuum-maps';
+    dialog.setAttribute('aria-labelledby', 'fp-vacuum-title');
+    dialog.setAttribute('aria-describedby', 'fp-vacuum-text');
+    dialog.innerHTML = `<div class="fp-furniture-heading"><div><h2 id="fp-vacuum-title"></h2><p id="fp-vacuum-text"></p></div></div>
+        <form method="dialog"><div class="fp-sensor-edit-body fp-vacuum-list"></div>
+        <div class="fp-sensor-edit-footer"><button type="submit" value=""></button></div></form>`;
+    dialog.querySelector('h2').textContent = picked.vacuumTitle;
+    dialog.querySelector('#fp-vacuum-text').textContent = picked.vacuumIntro;
+    dialog.querySelector('.fp-sensor-edit-footer button').textContent = copy.cancel_place;
+    document.getElementById('fp-pdf-pages').after(dialog);
+    return { dialog, list: dialog.querySelector('.fp-vacuum-list') };
+})() : null;
+
+// In Home Assistant a room can get an automation that lets its lights follow
+// who is there. The host makes it; this is where it is set up.
+const automationPanel = integration?.presenceLights ? (() => {
+    const picked = integration.picker;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'fp-furniture-dialog fp-sensor-edit fp-room-automation';
+    dialog.id = 'fp-room-automation';
+    dialog.setAttribute('aria-labelledby', 'fp-automation-title');
+    dialog.setAttribute('aria-describedby', 'fp-automation-text');
+    dialog.innerHTML = `<div class="fp-furniture-heading"><div><h2 id="fp-automation-title"></h2><p id="fp-automation-text"></p></div></div>
+        <form method="dialog"><div class="fp-sensor-edit-body">
+            <p class="fp-note" data-automation="lights" hidden></p>
+            <label data-automation="minutes" hidden><span></span><input type="number" min="1" max="120" step="1" inputmode="numeric" required></label>
+            <label class="fp-sensor-edit-check" data-automation="dark" hidden><input type="checkbox"> <span></span></label>
+            <p class="fp-note" role="status" hidden></p>
+            <a data-automation="open" target="_blank" rel="noopener" hidden></a>
+        </div>
+        <div class="fp-sensor-edit-footer">
+            <button type="submit" value=""></button>
+            <button type="button" data-automation="remove" hidden></button>
+            <button type="button" class="fp-primary" data-automation="save" hidden></button>
+        </div></form>`;
+    const part = name => dialog.querySelector(`[data-automation="${name}"]`);
+    dialog.querySelector('h2').textContent = picked.automationTitle;
+    part('minutes').firstElementChild.textContent = picked.automationMinutes;
+    part('dark').lastElementChild.textContent = picked.automationDark;
+    part('remove').textContent = picked.automationRemove;
+    part('open').textContent = picked.automationOpen;
+    document.getElementById('fp-pdf-pages').after(dialog);
+    return { dialog, text: dialog.querySelector('#fp-automation-text'), lights: part('lights'), minutes: part('minutes'), dark: part('dark'),
+        note: dialog.querySelector('[role="status"]'), open: part('open'), remove: part('remove'), save: part('save'),
+        close: dialog.querySelector('.fp-sensor-edit-footer button'), room: null };
+})() : null;
+
+// Sharing asks first: the link opens a copy of the plan for anyone who has it.
+const sharePanel = fileButtons.share ? (() => {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'fp-furniture-dialog fp-sensor-edit fp-share';
+    dialog.id = 'fp-share';
+    dialog.setAttribute('aria-labelledby', 'fp-share-title');
+    dialog.setAttribute('aria-describedby', 'fp-share-text');
+    dialog.innerHTML = `<div class="fp-furniture-heading"><div><h2 id="fp-share-title"></h2><p id="fp-share-text"></p></div></div>
+        <div class="fp-sensor-edit-body">
+            <label class="fp-share-link" hidden><span></span><input type="text" readonly></label>
+            <p class="fp-note" role="status" hidden></p>
+        </div>
+        <form method="dialog"><div class="fp-sensor-edit-footer">
+            <button type="submit" value=""></button>
+            <button type="button" class="fp-primary" data-share="create"></button>
+            <button type="button" class="fp-primary" data-share="copy" hidden></button>
+        </div></form>`;
+    dialog.querySelector('h2').textContent = copy.share_title;
+    dialog.querySelector('#fp-share-text').textContent = copy.share_intro;
+    const [close, create, copyLink] = dialog.querySelectorAll('button');
+    close.textContent = copy.cancel_place;
+    create.textContent = copy.share_create;
+    copyLink.textContent = copy.share_copy;
+    const field = dialog.querySelector('.fp-share-link');
+    field.firstElementChild.textContent = copy.share_label;
+    document.getElementById('fp-pdf-pages').after(dialog);
+    return { dialog, close, create, copyLink, field, link: field.querySelector('input'), note: dialog.querySelector('[role="status"]') };
 })() : null;
 
 // Zoom in the corner of the map, where it is seen: out, how far the map is
@@ -297,7 +416,11 @@ const roomRemoval = copy.room_delete_title && copy.room_delete_confirm ? (() => 
 // Null when the image cannot be read or traced.
 async function tracedUnderlay(underlay, metres = underlay.width) {
     try {
-        return traceFloorPlan(await underlayPixels(underlay), metres);
+        const pixels = await underlayPixels(underlay);
+        const traced = traceFloorPlan(pixels, metres);
+        // An image without walls to find, such as the map of a robot vacuum,
+        // has its rooms as areas of colour.
+        return traced?.rooms.length ? traced : traceColourMap(pixels, metres) ?? traced;
     } catch {
         return null;
     }
@@ -421,8 +544,12 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const sharedRoom = parsePlannerLink(location.hash);
 const demo = sharedRoom ?? readDemo(location.search);
 const exampleHome = !integration && !demo && new URLSearchParams(location.search).get('example') === 'home';
+// A plan opened from a shared link is kept apart, so it does not replace the
+// visitor's own plan.
+const sharedPlan = !integration && !demo && !exampleHome && typeof siteSharing?.key === 'string' && siteSharing.key ? siteSharing.key : null;
 const storageKey = 'smarthomeshop.sensor-planner.v1' + (sharedRoom ? location.hash : demo
-    ? `.${demo.width}-${demo.depth}-${demo.height}-${demo.radar}${demo.obstacles ? '-obstacles' : ''}` : exampleHome ? '.example-home' : '');
+    ? `.${demo.width}-${demo.depth}-${demo.height}-${demo.radar}${demo.obstacles ? '-obstacles' : ''}` : exampleHome ? '.example-home'
+        : sharedPlan ? '.shared.' + sharedPlan : '');
 
 const withEditableFurniture = plan => withFurniture(plan, copy.furniture_items);
 const demoHome = () => sampleBuilding(copy.names, copy.furniture_items);
@@ -510,10 +637,14 @@ const history = [];
 const future = [];
 
 let unreadableDraft = null;
+// Whether the shared plan still has to come in: not when this browser already
+// holds its own copy of it, with the visitor's changes.
+let sharedPending = Boolean(sharedPlan);
 try {
     const raw = integration ? (integration.project ? JSON.stringify(integration.project) : null) : localStorage.getItem(storageKey);
     if (raw !== null) {
         showStart = false;
+        sharedPending = false;
         unreadableDraft = raw;
         const saved = JSON.parse(raw);
         if (validProject(saved)) {
@@ -1643,6 +1774,93 @@ function updateSensorDetails(item) {
         : '';
 }
 
+// The way to the automation of a room, under its link to Home Assistant.
+function roomAutomationLink() {
+    if (!automationPanel) return '';
+    const picked = integration.picker;
+    return `<fieldset class="fp-ha-room-link">
+        <legend>${escapeText(picked.automationTitle)}</legend>
+        <p>${escapeText(picked.automationNote)}</p>
+        <button type="button" data-action="room_automation">${escapeText(picked.automationAction)}</button>
+    </fieldset>`;
+}
+
+// Shows what the room has for its automation: what is still missing, or the
+// settings with the automation it has.
+function showRoomAutomation(room, state, message = '') {
+    const picked = integration.picker;
+    const panel = automationPanel;
+    const fill = text => text.replaceAll('{room}', room.name).replaceAll('{area}', state?.areaName ?? '');
+    const missing = !state ? '' : !state.presence ? picked.automationNeedsSave : !state.areaId ? picked.automationNeedsArea
+        : !state.lights.length ? fill(picked.automationNoLights) : '';
+    const ready = Boolean(state) && !missing;
+    panel.text.textContent = state ? missing || fill(picked.automationIntro) : '';
+    panel.lights.hidden = !ready;
+    if (ready) {
+        const names = state.lights.slice(0, 6).map(light => light.name);
+        if (state.lights.length > names.length) names.push('+' + number.format(state.lights.length - names.length));
+        panel.lights.textContent = fill(picked.automationLights).replace('{lights}', names.join(', '));
+    }
+    panel.minutes.hidden = !ready;
+    panel.dark.hidden = !ready || !state.sun;
+    panel.save.hidden = !ready;
+    panel.save.disabled = false;
+    panel.remove.disabled = false;
+    panel.save.textContent = state?.saved ? picked.automationUpdate : picked.automationCreate;
+    panel.remove.hidden = !ready || !state.saved;
+    panel.open.hidden = !ready || !state.saved;
+    if (ready) panel.open.href = `/config/automation/edit/${encodeURIComponent(state.id)}`;
+    panel.note.textContent = message;
+    panel.note.hidden = !message;
+    // Nothing left to decide once it is done, or while something is missing.
+    panel.close.textContent = ready && !message ? copy.cancel_place : copy.tool_done ?? copy.cancel_place;
+}
+
+async function openRoomAutomation() {
+    const room = currentRoom();
+    if (!automationPanel || !room) return;
+    const picked = integration.picker;
+    const panel = automationPanel;
+    panel.room = room;
+    showRoomAutomation(room, null);
+    panel.dialog.showModal();
+    try {
+        const state = await integration.presenceLights.state(room);
+        // The window may have been closed, or opened for another room, in the meantime.
+        if (panel.room !== room || !panel.dialog.open) return;
+        panel.minutes.querySelector('input').value = state.saved?.minutes ?? 3;
+        panel.dark.querySelector('input').checked = state.saved ? state.saved.onlyDark : true;
+        showRoomAutomation(room, state);
+    } catch {
+        showRoomAutomation(room, null, picked.automationError);
+    }
+}
+
+if (automationPanel) {
+    const panel = automationPanel;
+    const picked = integration.picker;
+    // After a change, the room is asked again what it has, so the window shows what Home Assistant holds.
+    const change = async (work, done) => {
+        const room = panel.room;
+        const minutes = panel.minutes.querySelector('input');
+        if (!room || (work === 'save' && !minutes.reportValidity())) return;
+        panel.save.disabled = panel.remove.disabled = true;
+        try {
+            if (work === 'save') await integration.presenceLights.save(room, { minutes: minutes.valueAsNumber, onlyDark: panel.dark.querySelector('input').checked });
+            else await integration.presenceLights.remove(room);
+            const state = await integration.presenceLights.state(room);
+            if (panel.room === room && panel.dialog.open) showRoomAutomation(room, state, done);
+        } catch {
+            if (panel.room !== room) return;
+            panel.save.disabled = panel.remove.disabled = false;
+            panel.note.textContent = picked.automationError;
+            panel.note.hidden = false;
+        }
+    };
+    panel.save.addEventListener('click', () => change('save', picked.automationSaved));
+    panel.remove.addEventListener('click', () => change('remove', picked.automationRemoved));
+}
+
 function homeAssistantRoomLink(room) {
     if (!integration) return '';
     const picked = integration.picker;
@@ -1706,7 +1924,7 @@ function renderInspector() {
             ${item.ceiling ? roomCeilingFields(item) : heightField('height', copy.height, item.height)}
             ${roomFinishFields(item)}
             ${calibration ? `<p class="fp-note">${escapeText(calibration)}</p>` : ''}
-            ${homeAssistantRoomLink(item)}`;
+            ${homeAssistantRoomLink(item)}${roomAutomationLink()}`;
     } else if (type === 'walls') {
         settings = `<div class="fp-fields">${field(item, 'endX', copy.end_x, -100, 100, 'any')}${field(item, 'endY', copy.end_y, -100, 100, 'any')}</div>`;
     } else if (type === 'doors') {
@@ -4554,8 +4772,8 @@ function replacePlan(next) {
     finish();
 }
 
-function download(contents, filename) {
-    const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
+function download(contents, filename, type = 'application/json') {
+    const url = URL.createObjectURL(contents instanceof Blob ? contents : new Blob([contents], { type }));
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
@@ -4567,6 +4785,239 @@ function exportPlan() {
     const project = projectDocument();
     const filename = (project.name.replace(/[^\p{L}\p{N}-]+/gu, '-').replace(/^-|-$/g, '') || 'sensor-plan') + '.json';
     download(JSON.stringify(project, null, 2), filename);
+}
+
+// The project as it is shown: in Home Assistant without the sensors that are hidden.
+function shownProject() {
+    const project = projectDocument();
+    return project.floors ? { ...project, floors: project.floors.map(floor => ({ ...floor, plan: visiblePlan(floor.plan) })) } : visiblePlan(project);
+}
+
+// A page of the sheet as a canvas, drawn larger than its size so it prints sharp.
+async function sheetCanvas(page, scale = 1.5) {
+    const image = new Image();
+    image.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(page.svg);
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(page.width * scale);
+    canvas.height = Math.round(page.height * scale);
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas;
+}
+
+const canvasFile = (canvas, type, quality) => new Promise((resolve, reject) =>
+    canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('No image')), type, quality));
+
+// Saves the plan as a picture of the floor that is open, or as a PDF with a
+// page for every floor.
+async function saveSheet(kind) {
+    const status = element('fp-save');
+    const project = shownProject();
+    const pages = sheetPages(project, { copy, number, radarOptions: coverageRadarOptions,
+        date: new Date().toLocaleDateString(root.dataset.locale, { dateStyle: 'long' }) });
+    if (!pages.length) {
+        status.textContent = copy.sheet_empty;
+        return;
+    }
+    const button = fileButtons[kind === 'pdf' ? 'sheet_pdf' : 'sheet_image'];
+    button.disabled = true;
+    try {
+        if (kind === 'pdf') {
+            const images = [];
+            for (const page of pages) {
+                const canvas = await sheetCanvas(page);
+                const file = await canvasFile(canvas, 'image/jpeg', .92);
+                images.push({ jpeg: new Uint8Array(await file.arrayBuffer()), width: canvas.width, height: canvas.height });
+            }
+            download(new Blob([pdfDocument(images, { title: project.name, creator: copy.sheet_credit })], { type: 'application/pdf' }),
+                sheetFileName(project, 'pdf'));
+        } else {
+            const open = sheetFloors(project).findIndex(floor => floor.id === building?.activeFloor);
+            const page = pages[Math.max(0, open)];
+            download(await canvasFile(await sheetCanvas(page), 'image/png'),
+                sheetFileName(pages.length > 1 ? { name: `${project.name} ${page.name}` } : project, 'png'));
+        }
+        status.textContent = copy.sheet_done;
+    } catch {
+        status.textContent = copy.sheet_error;
+    } finally {
+        button.disabled = false;
+    }
+}
+
+// A drawing as a PNG file: pixels as mapRooms makes them, or an SVG picture.
+async function pictureFile(source) {
+    const canvas = document.createElement('canvas');
+    if (source.data) {
+        canvas.width = source.width;
+        canvas.height = source.height;
+        canvas.getContext('2d').putImageData(new ImageData(source.data, source.width, source.height), 0, 0);
+    } else {
+        const url = URL.createObjectURL(source);
+        try {
+            const image = new Image();
+            image.src = url;
+            await image.decode();
+            // An SVG has no pixels of its own: draw it large enough to trace.
+            const scale = 1600 / Math.max(image.naturalWidth || 1600, image.naturalHeight || 1600);
+            canvas.width = Math.round((image.naturalWidth || 1600) * scale);
+            canvas.height = Math.round((image.naturalHeight || 1200) * scale);
+            canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    }
+    return canvasFile(canvas, 'image/png');
+}
+
+// Puts the map of a robot vacuum under the plan. A map that knows its rooms
+// (a Valetudo robot's) brings them along, to scale. Any other map is an image
+// like an uploaded one: its rooms are found once it has its scale.
+async function useVacuumMap(id) {
+    const picked = integration.picker;
+    const status = element(showStart ? 'fp-start-status' : 'fp-save');
+    const original = plan;
+    status.toggleAttribute('data-busy', true);
+    status.textContent = picked.vacuumLoading;
+    try {
+        let file = await integration.vacuumMap(id);
+        const map = await embeddedMap(new Uint8Array(await file.arrayBuffer()));
+        const drawn = map && mapRooms(map, { roomName: copy.room });
+        // The picture around a robot's own map is a notice, not a map.
+        if (map && !drawn) throw new Error('Empty map');
+        if (drawn) file = await pictureFile(drawn.image);
+        else if (file.type.startsWith('image/svg')) file = await pictureFile(file);
+        const image = await loadUnderlay(file);
+        if (!image || plan !== original) {
+            status.textContent = '';
+            return;
+        }
+        if (showStart) replacePlan({ ...blankPlan(copy.names.untitled), underlay: image });
+        else {
+            remember();
+            plan.underlay = image;
+        }
+        underlayMeasure = null;
+        setView('2d');
+        setTool('edit');
+        status.textContent = '';
+        if (!drawn) {
+            finish();
+            fit();
+            // Asks for the scale, and finds the rooms right after.
+            actions.trace_underlay();
+            return;
+        }
+        const draft = draftFromRecognition(drawn.recognition, plan.underlay, { roomName: copy.room });
+        const rooms = (draft?.rooms ?? []).filter(room => !plan.rooms.some(existing => roomContains(existing, roomInteriorPoint(room))));
+        const next = rooms.length && planWithDraft(plan, { ...draft, rooms });
+        if (next) plan = next;
+        else if (draft) plan.underlay = draft.underlay;
+        finish();
+        fit();
+        element('fp-save').textContent = picked.vacuumRooms.replace('{count}', number.format(next ? rooms.length : 0));
+    } catch {
+        status.textContent = picked.vacuumError;
+    } finally {
+        status.removeAttribute('data-busy');
+    }
+}
+
+function openVacuumMaps() {
+    if (!vacuumChoice) return;
+    projectMenu.open = false;
+    const maps = integration.vacuumMaps();
+    if (!maps.length) {
+        element(showStart ? 'fp-start-status' : 'fp-save').textContent = integration.picker.vacuumNone;
+        return;
+    }
+    if (maps.length === 1) {
+        useVacuumMap(maps[0].id);
+        return;
+    }
+    vacuumChoice.list.replaceChildren(...maps.map(map => {
+        const button = document.createElement('button');
+        button.type = 'submit';
+        button.value = map.id;
+        button.textContent = map.name;
+        return button;
+    }));
+    vacuumChoice.dialog.onclose = () => {
+        const id = vacuumChoice.dialog.returnValue;
+        if (maps.some(map => map.id === id)) useVacuumMap(id);
+    };
+    vacuumChoice.dialog.returnValue = '';
+    vacuumChoice.dialog.showModal();
+}
+
+// What a link hands out: the plan without the image it was drawn on, which
+// may show more than the plan and makes it heavy.
+function projectToShare() {
+    const bare = ({ underlay, ...floorPlan }) => floorPlan;
+    const project = projectDocument();
+    return project.floors ? { ...project, floors: project.floors.map(floor => ({ ...floor, plan: bare(floor.plan) })) } : bare(project);
+}
+
+function showShare(message = '', url = '') {
+    const { create, copyLink, field, link, note } = sharePanel;
+    note.textContent = message;
+    note.hidden = !message;
+    field.hidden = !url;
+    link.value = url;
+    create.hidden = Boolean(url);
+    copyLink.hidden = !url;
+    sharePanel.close.textContent = url ? copy.tool_done ?? copy.cancel_place : copy.cancel_place;
+}
+
+function openShare() {
+    if (!sharePanel) return;
+    projectMenu.open = false;
+    showShare();
+    sharePanel.create.disabled = false;
+    sharePanel.dialog.showModal();
+}
+
+if (sharePanel) {
+    sharePanel.create.addEventListener('click', async () => {
+        const { create, link } = sharePanel;
+        create.disabled = true;
+        showShare(copy.share_busy);
+        try {
+            const { url } = await siteSharing.save(projectToShare());
+            showShare(copy.share_ready, url);
+            link.focus();
+            link.select();
+        } catch {
+            showShare(copy.share_error);
+            create.disabled = false;
+        }
+    });
+    sharePanel.copyLink.addEventListener('click', async () => {
+        const { link } = sharePanel;
+        try {
+            await navigator.clipboard.writeText(link.value);
+            showShare(copy.share_copied, link.value);
+        } catch {
+            // No clipboard here: the link is selected, ready to copy by hand.
+            link.focus();
+            link.select();
+        }
+    });
+}
+
+// The plan behind a shared link, once. From then on this browser has its
+// own copy of it.
+async function openSharedPlan() {
+    try {
+        const project = await siteSharing.open();
+        if (!validProject(project)) throw new Error('No plan');
+        // Somebody who started drawing while it came in keeps what they drew.
+        if (!showStart) return;
+        replacePlan(project);
+        element('fp-save').textContent = copy.share_opened ?? '';
+    } catch {
+        if (showStart) element('fp-start-status').textContent = copy.share_missing ?? '';
+    }
 }
 
 function clearRoomMounts(roomId) {
@@ -4698,6 +5149,11 @@ const actions = {
         finish();
     },
     export: exportPlan,
+    vacuum_map: openVacuumMaps,
+    room_automation: openRoomAutomation,
+    sheet_image() { saveSheet('image'); },
+    sheet_pdf() { saveSheet('pdf'); },
+    share: openShare,
     add_upper_floor() { addFloor(1); },
     add_lower_floor() { addFloor(-1); },
     remove_floor() {
@@ -5793,6 +6249,7 @@ if (showStart) {
     });
 }
 else save();
+if (sharedPending) openSharedPlan();
 if (integration) integration.connect({
     devicesChanged() { render(); },
     roomPlacements() {

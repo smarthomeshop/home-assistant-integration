@@ -12,6 +12,11 @@
 // image through a passage wider than a door, so a front door that was not
 // closed does not turn the hall into outside.
 //
+// A window is a stretch of a solid wall that is drawn open with lines or a
+// light band in it, between two solid ends of that wall. It is found on
+// drawings with solid walls only: where every wall is two lines, a window
+// cannot be told from a wall.
+//
 // The answer has the shape of a recognition (see floor-planner-recognise.mjs):
 // image coordinates from 0 to 1, x across and y down.
 import { recognitionLimits } from './floor-planner-recognise.mjs';
@@ -50,12 +55,22 @@ const sizes = {
     // Notches in a room narrower than twice this (columns, furniture against
     // a wall) are left out of its outline.
     notch: .2,
+    // A window lies in a wall at least this thick, and is this wide. With a
+    // room on both sides it is narrower, and the wall goes on past it.
+    windowWall: .12,
+    narrowestWindow: .35,
+    widestWindow: 5,
+    widestInnerWindow: 2.5,
+    wallPastWindow: .5,
 };
 
 // Ink darker than this is a line or a wall. Between it and the light limit
 // it is a grey: a wall fill or a faint line, unless it covers a whole area.
 const darkLimit = 128;
 const lightLimit = 190;
+// A line or a narrow band is at least this much darker than what lies on
+// both sides of it. The lines of a window can be faint.
+const faintStep = 18;
 
 // The planner takes as many rooms and corners as it takes from a recognition.
 export const traceLimits = { rooms: recognitionLimits.rooms, corners: recognitionLimits.corners, pixels: 4_200_000 };
@@ -65,7 +80,7 @@ const empty = size => new Uint8Array(size);
 // Every pixel within r of a set pixel (or, with every, only pixels whose whole
 // square of radius r is set). Done per row and then per column with running
 // sums, so it costs the same for any radius.
-function spread(mask, width, height, r, every) {
+export function spread(mask, width, height, r, every) {
     if (r <= 0) return mask.slice();
     const across = empty(width * height), out = empty(width * height);
     const sums = new Int32Array(Math.max(width, height) + 1);
@@ -89,7 +104,7 @@ const opened = (mask, width, height, r) => spread(spread(mask, width, height, r,
 
 // Distance from every open pixel to the nearest blocked one, in pixels
 // (chamfer 3-4, close to the true distance). Beyond the image is open.
-function distances(blocked, width, height) {
+export function distances(blocked, width, height) {
     const far = 1e9;
     const d = new Float32Array(width * height);
     for (let i = 0; i < d.length; i++) d[i] = blocked[i] ? 0 : far;
@@ -127,7 +142,7 @@ function distances(blocked, width, height) {
 
 // The open areas of a mask, each with its size, whether it reaches the edge of
 // the image and how far its inside lies from anything blocked.
-function areas(blocked, width, height, distance) {
+export function areas(blocked, width, height, distance) {
     const labels = new Int32Array(width * height);
     const found = [null];
     const stack = new Int32Array(width * height);
@@ -324,6 +339,93 @@ function closeOpenings(mask, width, height, down, wall, reach, thickest) {
     return bridges;
 }
 
+// Whether the middle of a wall's thickness is wall at a place along it. The
+// outer pixels of a wall may be ragged.
+function wallAt(mask, width, breadth, down, { axis, thickness }) {
+    const half = Math.max(1, Math.floor(thickness * .25));
+    const centre = Math.floor(axis);
+    const from = Math.max(0, centre - half), to = Math.min(breadth - 1, centre + half);
+    return along => {
+        let set = 0;
+        for (let across = from; across <= to; across++) set += mask[down ? along * width + across : across * width + along];
+        return set >= .5 * (to - from + 1);
+    };
+}
+
+// The stretches where a solid wall is drawn open with something in it: from
+// the end of every piece of wall, straight on along it, to where it is solid
+// again. drawn holds everything drawn, heavy what is as dark and thick as a
+// thin wall. A stretch has drawing all along it and next to no thin wall.
+function glassGaps(sturdy, drawn, heavy, width, height, down, wall, { narrowest, widest }) {
+    const at = down ? (along, across) => along * width + across : (along, across) => across * width + along;
+    const length = down ? height : width, breadth = down ? width : height;
+    const gaps = [];
+    for (const piece of wall) {
+        const filled = wallAt(sturdy, width, breadth, down, piece);
+        const top = Math.max(0, Math.round(piece.axis - piece.thickness / 2));
+        const bottom = Math.min(breadth, Math.round(piece.axis + piece.thickness / 2));
+        const holds = (mask, along) => {
+            for (let across = top; across < bottom; across++) if (mask[at(along, across)]) return true;
+            return false;
+        };
+        for (const direction of [-1, 1]) {
+            const end = direction > 0 ? piece.end : piece.start - 1;
+            let step = 1;
+            while (step <= widest) {
+                const along = end + direction * step;
+                if (along < 0 || along >= length || filled(along)) break;
+                step++;
+            }
+            const along = end + direction * step;
+            if (step > widest || along < 0 || along >= length) continue;
+            const [a, b] = direction > 0 ? [end + 1, along] : [along + 1, end + 1];
+            if (b - a < narrowest) continue;
+            let glass = 0, thin = 0;
+            for (let k = a; k < b; k++) {
+                if (holds(drawn, k)) glass++;
+                if (holds(heavy, k)) thin++;
+            }
+            if (glass < .85 * (b - a) || thin > .3 * (b - a)) continue;
+            gaps.push({ down, a, b, gap: b - a, axis: piece.axis, thickness: piece.thickness });
+        }
+    }
+    return gaps;
+}
+
+// Whether a door swings at an opening: a quarter circle from one of its ends,
+// or the leaf standing open at a right angle, as wide as the opening or (for
+// a double door) half of it. A window has neither.
+function doorSwings(drawn, width, height, { down, a, b, gap, axis, thickness }) {
+    const marked = (along, across, slack) => {
+        for (let dy = -slack; dy <= slack; dy++) {
+            for (let dx = -slack; dx <= slack; dx++) {
+                const x = Math.round(down ? across : along) + dx, y = Math.round(down ? along : across) + dy;
+                if (x >= 0 && y >= 0 && x < width && y < height && drawn[y * width + x]) return true;
+            }
+        }
+        return false;
+    };
+    for (const radius of [gap, gap / 2]) {
+        const slack = Math.max(1, Math.min(4, Math.round(radius * .06)));
+        for (const [hinge, into] of [[a, 1], [b, -1]]) {
+            for (const side of [-1, 1]) {
+                // The hinge sits on the middle of the wall or on one of its faces.
+                for (const face of [0, side * thickness / 2, -side * thickness / 2]) {
+                    let arc = 0, leaf = 0;
+                    const steps = 15;
+                    for (let k = 1; k <= steps; k++) {
+                        const angle = (8 + 74 * k / steps) * Math.PI / 180;
+                        if (marked(hinge + into * radius * Math.cos(angle), axis + face + side * radius * Math.sin(angle), slack)) arc++;
+                        if (marked(hinge, axis + side * (thickness / 2 + (radius - thickness / 2) * (.15 + .8 * k / steps)), slack)) leaf++;
+                    }
+                    if (arc >= .7 * steps || leaf >= .85 * steps) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 // The open space that reaches the edge of the image through passages at
 // least 2r + 1 pixels wide, up to where those passages narrow.
 function outsideOf(blocked, width, height, r) {
@@ -388,7 +490,7 @@ function outerEdge(labels, width, height, id, start) {
 }
 
 // The outer edge of a room with its small notches filled, in pixels.
-function roomEdge(labels, width, height, area, notch) {
+export function roomEdge(labels, width, height, area, notch) {
     const pad = notch + 2;
     const [left, top, right, bottom] = area.box;
     const across = right - left + 1 + 2 * pad, down = bottom - top + 1 + 2 * pad;
@@ -441,12 +543,13 @@ const containsPoint = (points, [x, y]) => {
 };
 
 /**
- * The rooms and doors on a floor plan image.
+ * The rooms, doors and windows on a floor plan image.
  *
  * image is { data, width, height } with RGBA pixels, as a canvas gives them;
  * metresAcross is the real width of the whole image. Returns
- * { rooms: [{ points }], doors: [{ from, to }], labels, size } with points in
- * image coordinates from 0 to 1, or null when the image cannot be traced.
+ * { rooms: [{ points }], doors: [{ from, to }], windows: [{ from, to }],
+ * labels, size } with points in image coordinates from 0 to 1, or null when
+ * the image cannot be traced.
  * labels holds, for every pixel, the number of the room it belongs to (its
  * index in rooms plus one), or 0. When stages is an object, it receives the
  * masks the tracing went through, to look into a result.
@@ -460,14 +563,16 @@ export function traceFloorPlan(image, metresAcross, stages = null) {
     const px = metres => metres * perMetre;
     const count = width * height;
 
-    // Ink: dark, or a grey that is not a filled area.
-    const dark = empty(count), grey = empty(count);
+    // Ink: dark, or a grey that is not a filled area. Every pixel keeps its
+    // tone, to find the faint lines of a window later.
+    const dark = empty(count), grey = empty(count), tone = empty(count).fill(255);
     for (let i = 0, p = 0; i < count; i++, p += 4) {
         const r = data[p], g = data[p + 1], b = data[p + 2];
         if (data[p + 3] < 128) continue;
+        const luma = (299 * r + 587 * g + 114 * b) / 1000;
+        tone[i] = luma;
         const most = Math.max(r, g, b), spreadOf = most - Math.min(r, g, b);
         if (spreadOf > 30 && spreadOf > .28 * most) continue;
-        const luma = (299 * r + 587 * g + 114 * b) / 1000;
         if (luma < darkLimit) dark[i] = 1;
         else if (luma < lightLimit) grey[i] = 1;
     }
@@ -484,7 +589,8 @@ export function traceFloorPlan(image, metresAcross, stages = null) {
     // run close together, and where the space between them is closed off all
     // round and nowhere further than half a wall from its lines.
     const lineGap = Math.max(1, Math.round(px(sizes.lineGap)));
-    const sealed = spread(spread(ink, width, height, lineGap, false), width, height, lineGap, true);
+    const seal = mask => spread(spread(mask, width, height, lineGap, false), width, height, lineGap, true);
+    const sealed = seal(ink);
     const solid = betweenLines(sealed, width, height, Math.round(px(sizes.longLine)), Math.round(px(sizes.wallFaces)));
     const cavities = areas(solid, width, height, distances(solid, width, height));
     const narrow = new Set(cavities.found.filter(area => area && !area.edge && area.depth <= px(sizes.wallCavity)).map(area => area.id));
@@ -492,7 +598,8 @@ export function traceFloorPlan(image, metresAcross, stages = null) {
 
     // Lines too thin to be a wall fall away, and so do loose bits (text,
     // symbols) that do not hang together with the walls.
-    const walls = opened(solid, width, height, Math.max(1, Math.round(px(sizes.line) / 2)));
+    const thinnestWall = Math.max(1, Math.round(px(sizes.line) / 2));
+    const walls = opened(solid, width, height, thinnestWall);
     dropShortBits(walls, width, height, px(sizes.shortestBit));
     if (stages) Object.assign(stages, { solid, walls: walls.slice() });
 
@@ -505,39 +612,170 @@ export function traceFloorPlan(image, metresAcross, stages = null) {
     const bridges = [...closeOpenings(closed, width, height, false, across, reach, doorWall),
         ...closeOpenings(closed, width, height, true, down, reach, doorWall)];
 
-    // Outside is what reaches the edge of the image through a passage wider
-    // than a door. An opening that was not closed still keeps it out.
-    const outside = outsideOf(closed, width, height, Math.round(px(sizes.widestOpening / 2)) + 1);
-    for (let i = 0; i < count; i++) if (outside[i]) closed[i] = 1;
-    if (stages) stages.closed = closed;
-    // Every enclosed open space large enough to stand in is a room.
-    const spaces = areas(closed, width, height, distances(closed, width, height));
-    if (stages) stages.spaces = spaces;
-    const candidates = spaces.found.filter(area => area && !area.edge && area.size >= px(1) * px(sizes.smallestRoom)
-        && area.depth >= px(sizes.narrowestRoom / 2));
-    const tolerance = Math.max(1.5, px(sizes.outline));
-    for (const area of candidates) {
-        let points = fewerCorners(roomEdge(spaces.labels, width, height, area, Math.round(px(sizes.notch))), tolerance);
-        for (let wider = tolerance * 1.4; points.length > traceLimits.corners && wider <= px(sizes.roughOutline); wider *= 1.4) {
-            points = fewerCorners(points, wider);
-        }
-        area.points = points;
+    // Where a solid wall is drawn open with lines or a light band in it,
+    // there is glass: a window, or a door with glass in it. Only on a drawing
+    // whose walls are solid; a wall of two lines looks the same all along.
+    const sturdy = opened(sealed, width, height, Math.max(1, Math.round(px(sizes.windowWall) / 2)));
+    let solidWalls = 0, allWalls = 0;
+    for (let i = 0; i < count; i++) {
+        if (!walls[i]) continue;
+        allWalls++;
+        solidWalls += sturdy[i];
     }
-    // A frame around the drawing encloses the building and its rooms: it is no room.
-    const rooms = candidates.filter(area => area.points.length >= 3 && area.points.length <= traceLimits.corners
-        && candidates.filter(other => other !== area && containsPoint(area.points, other.points[0])).length < 2)
-        .sort((a, b) => b.size - a.size).slice(0, traceLimits.rooms);
+    const panes = [];
+    const drawn = empty(count), fine = empty(count);
+    if (allWalls && solidWalls >= .5 * allWalls) {
+        // Drawn is what is darker than both its sides, a wall's thickness
+        // away: lines and narrow bands in any colour, not the edge of a floor.
+        const away = Math.max(3, Math.round(px(sizes.windowWall)));
+        for (let y = 0, i = 0; y < height; y++) {
+            for (let x = 0; x < width; x++, i++) {
+                const limit = tone[i] + faintStep;
+                const lighter = (before, after) => (before ? tone[i - before] : 255) >= limit && (after ? tone[i + after] : 255) >= limit;
+                if (lighter(x >= away ? away : 0, x + away < width ? away : 0)
+                    || lighter(y >= away ? away * width : 0, y + away < height ? away * width : 0)) drawn[i] = 1;
+            }
+        }
+        const heavy = opened(dark, width, height, thinnestWall);
+        // What is drawn thin, away from the walls: the swing of a door.
+        const nearWalls = spread(walls, width, height, Math.max(2, Math.round(px(.03))), false);
+        for (let i = 0; i < count; i++) if (drawn[i] && !nearWalls[i]) fine[i] = 1;
+        const solidLimits = { shortest: Math.max(3, Math.round(px(.15))), thinnest: 2, thickest: limits.thickest };
+        const glassSizes = { narrowest: Math.round(px(sizes.narrowestWindow)), widest: Math.round(px(sizes.widestWindow)) };
+        for (const goesDown of [false, true]) {
+            const ends = pieces(sturdy, width, height, goesDown, solidLimits).filter(piece => piece.end - piece.start >= .6 * piece.thickness);
+            for (const pane of glassGaps(sturdy, drawn, heavy, width, height, goesDown, ends, glassSizes)) {
+                // A stretch is found from both its ends; keep it once.
+                if (!panes.some(other => other.down === pane.down && Math.abs(other.axis - pane.axis) < Math.max(other.thickness, pane.thickness)
+                    && Math.min(other.b, pane.b) - Math.max(other.a, pane.a) > .5 * Math.min(other.gap, pane.gap))) panes.push(pane);
+            }
+        }
+    }
+    if (stages) Object.assign(stages, { sturdy, drawn, panes });
 
-    const numbers = new Map(rooms.map((area, index) => [area.id, index + 1]));
-    const labels = new Uint16Array(count);
-    for (let i = 0; i < count; i++) labels[i] = numbers.get(spaces.labels[i]) ?? 0;
+    // The rooms that a mask of walls and closed openings holds.
+    const roomsBetween = shut => {
+        // Outside is what reaches the edge of the image through a passage
+        // wider than a door. An opening that was not closed still keeps it out.
+        const blocked = shut.slice();
+        const outside = outsideOf(blocked, width, height, Math.round(px(sizes.widestOpening / 2)) + 1);
+        for (let i = 0; i < count; i++) if (outside[i]) blocked[i] = 1;
+        // Every enclosed open space large enough to stand in is a room.
+        const spaces = areas(blocked, width, height, distances(blocked, width, height));
+        const candidates = spaces.found.filter(area => area && !area.edge && area.size >= px(1) * px(sizes.smallestRoom)
+            && area.depth >= px(sizes.narrowestRoom / 2));
+        const tolerance = Math.max(1.5, px(sizes.outline));
+        for (const area of candidates) {
+            let points = fewerCorners(roomEdge(spaces.labels, width, height, area, Math.round(px(sizes.notch))), tolerance);
+            for (let wider = tolerance * 1.4; points.length > traceLimits.corners && wider <= px(sizes.roughOutline); wider *= 1.4) {
+                points = fewerCorners(points, wider);
+            }
+            area.points = points;
+        }
+        // A frame around the drawing encloses the building and its rooms: it is no room.
+        const rooms = candidates.filter(area => area.points.length >= 3 && area.points.length <= traceLimits.corners
+            && candidates.filter(other => other !== area && containsPoint(area.points, other.points[0])).length < 2)
+            .sort((a, b) => b.size - a.size).slice(0, traceLimits.rooms);
+        const numbers = new Map(rooms.map((area, index) => [area.id, index + 1]));
+        const labels = new Uint16Array(count);
+        for (let i = 0; i < count; i++) labels[i] = numbers.get(spaces.labels[i]) ?? 0;
+        return { blocked, outside, spaces, rooms, labels };
+    };
+    let found = roomsBetween(closed);
 
-    // An opening that was closed between two rooms is a door.
+    // The room on each side of a stretch of wall, and whether a side without
+    // a room lies in the open.
+    const besides = ({ down: goesDown, a, b, axis, thickness }) => [-1, 1].map(sign => {
+        const offset = thickness / 2 + Math.max(2, px(.1));
+        const seen = new Map();
+        let open = false;
+        for (const part of [.25, .5, .75]) {
+            const along = Math.round(a + (b - a) * part), over = Math.round(axis + sign * offset);
+            const [x, y] = goesDown ? [over, along] : [along, over];
+            if (x < 0 || y < 0 || x >= width || y >= height) {
+                open = true;
+                continue;
+            }
+            const i = y * width + x;
+            if (found.labels[i]) seen.set(found.labels[i], (seen.get(found.labels[i]) ?? 0) + 1);
+            else if (found.outside[i] || found.spaces.found[found.spaces.labels[i]]?.edge) open = true;
+        }
+        const room = [...seen].sort((one, two) => two[1] - one[1])[0]?.[0] ?? 0;
+        return { room, open: !room && open };
+    });
+
+    // A wide window drawn with thin lines was not closed like a door, and
+    // lets the outside into its room. Close what is still open and look
+    // again. A line inside one room stays what it was.
+    const stillOpen = panes.filter(pane => {
+        const [one, two] = besides(pane);
+        if (one.room && one.room === two.room) return false;
+        if (!one.room && !two.room && !one.open && !two.open) return false;
+        let shut = 0;
+        const centre = Math.floor(pane.axis);
+        for (let along = pane.a; along < pane.b; along++) shut += closed[pane.down ? along * width + centre : centre * width + along];
+        return shut < .9 * pane.gap;
+    });
+    if (stillOpen.length) {
+        for (const { down: goesDown, a, b, axis, thickness } of stillOpen) {
+            const from = Math.max(0, Math.round(axis - thickness / 2)), to = Math.round(axis + thickness / 2);
+            // A little into the wall on both ends, so no slit stays open.
+            for (let along = Math.max(0, a - 2); along < Math.min(goesDown ? height : width, b + 2); along++) {
+                for (let over = from; over < Math.min(goesDown ? width : height, to); over++) closed[goesDown ? along * width + over : over * width + along] = 1;
+            }
+        }
+        found = roomsBetween(closed);
+    }
+    if (stages) Object.assign(stages, { closed: found.blocked, spaces: found.spaces });
+    const { rooms, labels } = found;
+
+    const share = ([x, y]) => [Math.min(1, Math.max(0, x / width)), Math.min(1, Math.max(0, y / height))];
+    const span = ({ down: goesDown, a, b, axis }) => goesDown ? { from: share([axis, a]), to: share([axis, b]) } : { from: share([a, axis]), to: share([b, axis]) };
     const doors = [];
+    // Each opening is found from both its ends; keep it once.
+    const addDoor = door => {
+        if (!doors.some(other => Math.hypot(other.from[0] - door.from[0], (other.from[1] - door.from[1]) * height / width) < px(.2) / width)) doors.push(door);
+    };
+
+    // Glass with a room on one side and the open on the other is a window.
+    // Between two rooms it is one only where the wall goes on past it. Where
+    // a door swings at it, it is a door, or a front door that is left out.
+    const windows = [], glazed = [];
+    for (const pane of panes) {
+        const [one, two] = besides(pane);
+        pane.sides = [one, two];
+        if (one.room === two.room) continue;
+        const inner = Boolean(one.room && two.room);
+        if (!inner && !one.open && !two.open) continue;
+        if (doorSwings(fine, width, height, pane)) {
+            if (inner) addDoor(span(pane));
+            glazed.push(pane);
+            pane.found = 'door';
+            continue;
+        }
+        if (inner) {
+            const filled = wallAt(sturdy, width, pane.down ? width : height, pane.down, pane);
+            const length = pane.down ? height : width, past = Math.round(px(sizes.wallPastWindow));
+            let before = 0, after = 0;
+            for (let k = 0; k < past; k++) {
+                if (pane.a - 2 - k >= 0 && filled(pane.a - 2 - k)) before++;
+                if (pane.b + k < length && filled(pane.b + k)) after++;
+            }
+            if (pane.gap > px(sizes.widestInnerWindow) || before < .9 * past || after < .9 * past) continue;
+        }
+        windows.push(span(pane));
+        glazed.push(pane);
+        pane.found = 'window';
+    }
+
+    // An opening that was closed between two rooms is a door, unless it
+    // turned out to hold a window.
     for (const bridge of bridges) {
         if (bridge.gap < px(sizes.narrowestDoor)) continue;
         const [left, top, right, bottom] = bridge.box;
         const middle = bridge.down ? (top + bottom) / 2 : (left + right) / 2;
+        if (glazed.some(pane => pane.down === bridge.down && Math.abs(pane.axis - bridge.axis) < Math.max(pane.thickness, bridge.thickness)
+            && middle > pane.a && middle < pane.b)) continue;
         const offset = bridge.thickness / 2 + Math.max(2, px(.1));
         const side = sign => {
             const x = Math.round(bridge.down ? bridge.axis + sign * offset : middle);
@@ -546,16 +784,14 @@ export function traceFloorPlan(image, metresAcross, stages = null) {
         };
         const [one, two] = [side(-1), side(1)];
         if (!one || !two || one === two) continue;
-        const [x1, y1, x2, y2] = bridge.down ? [bridge.axis, top, bridge.axis, bottom] : [left, bridge.axis, right, bridge.axis];
-        const door = { from: [x1 / width, y1 / height], to: [x2 / width, y2 / height] };
-        // Each opening is closed from both ends; keep it once.
-        if (!doors.some(other => Math.hypot(other.from[0] - door.from[0], (other.from[1] - door.from[1]) * height / width) < px(.2) / width)) doors.push(door);
+        addDoor(bridge.down ? { from: [bridge.axis / width, top / height], to: [bridge.axis / width, bottom / height] }
+            : { from: [left / width, bridge.axis / height], to: [right / width, bridge.axis / height] });
     }
 
-    const share = ([x, y]) => [Math.min(1, Math.max(0, x / width)), Math.min(1, Math.max(0, y / height))];
     return {
         rooms: rooms.map(area => ({ points: area.points.map(share) })),
         doors,
+        windows,
         labels,
         size: { width, height },
     };

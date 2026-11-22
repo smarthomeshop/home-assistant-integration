@@ -120,6 +120,8 @@ button, summary { cursor: pointer; }
 .fp-ha-room-link p { margin: 0; color: var(--ha-muted); font-size: 12px; line-height: 1.45; }
 .fp-ha-room-link label { display: grid; gap: 4px; min-width: 0; color: var(--ha-ink); font-size: 12px; font-weight: 650; }
 .fp-ha-room-link select { width: 100%; min-width: 0; }
+.fp-ha-room-link button { justify-self: start; min-height: 40px; }
+.fp-room-automation [data-automation="open"] { justify-self: start; color: var(--ha-ceiling); font-size: 13px; font-weight: 650; }
 @media (max-width: 520px) {
     .fp-ha-area-filter { align-items: stretch; flex-direction: column; }
     #floor-planner .fp-ha-area-filter button { width: 100%; }
